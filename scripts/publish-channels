@@ -564,14 +564,29 @@ prune() {
     return 0
   fi
   confirm_publication "prune" "r2:$R2_BUCKET" "$(tr '\n' ' ' <"$work/delete")"
+
+  # A bucket lock refuses one object at a time, so meeting it partway through
+  # would leave the prune half applied. Ask the bucket before removing
+  # anything.
+  local lock_configuration
+  if lock_configuration=$(aws s3api get-object-lock-configuration --bucket "$R2_BUCKET" \
+    --endpoint-url "$R2_ENDPOINT" --region auto 2>/dev/null) &&
+    [[ $lock_configuration == *ObjectLockEnabled* ]]; then
+    echo "publish-channels: the sets to prune are protected by the bucket's lock rule. Pruning needs that rule to \
+expire objects by age (for example 7 days) instead of holding them indefinitely; change it in \
+Cloudflare R2 > omarchy-releases > Settings > Bucket lock, then re-run." >&2
+    return 1
+  fi
+
   while read -r prefix; do
     # Belt and braces: never remove something a channel reaches, even if the
     # channel changed between the plan and the deletion.
     if referenced_prefixes "$work" | grep -qx "$prefix"; then
       die "refusing to delete $prefix: a channel now references it"
     fi
-    # A bucket lock refuses the delete per object. Stop at the first one and
-    # say what to change, rather than printing one refusal per file.
+    # The pre-flight above catches a lock rule that covers the whole bucket.
+    # A narrower rule can still refuse here, so stop at the first refusal
+    # rather than printing one per file.
     if ! output=$(aws s3 rm "s3://$R2_BUCKET/$prefix/" --recursive \
       --endpoint-url "$R2_ENDPOINT" --region auto --only-show-errors 2>&1); then
       if [[ $output == *ObjectLockedByBucketPolicy* ]]; then
