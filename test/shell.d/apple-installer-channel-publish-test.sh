@@ -47,6 +47,14 @@ if [[ $1 == "s3" && $2 == "ls" ]]; then
   done
   exit 0
 fi
+if [[ $1 == "s3api" && $2 == "get-object-lock-configuration" ]]; then
+  if [[ -f $BUCKET_LOCKED ]]; then
+    echo '{"ObjectLockConfiguration":{"ObjectLockEnabled":"Enabled"}}'
+    exit 0
+  fi
+  echo "An error occurred (ObjectLockConfigurationNotFoundError) when calling the GetObjectLockConfiguration operation" >&2
+  exit 1
+fi
 if [[ $1 == "s3" && $2 == "rm" ]]; then
   prefix=${3#s3://*/}
   if [[ -f $BUCKET_LOCKED && $prefix == releases/* ]]; then
