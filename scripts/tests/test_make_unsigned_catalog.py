@@ -68,13 +68,16 @@ class CatalogGeneratorTests(unittest.TestCase):
         self.assertEqual(len(catalog["models"]), 22)
 
     def test_carries_the_installer_compatibility_block(self) -> None:
-        self.generate()
+        self.inputs["installer"]["minimum_version"] = "2.1.0"
+        self.inputs["installer"]["latest_version"] = "2.3.0"
+        result = self.generate()
+        self.assertEqual(result.returncode, 0, result.stderr)
         catalog = json.loads((self.directory / "catalog.json").read_text())
         self.assertEqual(
             catalog["installer"],
             {
-                "minimumVersion": "2.0.0",
-                "latestVersion": "2.0.0",
+                "minimumVersion": "2.1.0",
+                "latestVersion": "2.3.0",
                 "downloadURL": self.inputs["installer"]["download_url"],
             },
         )
