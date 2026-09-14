@@ -181,7 +181,8 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     }
     let recommendation = try InstallerAllocationRecommendation(
       inventory: inventory,
-      targetBytes: omarchyBytes ?? InstallerAllocationRecommendation.balancedTargetBytes
+      targetBytes: omarchyBytes ?? InstallerAllocationRecommendation.balancedTargetBytes,
+      reservedBytes: release.assets.additionalHandoffBytes
     )
     let candidate = recommendation.candidate
     let requestedLengthBytes = recommendation.requestedLengthBytes

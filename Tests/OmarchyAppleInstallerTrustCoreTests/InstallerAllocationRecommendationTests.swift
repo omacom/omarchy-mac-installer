@@ -70,6 +70,84 @@ final class InstallerAllocationRecommendationTests: XCTestCase {
     }
   }
 
+  func testResizeMaximumLeavesRoomForHandoffCopiesBeforeApproval() throws {
+    let resize = candidate(
+      kind: "resize",
+      source: "disk0s2",
+      length: 494_384_795_648,
+      minimumInstall: 76_562_825_216,
+      minimumContainer: 118_385_364_992
+    )
+    let oldMaximum: UInt64 = 375_999_430_656
+    let handoffBytes: UInt64 = 8_492_104_840
+    let recommendation = try InstallerAllocationRecommendation(
+      inventory: inventory([resize]),
+      targetBytes: oldMaximum,
+      reservedBytes: handoffBytes
+    )
+
+    XCTAssertEqual(recommendation.candidate, resize)
+    XCTAssertEqual(recommendation.requestedLengthBytes, recommendation.maximumBytes)
+    XCTAssertEqual(recommendation.maximumBytes % PinnedAsahiPlanRequest.allocationUnitBytes, 0)
+    XCTAssertGreaterThanOrEqual(
+      resize.lengthBytes - resize.minimumContainerBytes - recommendation.maximumBytes,
+      handoffBytes
+    )
+
+    // The reported failure: helper import raised the minimum after review.
+    let executionCandidate = candidate(
+      kind: "resize",
+      source: "disk0s2",
+      length: resize.lengthBytes,
+      minimumInstall: resize.minimumInstallBytes,
+      minimumContainer: 122_248_232_960
+    )
+    XCTAssertThrowsError(
+      try PinnedAsahiPlanRequest(
+        inventory: inventory([executionCandidate]), candidate: executionCandidate,
+        requestedLengthBytes: oldMaximum
+      )
+    )
+    XCTAssertNoThrow(
+      try PinnedAsahiPlanRequest(
+        inventory: inventory([executionCandidate]), candidate: executionCandidate,
+        requestedLengthBytes: recommendation.requestedLengthBytes
+      )
+    )
+  }
+
+  func testHandoffReserveDoesNotReduceAlreadyFreeExtent() throws {
+    let free = candidate(
+      kind: "free", source: "disk0s3", length: 100 * gib,
+      minimumInstall: 64 * gib
+    )
+    let recommendation = try InstallerAllocationRecommendation(
+      inventory: inventory([free]), targetBytes: 100 * gib,
+      reservedBytes: UInt64.max
+    )
+
+    XCTAssertEqual(recommendation.maximumBytes, 100 * gib)
+    XCTAssertEqual(recommendation.requestedLengthBytes, 100 * gib)
+  }
+
+  func testResizeReserveCannotUnderflowOrViolateInstallMinimum() {
+    let resize = candidate(
+      kind: "resize", source: "disk0s2", length: 200 * gib,
+      minimumInstall: 64 * gib, minimumContainer: 100 * gib
+    )
+    for reserve in [37 * gib, 100 * gib, UInt64.max] {
+      XCTAssertThrowsError(
+        try InstallerAllocationRecommendation(
+          inventory: inventory([resize]), reservedBytes: reserve
+        )
+      ) {
+        XCTAssertEqual(
+          $0 as? InstallerAllocationRecommendationError, .noEligibleCandidate
+        )
+      }
+    }
+  }
+
   func testReplaceOnlyInventoryFailsClosed() {
     let replace = candidate(
       kind: "replace",

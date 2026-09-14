@@ -18,7 +18,8 @@ public struct InstallerAllocationRecommendation:
 
   public init(
     inventory: ValidatedEngineInventory,
-    targetBytes: UInt64 = Self.balancedTargetBytes
+    targetBytes: UInt64 = Self.balancedTargetBytes,
+    reservedBytes: UInt64 = 0
   ) throws {
     let unit = PinnedAsahiPlanRequest.allocationUnitBytes
     let ranked = inventory.candidates.compactMap { candidate -> Ranked? in
@@ -28,7 +29,11 @@ public struct InstallerAllocationRecommendation:
       } else if candidate.kind == "resize",
         candidate.lengthBytes > candidate.minimumContainerBytes
       {
-        maximum = candidate.lengthBytes - candidate.minimumContainerBytes
+        let available = candidate.lengthBytes - candidate.minimumContainerBytes
+        guard available > reservedBytes else {
+          return nil
+        }
+        maximum = available - reservedBytes
       } else {
         return nil
       }
