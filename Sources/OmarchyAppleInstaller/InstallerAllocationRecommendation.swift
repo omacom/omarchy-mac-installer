@@ -1,9 +1,15 @@
 import Foundation
 
+public enum APFSSnapshotConstraint: Equatable, Sendable {
+  case timeMachine
+  case other
+}
+
 public enum InstallerAllocationRecommendationError:
   Error, Equatable, Sendable
 {
   case noEligibleCandidate
+  case snapshotConstrained(APFSSnapshotConstraint)
 }
 
 public struct InstallerAllocationRecommendation:
@@ -26,7 +32,8 @@ public struct InstallerAllocationRecommendation:
   public init(
     inventory: ValidatedEngineInventory,
     targetBytes: UInt64 = Self.balancedTargetBytes,
-    reservedBytes: UInt64 = 0
+    reservedBytes: UInt64 = 0,
+    snapshotConstraint: () -> APFSSnapshotConstraint? = { nil }
   ) throws {
     let unit = PinnedAsahiPlanRequest.allocationUnitBytes
     let ranked = inventory.candidates.compactMap { candidate -> Ranked? in
@@ -79,6 +86,12 @@ public struct InstallerAllocationRecommendation:
     }
 
     guard let selected = ranked.first else {
+      // Existing installations require an explicit choice before any space diagnosis.
+      if !inventory.candidates.contains(where: { $0.kind == "repair" || $0.kind == "replace" }),
+        let constraint = snapshotConstraint()
+      {
+        throw InstallerAllocationRecommendationError.snapshotConstrained(constraint)
+      }
       throw InstallerAllocationRecommendationError.noEligibleCandidate
     }
     let alignedTarget = targetBytes - (targetBytes % unit)

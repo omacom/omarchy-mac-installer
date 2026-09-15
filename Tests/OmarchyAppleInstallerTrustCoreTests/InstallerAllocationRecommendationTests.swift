@@ -161,7 +161,7 @@ final class InstallerAllocationRecommendationTests: XCTestCase {
     )
   }
 
-  func testPrefersFreeExtentAndBalancedTarget() throws {
+  func testRecommendationPrefersEligibleFreeExtentWithoutCheckingSnapshots() throws {
     let resize = candidate(
       kind: "resize",
       source: "disk0s2",
@@ -177,7 +177,11 @@ final class InstallerAllocationRecommendationTests: XCTestCase {
     )
 
     let recommendation = try InstallerAllocationRecommendation(
-      inventory: inventory([resize, free])
+      inventory: inventory([resize, free]),
+      snapshotConstraint: {
+        XCTFail("Eligible free space must not trigger snapshot diagnostics.")
+        return .timeMachine
+      }
     )
 
     XCTAssertEqual(recommendation.candidate, free)
@@ -208,22 +212,122 @@ final class InstallerAllocationRecommendationTests: XCTestCase {
     )
   }
 
-  func testFailsClosedWhenNoCandidateCanMeetMinimum() {
+  func testInsufficientFreeExtentStillFailsClosedWhenSnapshotDiagnosisIsNil() {
     let free = candidate(
       kind: "free",
       source: "disk0s3",
       length: 32 * gib,
       minimumInstall: 64 * gib
     )
+    var checkedSnapshots = false
 
     XCTAssertThrowsError(
-      try InstallerAllocationRecommendation(inventory: inventory([free]))
+      try InstallerAllocationRecommendation(
+        inventory: inventory([free]),
+        snapshotConstraint: {
+          checkedSnapshots = true
+          return nil
+        }
+      )
     ) {
       XCTAssertEqual(
         $0 as? InstallerAllocationRecommendationError,
         .noEligibleCandidate
       )
     }
+    XCTAssertTrue(checkedSnapshots)
+  }
+
+  func testEmptyInventoryStillChecksForSnapshotConstraint() {
+    // The engine omits resize candidates that cannot meet its minimum.
+    var checkedSnapshots = false
+
+    XCTAssertThrowsError(
+      try InstallerAllocationRecommendation(
+        inventory: inventory([]),
+        snapshotConstraint: {
+          checkedSnapshots = true
+          return .timeMachine
+        }
+      )
+    ) {
+      XCTAssertEqual(
+        $0 as? InstallerAllocationRecommendationError,
+        .snapshotConstrained(.timeMachine)
+      )
+    }
+    XCTAssertTrue(checkedSnapshots)
+  }
+
+  func testZeroShrinkResizeReportsTimeMachineConstraint() {
+    let resize = candidate(
+      kind: "resize",
+      source: "disk0s2",
+      length: 200 * gib,
+      minimumInstall: 64 * gib,
+      minimumContainer: 200 * gib
+    )
+
+    XCTAssertThrowsError(
+      try InstallerAllocationRecommendation(
+        inventory: inventory([resize]),
+        snapshotConstraint: { .timeMachine }
+      )
+    ) {
+      XCTAssertEqual(
+        $0 as? InstallerAllocationRecommendationError,
+        .snapshotConstrained(.timeMachine)
+      )
+    }
+  }
+
+  func testResizeBelowMinimumInstallSizeReportsOtherSnapshotConstraint() {
+    let resize = candidate(
+      kind: "resize",
+      source: "disk0s2",
+      length: 240 * gib,
+      minimumInstall: 64 * gib,
+      minimumContainer: 200 * gib
+    )
+
+    XCTAssertThrowsError(
+      try InstallerAllocationRecommendation(
+        inventory: inventory([resize]),
+        snapshotConstraint: { .other }
+      )
+    ) {
+      XCTAssertEqual(
+        $0 as? InstallerAllocationRecommendationError,
+        .snapshotConstrained(.other)
+      )
+    }
+  }
+
+  func testRecommendationSelectsEligibleResizeWithoutCheckingSnapshots() throws {
+    let free = candidate(
+      kind: "free",
+      source: "disk0s3",
+      length: 32 * gib,
+      minimumInstall: 64 * gib
+    )
+    let resize = candidate(
+      kind: "resize",
+      source: "disk0s2",
+      length: 600 * gib,
+      minimumInstall: 64 * gib,
+      minimumContainer: 200 * gib
+    )
+
+    let recommendation = try InstallerAllocationRecommendation(
+      inventory: inventory([free, resize]),
+      snapshotConstraint: {
+        XCTFail("An eligible resize must not trigger snapshot diagnostics.")
+        return .other
+      }
+    )
+
+    XCTAssertEqual(recommendation.candidate, resize)
+    XCTAssertEqual(recommendation.requestedLengthBytes, 128 * gib)
   }
 
   func testResizeMaximumLeavesRoomForHandoffCopiesBeforeApproval() throws {
@@ -314,12 +418,58 @@ final class InstallerAllocationRecommendationTests: XCTestCase {
     )
 
     XCTAssertThrowsError(
-      try InstallerAllocationRecommendation(inventory: inventory([replace]))
+      try InstallerAllocationRecommendation(
+        inventory: inventory([replace]),
+        snapshotConstraint: {
+          XCTFail("A replace-only inventory must not trigger snapshot diagnostics.")
+          return .timeMachine
+        }
+      )
     ) {
       XCTAssertEqual(
         $0 as? InstallerAllocationRecommendationError,
         .noEligibleCandidate
       )
+    }
+  }
+
+  func testRepairAndMixedExistingInventoriesFailWithoutCheckingSnapshots() {
+    let free = candidate(
+      kind: "free",
+      source: "disk0s3",
+      length: 32 * gib,
+      minimumInstall: 64 * gib
+    )
+    let repair = candidate(
+      kind: "repair",
+      source: "disk0s2",
+      length: 300 * gib,
+      minimumInstall: 64 * gib,
+      identityDigest: "sha256:" + String(repeating: "9", count: 64)
+    )
+    let replace = candidate(
+      kind: "replace",
+      source: "disk0s2",
+      length: 300 * gib,
+      minimumInstall: 64 * gib,
+      identityDigest: "sha256:" + String(repeating: "9", count: 64)
+    )
+
+    for candidates in [[repair], [free, repair], [free, replace]] {
+      XCTAssertThrowsError(
+        try InstallerAllocationRecommendation(
+          inventory: inventory(candidates),
+          snapshotConstraint: {
+            XCTFail("An existing installation must not trigger snapshot diagnostics.")
+            return .timeMachine
+          }
+        )
+      ) {
+        XCTAssertEqual(
+          $0 as? InstallerAllocationRecommendationError,
+          .noEligibleCandidate
+        )
+      }
     }
   }
 
