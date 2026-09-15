@@ -11,6 +11,13 @@ public struct InstallerAllocationRecommendation:
 {
   public static let balancedTargetBytes: UInt64 = 137_438_953_472
 
+  /// `minimumContainerBytes` follows live macOS usage and the layout digest
+  /// does not cover it, so writes the installer does not account for in
+  /// `reservedBytes` still lower the ceiling the engine checks at admission.
+  /// A resize candidate withholds this share of what remains, up to the cap.
+  static let resizeDriftMarginDivisor: UInt64 = 20
+  static let maximumResizeDriftMarginBytes: UInt64 = 8_589_934_592
+
   public let candidate: ValidatedEngineCandidate
   public let minimumBytes: UInt64
   public let maximumBytes: UInt64
@@ -23,8 +30,14 @@ public struct InstallerAllocationRecommendation:
   ) throws {
     let unit = PinnedAsahiPlanRequest.allocationUnitBytes
     let ranked = inventory.candidates.compactMap { candidate -> Ranked? in
+      let minimum = Self.alignUp(
+        candidate.minimumInstallBytes,
+        unit: unit
+      )
       let maximum: UInt64
       if candidate.kind == "free" {
+        // A free extent is fixed on the partition map: nothing recomputes it
+        // between planning and execution, so it needs no reserve or margin.
         maximum = candidate.lengthBytes
       } else if candidate.kind == "resize",
         candidate.lengthBytes > candidate.minimumContainerBytes
@@ -33,15 +46,18 @@ public struct InstallerAllocationRecommendation:
         guard available > reservedBytes else {
           return nil
         }
-        maximum = available - reservedBytes
+        let usable = available - reservedBytes
+        let margin = min(
+          usable / Self.resizeDriftMarginDivisor,
+          Self.maximumResizeDriftMarginBytes
+        )
+        // The margin is best effort: on a tight disk keep what fits above the
+        // minimum rather than dropping a candidate the reserve still allows.
+        maximum = min(usable, max(usable - margin, minimum))
       } else {
         return nil
       }
 
-      let minimum = Self.alignUp(
-        candidate.minimumInstallBytes,
-        unit: unit
-      )
       let alignedMaximum = maximum - (maximum % unit)
       guard minimum <= alignedMaximum else {
         return nil
