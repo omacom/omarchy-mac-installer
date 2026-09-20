@@ -2,7 +2,9 @@
 
 ## Candidate boundary
 
-This candidate extracts source and adjusts repository-relative paths. It does not alter the Swift runtime, Python engine overlay, source lock, release trust configuration or Linux payload. The provenance record identifies the original source; record `git rev-parse HEAD` whenever testing a candidate.
+The standalone extraction validated at `3f1e30bb265e77da04ce03533be0a7dddaa8c84c` extracted source and adjusted repository-relative paths without altering the Swift runtime, Python engine overlay, source lock, release trust configuration or Linux payload. The local evidence below applies to that extraction revision. The provenance record identifies the original source; record `git rev-parse HEAD` whenever testing a candidate.
+
+The subsequent CI integration adds a behavior-preserving Swift 6.2 compatibility change in `Sources/OmarchyAppleInstallerApp/InstallerComponents.swift`: both disk-bar drag callbacks explicitly convert the `CGFloat` ratio to `Double` before calculating the Omarchy fraction, resolving a compiler ambiguity. It also skips the live physical-Mac inspection test on `VirtualMac` hosts, as described below. These changes passed [CI run 35539039492](https://github.com/omacom/omarchy-mac-installer/actions/runs/35539039492) at merge revision `f2235e4ed823b31efd2c53306d7f9435ac1fd250`, separately from the earlier extraction validation.
 
 The Linux source checks are `bash test/all`. They compile Python, check shell syntax, run the engine and catalog unit tests, and exercise the preclean, package-plist, branding and publication scripts with fixtures. They do not qualify a macOS app bundle, engine binary or physical installation.
 
@@ -41,7 +43,7 @@ The app was assembled with a separate development copy of the release descriptor
 
 Swift 6.4 emits three capture warnings in inherited code: `PayloadPrefetch.swift:94`, `PayloadPrefetch.swift:523` and `InstallerSession.swift:635`. They concern inner weak captures inside an implicitly strong outer capture. They did not fail builds or tests, and the extraction does not change that runtime behavior.
 
-The Python/shell suite was not repeated on macOS: its installed Python 3.9.6 and Bash 3.2 are below this runner's declared prerequisites. Its complete Linux result remains separately recorded. The successful-install visual path is confirmed. The remaining visual failure/recovery scenarios, complete native engine rebuild and physical installation qualification are still pending. Exact logs, app file hashes, isolated-copy results and transfer artifacts are retained alongside the local checkout in the extraction workspace's `evidence/` and `artifacts/` directories. Documentation-only follow-ups do not change the tested implementation.
+The Python/shell suite was not repeated on macOS: its installed Python 3.9.6 and Bash 3.2 are below this runner's declared prerequisites. Its complete Linux result remains separately recorded. The successful-install visual path is confirmed. The remaining visual failure/recovery scenarios, complete native engine rebuild and physical installation qualification are still pending. Exact logs, app file hashes, isolated-copy results and transfer artifacts are retained alongside the local checkout in the extraction workspace's `evidence/` and `artifacts/` directories. These extraction results do not qualify subsequent implementation changes.
 
 ## macOS build handoff
 
