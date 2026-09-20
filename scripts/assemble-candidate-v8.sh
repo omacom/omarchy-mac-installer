@@ -9,9 +9,9 @@
 
 set -uo pipefail
 
-readonly DEFAULT_REPO_ROOT="/Users/maralc/dev/omarchy/omarchy-mx-mac-integration"
+readonly DEFAULT_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly DEFAULT_REFERENCE_CANDIDATE="/private/tmp/omarchy-mx-mac-candidate-v7.bXXpzZ"
-readonly APP_PACKAGE_RELATIVE="apps/omarchy-apple-installer"
+readonly APP_PACKAGE_RELATIVE="."
 readonly REFERENCE_SIGNING_TOOL_DIGEST="af52a6f38d110ef2684a0114abe13928b7e9414857a25b07ce16d4807b825f96"
 readonly DEFAULT_APP_VERSION="0.8.0"
 readonly DEFAULT_BUILD_NUMBER="9"
@@ -37,7 +37,7 @@ Required:
   --out DIR             candidate directory to create. Must not exist.
 
 Options:
-  --repo-root DIR       integration repo (default: the known checkout)
+  --repo-root DIR       standalone installer repo (default: this checkout)
   --reference DIR       reference candidate supplying catalog-signing.swift
                         and the previous release descriptor (default: v7)
   --tag TAG             release tag used in the printed next steps

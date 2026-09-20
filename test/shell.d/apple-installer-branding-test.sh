@@ -4,7 +4,7 @@ set -euo pipefail
 
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
-package=$ROOT/apps/omarchy-apple-installer
+package=$ROOT
 build_script=$package/Packaging/build-app.sh
 info_plist=$package/Packaging/Info.plist
 icon=$package/Packaging/OmarchyInstaller.icns

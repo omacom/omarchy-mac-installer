@@ -7,7 +7,7 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 test_tmp=$(mktemp -d)
 trap 'rm -rf "$test_tmp"' EXIT
 
-pkg_dir=$ROOT/apps/omarchy-apple-installer/Packaging/pkg
+pkg_dir=$ROOT/Packaging/pkg
 derive=$pkg_dir/derive-daemon-plist
 
 make_app() {

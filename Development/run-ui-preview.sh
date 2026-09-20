@@ -10,7 +10,7 @@ set -euo pipefail
 
 package_root=$(cd "$(dirname "$0")/.." && pwd)
 scenario=${1:-fresh-install}
-journal=${2:-$package_root/../../evidence/apple-silicon/2026-08-29-m1-fresh-install-v6/execution-journal.jsonl}
+journal=${2:-$package_root/evidence/apple-silicon/2026-08-29-m1-fresh-install-v6/execution-journal.jsonl}
 
 # An unknown scenario string would make the factory fall back to the LIVE
 # environment, so refuse anything not in the preview list.

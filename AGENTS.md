@@ -52,3 +52,13 @@ helper registration, privileged execution, disk or boot-policy mutation,
 signing or notarization with production credentials, publication, deployment,
 or physical-device work. Keep `apple,j614s` fail-closed until official support
 and physical qualification both exist.
+
+## Standalone repository conventions
+
+This directory is now the repository root. The original parent repository is not required for source tests; see `docs/extraction.md` for provenance and `docs/validation.md` for the test boundary.
+
+- Use two-space shell indentation, Bash 5 conditionals (`[[ ]]` and `(( ))`) and `#!/bin/bash` shebangs.
+- Keep Markdown lines unwrapped except at structural boundaries.
+- Run `./test/all` for portable source, engine and packaging-fixture checks. It must remain unprivileged and must never invoke live disk, helper registration, signing, publication or deployment operations.
+- Preserve the imported engine lock, release trust configuration and host restrictions during extraction. Changes to those contracts require separate review and validation.
+- Record validation against the exact candidate commit, with toolchain and host details. Linux checks do not satisfy the macOS completion requirements above.

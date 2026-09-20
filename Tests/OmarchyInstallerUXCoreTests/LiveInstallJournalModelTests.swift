@@ -112,7 +112,7 @@
   enum JournalFixture {
     static func url() -> URL {
       var root = URL(fileURLWithPath: #filePath)
-      for _ in 0..<5 {
+      for _ in 0..<3 {
         root = root.deletingLastPathComponent()
       }
       return

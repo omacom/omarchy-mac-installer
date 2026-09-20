@@ -4,7 +4,7 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/base-test.sh"
 
 require_command python3
 
-PUBLISHER="$ROOT/apps/omarchy-apple-installer/scripts/publish-channels"
+PUBLISHER="$ROOT/scripts/publish-channels"
 [[ -f $PUBLISHER ]] || fail "publish-channels exists"
 
 WORK=$(mktemp -d)
