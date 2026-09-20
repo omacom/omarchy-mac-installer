@@ -8,7 +8,7 @@ The Linux source checks are `bash test/all`. They compile Python, check shell sy
 
 ## Continuous integration
 
-[Installer checks](../.github/workflows/checks.yml) runs for every pull request to `main`, every push to `main` and manual dispatch. There are no path filters, so documentation changes also receive the checks expected by branch protection.
+[Installer checks](../.github/workflows/checks.yml) runs for every pull request to `main`, every push to `main` and manual dispatch. There are no path filters, so documentation changes also receive the checks expected by branch protection. New commits cancel superseded runs for the same pull request. Pushes to `main` and manual runs have unique concurrency groups, preserving each run and its evidence even when several are queued.
 
 - **Portable checks** runs `bash test/all` on Ubuntu 24.04 with Python 3.12, including shell syntax, Python compilation, engine/catalog tests and packaging/publication fixtures.
 - **macOS checks** runs strict Swift formatting and debug/release Swift tests on an Apple Silicon macOS 15 runner using Xcode 26.2 and the same checksum-pinned XcodeBuildMCP 2.7.0 used for the initial Mac validation.
