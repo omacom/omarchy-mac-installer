@@ -71,6 +71,7 @@ jobs:
             git rev-parse HEAD
             sw_vers
             uname -m
+            /usr/sbin/sysctl hw.model hw.targettype machdep.cpu.brand_string
             xcodebuild -version
             xcrun swift --version
             xcrun swift-format --version

@@ -78,6 +78,11 @@
     }
 
     func testLiveInspectionIsReadOnlyAndReturnsCoherentHostState() throws {
+      let model = try SysctlHardwarePropertyReader().string(named: "hw.model")
+      try XCTSkipIf(
+        model.hasPrefix("VirtualMac"),
+        "Physical Mac identity and internal-storage checks require real Apple Silicon hardware."
+      )
       let result = try AppleSiliconHostInspector().inspect()
 
       XCTAssertTrue(result.identity.model.hasPrefix("Mac"))

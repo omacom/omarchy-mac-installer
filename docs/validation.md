@@ -13,6 +13,8 @@ The Linux source checks are `bash test/all`. They compile Python, check shell sy
 - **Portable checks** runs `bash test/all` on Ubuntu 24.04 with Python 3.12, including shell syntax, Python compilation, engine/catalog tests and packaging/publication fixtures.
 - **macOS checks** runs strict Swift formatting and debug/release Swift tests on an Apple Silicon macOS 15 runner using Xcode 26.2 and the same checksum-pinned XcodeBuildMCP 2.7.0 used for the initial Mac validation.
 
+The read-only live physical-Mac inspection test explicitly skips `VirtualMac` hosts. Hosted CI cannot assert a physical Mac model or internal disk; the fixture-based inspection and blocked-model tests still run in both configurations, and the live check remains enabled on real Macs.
+
 Both jobs record the checked-out commit and tool versions and retain logs as Actions artifacts for 14 days, including failures. Pull requests test GitHub's proposed merge revision. GitHub Actions are pinned to commit hashes; tool updates should change the pin and its version comment together. Explicit Bash execution enables `errexit` and `pipefail`, so collecting logs through `tee` does not hide test failures.
 
 CI uses hosted runners, read-only repository access and no release secrets. It performs source checks and fixture tests; app assembly with an authenticated engine, production signing, visual review and physical installation remain separate validation steps. Require both named checks along with the existing independent review before merging to `main`.
