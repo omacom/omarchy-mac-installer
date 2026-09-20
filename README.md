@@ -24,7 +24,7 @@ The portable suite requires Bash 5+, Python 3.12+, Git and standard Unix tools, 
 bash test/all
 ```
 
-On macOS, use a Bash 5 installation explicitly if the system Bash is older. The suite uses temporary fixtures and mocked publishing/SSH commands; it does not install anything. The source directory is sufficient; no desktop checkout or engine binary is needed for these tests.
+On macOS, use a Bash 5 installation explicitly if the system Bash is older. The suite uses temporary fixtures and mocked publishing/SSH commands; it does not install anything. The source directory is sufficient; no desktop checkout or engine binary is needed for these tests. The Linux suite passed, followed by strict Swift formatting, 402 debug tests, 396 release tests and ad-hoc app assembly on an M4 Pro. The debug simulation also launched successfully; see the [recorded validation and limits](docs/validation.md#local-evidence).
 
 The Swift package requires macOS 15+ and Swift 6.2+. Follow [validation.md](docs/validation.md) for Xcode checks and a simulation-only review. App packaging additionally requires an authenticated engine archive; see [the extraction prerequisites](docs/extraction.md#inherited-prerequisites-and-open-issues) before following the inherited [packaging guide](Packaging/README.md).
 

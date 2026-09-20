@@ -35,10 +35,10 @@ The next integration should separately define the shared Linux image and package
 
 ## Inherited prerequisites and open issues
 
-- `Packaging/build-app.sh` requires the authenticated `installer-v0.9.0-omarchy.14.tar.gz` archive, SHA-256 `9e9277384b6c9e8b269cc79b1b24df7bfcdcbb898a596a677b74d1d18050aebe`, in `Engine/artifacts/`. This binary is not tracked. The latest source lock instead records overlay `.17`; that distinction predates extraction and needs review before a release build.
+- `Packaging/build-app.sh` requires the authenticated `installer-v0.9.0-omarchy.14.tar.gz` archive, SHA-256 `9e9277384b6c9e8b269cc79b1b24df7bfcdcbb898a596a677b74d1d18050aebe`, in `Engine/artifacts/`. This binary is not tracked. This is the inspection engine used before any downloads. The source lock records installation engine `.17`; those versions deliberately differ, as documented in `ValidationEngineArtifact.swift`. For the macOS assembly check, the exact `.14` archive was recovered from the [original published app](https://downloads.aicodelabs.com.au/installer/previews/20260918-e1b8abc05135/Omarchy-MX-Mac-Installer.zip) and verified against the pinned size and digest before use. No version or trust check was relaxed.
 - `Engine/build-locked-engine.sh` still reads `downstream_overlay.metadata.path`, while the current source lock omits it and the verifier rejects that field. A complete native engine rebuild has not been validated. The authenticated-base Python overlay rebuild is a separate path; its tests are included.
 - The native engine lock records exact tools and machine-specific paths. Keep those reproducibility constraints until deliberately reviewed; silently substituting another toolchain would not validate the recorded artifact.
 - Release scripts retain the original publisher's endpoints, signing identity and historical defaults. Creating the new repository does not establish new signing or publishing authority. The old cutover and candidate helpers are retained for history and require review before operational use. Their repository paths now resolve inside this checkout; the cutover helper accepts an external image via `OMARCHY_OS_PAYLOAD`, otherwise retaining its sibling `omarchy-iso` convention.
 - The exact model `apple,j614s` remains blocked. Availability of an M4 Pro for development does not qualify it as an installation target.
 
-See [validation.md](validation.md) for the checks and remaining macOS work.
+See [validation.md](validation.md) for the passing Linux and macOS checks and remaining qualification work.

@@ -10,7 +10,24 @@ The Linux source checks are `bash test/all`. They compile Python, check shell sy
 
 The extraction was checked on 2026-09-20 as the non-root `scott` user on aarch64 Linux with Python 3.14.7. The portable suite passed: 37 engine tooling tests, 104 engine overlay tests and 17 catalog tests (158 Python tests), plus all existing preclean and three extracted packaging/publication shell tests. Python compilation and shell syntax checks passed.
 
-No Swift compiler is installed on that Linux host. Swift debug/release tests, strict formatting, UI review, app assembly and physical installation are still pending; they are not inferred from the portable results. Exact candidate identity, isolated-copy results and transfer artifacts are recorded alongside the local checkout in the extraction workspace's `evidence/` and `artifacts/` directories.
+The same source revision, `3f1e30bb265e77da04ce03533be0a7dddaa8c84c`, was then validated on Scott's M4 Pro (`Mac16,7`, arm64), running macOS 26.6.2 (25G83), Xcode 27.0 (27A266a) and Swift 6.4. XcodeBuildMCP 2.7.0 was staged inside the validation workspace from its official standalone archive, verified against the publisher's SHA-256 `bd724a2c0e6ffe027b3f46257e66d626149a64cd045f4867124bd683b3cf081a`.
+
+| Check | Result |
+| --- | --- |
+| Strict Swift formatting | Passed |
+| Debug Swift tests | 402 passed, 0 failed, 0 skipped |
+| Release Swift tests | 396 passed, 0 failed, 0 skipped |
+| Recorded journal fixture and blocked-host tests | Passed within both Swift suites |
+| Development app assembly | Passed with the exact pinned inspection engine |
+| Ad-hoc app and helper signatures | Deep/strict verification and reciprocal code requirements passed |
+| Bundle structure | Executables, helper plist, release inputs and engine verified |
+| Debug simulation launch | Running; Scott confirmed the simulation window is visible |
+
+The app was assembled with a separate development copy of the release descriptor using an ad-hoc helper requirement. The tracked production descriptor, public key and source code were unchanged. No production signing credentials, helper registration or installation operation were used.
+
+Swift 6.4 emits three capture warnings in inherited code: `PayloadPrefetch.swift:94`, `PayloadPrefetch.swift:523` and `InstallerSession.swift:635`. They concern inner weak captures inside an implicitly strong outer capture. They did not fail builds or tests, and the extraction does not change that runtime behavior.
+
+The Python/shell suite was not repeated on macOS: its installed Python 3.9.6 and Bash 3.2 are below this runner's declared prerequisites. Its complete Linux result remains separately recorded. A full visual scenario walkthrough, complete native engine rebuild and physical installation qualification are still pending. Exact logs, app file hashes, isolated-copy results and transfer artifacts are retained alongside the local checkout in the extraction workspace's `evidence/` and `artifacts/` directories. Documentation-only follow-ups do not change the tested implementation.
 
 ## macOS build handoff
 
@@ -33,7 +50,7 @@ These steps require no helper registration, real machine-owner credentials, prod
 
 ## Before packaging or installation
 
-Resolve the inherited engine artifact/rebuild issues in [extraction.md](extraction.md#inherited-prerequisites-and-open-issues), supply the exact authenticated inputs, and review the resulting app structure and code-signing requirements. The current publisher's catalog, public key and signing identity are not interchangeable with a new Omacom release identity.
+For another app assembly, supply the exact authenticated inspection engine described in [extraction.md](extraction.md#inherited-prerequisites-and-open-issues) and review the resulting app structure and code-signing requirements. The initial ad-hoc assembly passed; a complete native engine rebuild remains a separate unvalidated path. The current publisher's catalog, public key and signing identity are not interchangeable with a new Omacom release identity.
 
 An M3 Air may be a physical validation candidate only after its exact model, engine support and intended payload are checked. The M4 Pro is available for macOS development; `apple,j614s` remains explicitly blocked. No hardware restriction is relaxed by this extraction.
 
