@@ -119,7 +119,17 @@ struct DiskBar: View {
       }
       .contentShape(Rectangle())
       .gesture(
-        adjustmentGesture(width: width),
+        DragGesture(minimumDistance: 0)
+          .onChanged { value in
+            guard !isFrozen else { return }
+            let x = min(max(0, value.location.x), width)
+            onAdjustOmarchyFraction?(1 - Double(x / max(1, width)))
+          }
+          .onEnded { value in
+            guard !isFrozen else { return }
+            let x = min(max(0, value.location.x), width)
+            onCommitOmarchyFraction?(1 - Double(x / max(1, width)))
+          },
         including: onAdjustOmarchyFraction == nil ? .none : .all
       )
     }
@@ -141,20 +151,6 @@ struct DiskBar: View {
       }
       onCommitOmarchyFraction?(min(1, max(0, (Double(omarchyBytes) + change) / total)))
     }
-  }
-
-  private func adjustmentGesture(width: CGFloat) -> some Gesture {
-    DragGesture(minimumDistance: 0)
-      .onChanged { value in
-        guard !isFrozen else { return }
-        let x = min(max(0, value.location.x), width)
-        onAdjustOmarchyFraction?(1 - x / max(1, width))
-      }
-      .onEnded { value in
-        guard !isFrozen else { return }
-        let x = min(max(0, value.location.x), width)
-        onCommitOmarchyFraction?(1 - x / max(1, width))
-      }
   }
 
   private func segment(
