@@ -1,6 +1,6 @@
 # Omarchy Mac Installer
 
-Standalone source candidate for the Apple Silicon macOS installer developed in [maralcbr/omarchy-mx-mac](https://github.com/maralcbr/omarchy-mx-mac). The intended home is `omacom/omarchy-mac-installer`.
+Development source for the Apple Silicon macOS installer, extracted from [maralcbr/omarchy-mx-mac](https://github.com/maralcbr/omarchy-mx-mac) into [omacom/omarchy-mac-installer](https://github.com/omacom/omarchy-mac-installer).
 
 This first extraction preserves the installer behavior and Git attribution. The app still carries its original **Omarchy MX Mac Installer** identity and release configuration. Integration with the shared Omarchy packages and Linux installation image is the next, separate change. This candidate is not an installation release.
 
@@ -29,6 +29,10 @@ On macOS, use a Bash 5 installation explicitly if the system Bash is older. The 
 The Swift package requires macOS 15+ and Swift 6.2+. Follow [validation.md](docs/validation.md) for Xcode checks and a simulation-only review. App packaging additionally requires an authenticated engine archive; see [the extraction prerequisites](docs/extraction.md#inherited-prerequisites-and-open-issues) before following the inherited [packaging guide](Packaging/README.md).
 
 ## Review and next steps
+
+Start by reviewing the [standalone adaptations against the unchanged extraction](https://github.com/omacom/omarchy-mac-installer/compare/0d6f8661a5ad7b263d6167f0afea7cae033419a0...main). The original commit mapping and validation evidence are linked below.
+
+Changes to `main` go through pull requests with approval from someone other than the author. Add repeatable CI, then define the Linux image and shared package inputs in separate changes. Physical installation qualification follows the assembled image/package integration.
 
 - [Extraction provenance and boundaries](docs/extraction.md): original revision, preserved history, inherited build issues and future shared-package integration.
 - [Validation and macOS handoff](docs/validation.md): what has been checked and what remains.

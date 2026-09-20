@@ -1,6 +1,6 @@
 # Installer extraction
 
-The proposed home is `omacom/omarchy-mac-installer`. This is a local source candidate extracted from [maralcbr/omarchy-mx-mac at 4db862da7a0957758c504c5a3e041202019dbabf](https://github.com/maralcbr/omarchy-mx-mac/tree/4db862da7a0957758c504c5a3e041202019dbabf/apps/omarchy-apple-installer). It has not been published or qualified for installation.
+[omacom/omarchy-mac-installer](https://github.com/omacom/omarchy-mac-installer) contains the standalone development source extracted from [maralcbr/omarchy-mx-mac at 4db862da7a0957758c504c5a3e041202019dbabf](https://github.com/maralcbr/omarchy-mx-mac/tree/4db862da7a0957758c504c5a3e041202019dbabf/apps/omarchy-apple-installer). Publishing this source enables collaboration; it does not qualify an installation release.
 
 ## Provenance
 
