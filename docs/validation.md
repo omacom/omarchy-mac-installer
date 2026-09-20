@@ -6,6 +6,17 @@ This candidate extracts source and adjusts repository-relative paths. It does no
 
 The Linux source checks are `bash test/all`. They compile Python, check shell syntax, run the engine and catalog unit tests, and exercise the preclean, package-plist, branding and publication scripts with fixtures. They do not qualify a macOS app bundle, engine binary or physical installation.
 
+## Continuous integration
+
+[Installer checks](../.github/workflows/checks.yml) runs for every pull request to `main`, every push to `main` and manual dispatch. There are no path filters, so documentation changes also receive the checks expected by branch protection.
+
+- **Portable checks** runs `bash test/all` on Ubuntu 24.04 with Python 3.12, including shell syntax, Python compilation, engine/catalog tests and packaging/publication fixtures.
+- **macOS checks** runs strict Swift formatting and debug/release Swift tests on an Apple Silicon macOS 15 runner using Xcode 26.2 and the same checksum-pinned XcodeBuildMCP 2.7.0 used for the initial Mac validation.
+
+Both jobs record the checked-out commit and tool versions and retain logs as Actions artifacts for 14 days, including failures. Pull requests test GitHub's proposed merge revision. GitHub Actions are pinned to commit hashes; tool updates should change the pin and its version comment together. Explicit Bash execution enables `errexit` and `pipefail`, so collecting logs through `tee` does not hide test failures.
+
+CI uses hosted runners, read-only repository access and no release secrets. It performs source checks and fixture tests; app assembly with an authenticated engine, production signing, visual review and physical installation remain separate validation steps. Require both named checks along with the existing independent review before merging to `main`.
+
 ## Local evidence
 
 The extraction was checked on 2026-09-20 as the non-root `scott` user on aarch64 Linux with Python 3.14.7. The portable suite passed: 37 engine tooling tests, 104 engine overlay tests and 17 catalog tests (158 Python tests), plus all existing preclean and three extracted packaging/publication shell tests. Python compilation and shell syntax checks passed.
