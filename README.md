@@ -32,7 +32,7 @@ The Swift package requires macOS 15+ and Swift 6.2+. Follow [validation.md](docs
 
 Start by reviewing the [standalone adaptations against the unchanged extraction](https://github.com/omacom/omarchy-mac-installer/compare/0d6f8661a5ad7b263d6167f0afea7cae033419a0...main). The original commit mapping and validation evidence are linked below.
 
-Changes to `main` go through pull requests with approval from someone other than the author. Add repeatable CI, then define the Linux image and shared package inputs in separate changes. Physical installation qualification follows the assembled image/package integration.
+Changes to `main` go through pull requests with approval from someone other than the author. The [CI checks](docs/validation.md#continuous-integration) cover portable tests, Swift formatting and both Swift build configurations. Define the Linux image and shared package inputs in separate changes. Physical installation qualification follows the assembled image/package integration.
 
 - [Extraction provenance and boundaries](docs/extraction.md): original revision, preserved history, inherited build issues and future shared-package integration.
 - [Validation and macOS handoff](docs/validation.md): what has been checked and what remains.

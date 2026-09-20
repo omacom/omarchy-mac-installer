@@ -123,12 +123,12 @@ struct DiskBar: View {
           .onChanged { value in
             guard !isFrozen else { return }
             let x = min(max(0, value.location.x), width)
-            onAdjustOmarchyFraction?(1 - x / max(1, width))
+            onAdjustOmarchyFraction?(1 - Double(x / max(1, width)))
           }
           .onEnded { value in
             guard !isFrozen else { return }
             let x = min(max(0, value.location.x), width)
-            onCommitOmarchyFraction?(1 - x / max(1, width))
+            onCommitOmarchyFraction?(1 - Double(x / max(1, width)))
           },
         including: onAdjustOmarchyFraction == nil ? .none : .all
       )
