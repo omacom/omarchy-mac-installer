@@ -21,13 +21,14 @@ The same source revision, `3f1e30bb265e77da04ce03533be0a7dddaa8c84c`, was then v
 | Development app assembly | Passed with the exact pinned inspection engine |
 | Ad-hoc app and helper signatures | Deep/strict verification and reciprocal code requirements passed |
 | Bundle structure | Executables, helper plist, release inputs and engine verified |
-| Debug simulation launch | Running; Scott confirmed the simulation window is visible |
+| Debug simulation launch | Scott confirmed the simulation window is visible |
+| Successful installation → Recovery simulation | Scott completed the flow and shutdown confirmation; the app displayed “Simulation complete: shutdown would begin now. Your Mac stays on.” |
 
 The app was assembled with a separate development copy of the release descriptor using an ad-hoc helper requirement. The tracked production descriptor, public key and source code were unchanged. No production signing credentials, helper registration or installation operation were used.
 
 Swift 6.4 emits three capture warnings in inherited code: `PayloadPrefetch.swift:94`, `PayloadPrefetch.swift:523` and `InstallerSession.swift:635`. They concern inner weak captures inside an implicitly strong outer capture. They did not fail builds or tests, and the extraction does not change that runtime behavior.
 
-The Python/shell suite was not repeated on macOS: its installed Python 3.9.6 and Bash 3.2 are below this runner's declared prerequisites. Its complete Linux result remains separately recorded. A full visual scenario walkthrough, complete native engine rebuild and physical installation qualification are still pending. Exact logs, app file hashes, isolated-copy results and transfer artifacts are retained alongside the local checkout in the extraction workspace's `evidence/` and `artifacts/` directories. Documentation-only follow-ups do not change the tested implementation.
+The Python/shell suite was not repeated on macOS: its installed Python 3.9.6 and Bash 3.2 are below this runner's declared prerequisites. Its complete Linux result remains separately recorded. The successful-install visual path is confirmed. The remaining visual failure/recovery scenarios, complete native engine rebuild and physical installation qualification are still pending. Exact logs, app file hashes, isolated-copy results and transfer artifacts are retained alongside the local checkout in the extraction workspace's `evidence/` and `artifacts/` directories. Documentation-only follow-ups do not change the tested implementation.
 
 ## macOS build handoff
 
