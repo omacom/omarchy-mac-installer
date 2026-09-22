@@ -55,6 +55,7 @@
     public private(set) var allocationNotice: String?
     public private(set) var shutdownMessage: String?
     public private(set) var encryptLinuxDisk = true
+    public let allowsEncryption: Bool
     public private(set) var prefetchState: PayloadPrefetchState = .verified
 
     public var isSimulation: Bool { environment.isSimulation }
@@ -93,10 +94,12 @@
     /// screen again.
     private var isReplanning = false
 
-    public init(environment: any InstallerEnvironment) {
+    public init(environment: any InstallerEnvironment, allowsEncryption: Bool = true) {
+      self.allowsEncryption = allowsEncryption
+      encryptLinuxDisk = allowsEncryption
       self.environment = environment
       prefetchState = environment.payloadPrefetchRequired ? .idle : .verified
-      environment.setEncryptLinuxDisk(true)
+      environment.setEncryptLinuxDisk(allowsEncryption)
     }
 
     // MARK: Derived state
@@ -315,6 +318,7 @@
     }
 
     public func setEncryptLinuxDisk(_ value: Bool) {
+      guard allowsEncryption || !value else { return }
       guard !isBusy && !isExecuting else { return }
       switch phase {
       case .planReview, .awaitingInstall:
@@ -663,8 +667,8 @@
       recoveryRetryAvailable = false
       isExecuting = false
       lastHost = nil
-      encryptLinuxDisk = true
-      environment.setEncryptLinuxDisk(true)
+      encryptLinuxDisk = allowsEncryption
+      environment.setEncryptLinuxDisk(allowsEncryption)
       prefetchState = environment.payloadPrefetchRequired ? .idle : .verified
       environment.cancelPayloadPrefetch()
     }

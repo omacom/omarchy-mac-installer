@@ -163,16 +163,18 @@ struct OmarchyAppleInstallerApp: App {
         Button("Remove Omarchy…") { showsRemoval = true }
           .disabled(removalNeedsReview || showsRemoval || liveSession?.canChangeChannel != true)
       }
-      CommandMenu(PlainLanguage.channelMenuTitle) {
-        Picker(PlainLanguage.channelMenuTitle, selection: channelBinding) {
-          Text(PlainLanguage.channelStable).tag(ReleaseChannel.stable)
-          Text(PlainLanguage.channelRC).tag(ReleaseChannel.rc)
-          Text(PlainLanguage.channelRCAurora).tag(ReleaseChannel.rcAurora)
+      if Bundle.main.object(forInfoDictionaryKey: "OmarchyPrivatePlainTest") as? Bool != true {
+        CommandMenu(PlainLanguage.channelMenuTitle) {
+          Picker(PlainLanguage.channelMenuTitle, selection: channelBinding) {
+            Text(PlainLanguage.channelStable).tag(ReleaseChannel.stable)
+            Text(PlainLanguage.channelRC).tag(ReleaseChannel.rc)
+            Text(PlainLanguage.channelRCAurora).tag(ReleaseChannel.rcAurora)
+          }
+          .pickerStyle(.inline)
+          .disabled(
+            removalNeedsReview || showsRemoval || liveSession?.canChangeChannel != true
+              || isSimulation)
         }
-        .pickerStyle(.inline)
-        .disabled(
-          removalNeedsReview || showsRemoval || liveSession?.canChangeChannel != true
-            || isSimulation)
       }
     }
   }
