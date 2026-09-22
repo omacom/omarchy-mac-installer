@@ -7,6 +7,36 @@
 
   @MainActor
   final class InstallerSessionTests: XCTestCase {
+    func testPlainOnlyProfileCannotEnableEncryptionOrResetIntoIt() async throws {
+      let environment = MockInstallerEnvironment()
+      let session = InstallerSession(environment: environment, allowsEncryption: false)
+      XCTAssertFalse(session.encryptLinuxDisk)
+      XCTAssertFalse(environment.storedEncryptLinuxDisk)
+      await session.inspect()
+      await session.continueToPlan()
+      session.continueToPlanReview()
+      session.setEncryptLinuxDisk(true)
+      XCTAssertFalse(session.encryptLinuxDisk)
+      XCTAssertFalse(environment.storedEncryptLinuxDisk)
+      session.setAcknowledged(true)
+      session.approve()
+      session.presentInstallCredentials()
+      await session.submit(try authorization())
+      XCTAssertEqual(environment.lastEncryptLinuxDisk, false)
+    }
+
+    func testPlainOnlyProfileReinspectKeepsPlainState() async {
+      let environment = MockInstallerEnvironment()
+      let session = InstallerSession(environment: environment, allowsEncryption: false)
+      await session.inspect()
+      await session.continueToPlan()
+      session.continueToPlanReview()
+      session.setEncryptLinuxDisk(true)
+      await session.inspect()
+      XCTAssertFalse(session.encryptLinuxDisk)
+      XCTAssertFalse(environment.storedEncryptLinuxDisk)
+    }
+
     func testHappyPathFollowsTheTransitionTable() async throws {
       let environment = MockInstallerEnvironment()
       let session = InstallerSession(environment: environment)

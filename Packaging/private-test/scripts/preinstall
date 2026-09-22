@@ -1,0 +1,17 @@
+#!/bin/bash
+# Private tests must not replace an existing installer/helper or admit other hardware.
+set -euo pipefail
+[[ ${3:-/} == "/" ]] || { echo 'This private package supports only the startup volume.' >&2; exit 1; }
+target=$(/usr/sbin/sysctl -n hw.targettype | /usr/bin/tr '[:upper:]' '[:lower:]')
+target=${target%ap}
+case "$target" in
+  j433|j434|j504|j613|j615|j514s|j514c|j514m|j516s|j516c|j516m) ;;
+  *) echo "Private M3 package: unsupported hardware $target. No helper may be installed." >&2; exit 1 ;;
+esac
+for path in '/Applications/Omarchy MX Mac Installer.app' '/Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist' '/var/db/com.omarchy.mx.installer'; do
+  if [[ -e $path || -L $path ]]; then
+    echo "Private package will not replace existing installer state: $path" >&2
+    echo 'Ask the maintainer to review the existing installation first.' >&2
+    exit 1
+  fi
+done

@@ -24,6 +24,8 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
   private var planApproval: CandidateBoundPlanApproval?
   private var reusableAssets: PreparedInstallerAssets?
   private var releaseConfiguration: InstallerReleaseConfiguration?
+  private let privatePlainTest =
+    Bundle.main.object(forInfoDictionaryKey: "OmarchyPrivatePlainTest") as? Bool == true
   private var encryptLinuxDisk = true
   private var selectedLane = ReleaseChannel.stable.rawValue
   private let prefetch = PayloadPrefetchOrchestrator()
@@ -339,7 +341,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
   }
 
   func setEncryptLinuxDisk(_ encrypt: Bool) {
-    lock.withLock { encryptLinuxDisk = encrypt }
+    lock.withLock { encryptLinuxDisk = privatePlainTest ? false : encrypt }
   }
 
   func cancelPayloadPrefetch() {
@@ -398,6 +400,14 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     encryptLinuxDisk: Bool,
     journal: @escaping @Sendable (Data) -> Void
   ) async throws -> CompletionDisplay {
+    guard !privatePlainTest || !encryptLinuxDisk else {
+      throw NSError(
+        domain: "OmarchyPrivateTest", code: 1,
+        userInfo: [
+          NSLocalizedDescriptionKey: "This private M3 test supports plain installation only."
+        ]
+      )
+    }
     let executionStarted = ProcessInfo.processInfo.systemUptime
     let (prepared, approval, configuration, host) = lock.withLock {
       (preparedPlan, planApproval, releaseConfiguration, hostInspection)
@@ -633,7 +643,9 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       throw InstallerAppError.workspaceUnavailable
     }
     let base = applicationSupport.appendingPathComponent(
-      InstallerProductIdentity.appIdentifier,
+      privatePlainTest
+        ? "\(InstallerProductIdentity.appIdentifier).private-m3-20260922"
+        : InstallerProductIdentity.appIdentifier,
       isDirectory: true
     )
     let staging = base.appendingPathComponent("staging", isDirectory: true)

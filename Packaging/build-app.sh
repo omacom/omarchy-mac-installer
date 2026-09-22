@@ -235,6 +235,9 @@ chmod 0644 "$contents/Info.plist"
 chmod 0644 "$contents/Library/LaunchDaemons/$daemon_plist_name"
 plutil -replace CFBundleShortVersionString \
   -string "$marketing_version" "$contents/Info.plist"
+if [[ ${OMARCHY_PRIVATE_PLAIN_TEST:-0} == "1" ]]; then
+  plutil -insert OmarchyPrivatePlainTest -bool true "$contents/Info.plist"
+fi
 plutil -replace CFBundleVersion \
   -string "$build_number" "$contents/Info.plist"
 plutil -replace CFBundleIdentifier \
