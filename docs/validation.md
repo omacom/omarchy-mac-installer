@@ -1,5 +1,7 @@
 # Standalone installer validation
 
+Latest physical evidence: [M3 Air private installation checkpoint, September 22, 2026](m3-validation-2026-09-22.md). The exact private candidate completed installation, Recovery handoff and plain Linux validation; earlier pending statements below describe historical build stages. Encryption and Limine remain unqualified on this M3.
+
 ## Candidate boundary
 
 The standalone extraction validated at `3f1e30bb265e77da04ce03533be0a7dddaa8c84c` extracted source and adjusted repository-relative paths without altering the Swift runtime, Python engine overlay, source lock, release trust configuration or Linux payload. The local evidence below applies to that extraction revision. The provenance record identifies the original source; record `git rev-parse HEAD` whenever testing a candidate.
