@@ -19,3 +19,7 @@ No actual root helper registration or downloaded-package Gatekeeper approval has
 The package refuses existing app/helper/state, an already registered service, macOS below 15 and hardware outside the eleven admitted M3 boards. The first Linux boot on the 16-inch M3 Pro remains unqualified. The image is unchanged from the tested 13-inch Air baseline: Asahi, GRUB, software rendering, no Linux encryption. Aurora and encryption/Limine integration are separate.
 
 Create the tester ZIP from the package, the three baseline assets, README.md, Feedback.md, Preflight.command, Stage assets.command, manifest.json and SHA256SUMS. Include no signing keys, credentials, source checkouts or old review packages. Verify the final archive and provide its checksum separately. Do not publish/upload on the user's behalf without their instruction.
+
+## Separate Limine candidate
+
+The encryption-capable private candidate uses the separately documented [Limine profile](../../docs/private-limine-packaging.md), `OMARCHY_PRIVATE_LIMINE_TEST=1`, a fresh sealed catalog/input receipt, and new outputs. It must not use this page's baseline staging pins, unencrypted instructions or Chris's existing bundle. The plain commands above retain their behavior.

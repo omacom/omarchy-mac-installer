@@ -7,7 +7,12 @@ source "$root/Packaging/private-test/code-identity.sh"
 app=$(cd "$1" && pwd -P)
 output=$2
 [[ $output == /* && ! -e $output && ! -L $output ]] || exit 64
-[[ $(/usr/bin/plutil -extract OmarchyPrivatePlainTest raw -o - "$app/Contents/Info.plist") == "true" ]] || exit 1
+profile=$(private_bundle_profile "$app")
+package_identifier=com.omarchy.mx.installer.private-m3-test.pkg
+if [[ $profile == "limine" ]]; then
+  package_identifier=com.omarchy.mx.installer.private-limine-test.pkg
+  python3 "$root/Packaging/private-test/prepare-limine-assets.py" --verify-release "$app/Contents/Resources/Release" >/dev/null
+fi
 [[ $(/usr/bin/plutil -extract OmarchyPrivateExactBuild raw -o - "$app/Contents/Info.plist") == "true" ]] || exit 1
 /usr/bin/codesign --verify --deep --strict "$app"
 app_requirement=$(private_code_requirement "$app" com.omarchy.mx.installer)
@@ -53,6 +58,6 @@ chmod 644 "$plist"
 /usr/bin/pkgbuild --analyze --root "$work/root" "$work/components.plist"
 /usr/bin/plutil -replace 0.BundleIsRelocatable -bool false "$work/components.plist"
 /usr/bin/pkgbuild --root "$work/root" --component-plist "$work/components.plist" \
-  --scripts "$work/scripts" --identifier com.omarchy.mx.installer.private-m3-test.pkg \
+  --scripts "$work/scripts" --identifier "$package_identifier" \
   --version "$version.$build" --install-location / --ownership recommended "$output"
 echo "Private unsigned package: $output"

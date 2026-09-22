@@ -34,8 +34,7 @@ struct OnePageInstallerView: View {
     _session = State(
       initialValue: InstallerSession(
         environment: environment,
-        allowsEncryption: Bundle.main.object(forInfoDictionaryKey: "OmarchyPrivatePlainTest")
-          as? Bool != true
+        allowsEncryption: InstallerBuildProfile.current.allowsEncryption
       ))
     self.channel = channel
     self.onChannelAvailability = onChannelAvailability

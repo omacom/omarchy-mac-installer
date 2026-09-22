@@ -7,9 +7,15 @@ source "$root/Packaging/private-test/code-identity.sh"
 release=$(cd "$1" && pwd -P)
 output=$2
 [[ $output == /* && ! -e $output && ! -L $output ]] || exit 64
+[[ ${OMARCHY_PRIVATE_PLAIN_TEST:-0} != "1" || ${OMARCHY_PRIVATE_LIMINE_TEST:-0} != "1" ]] || exit 64
 mkdir "$output"
-OMARCHY_PRIVATE_PLAIN_TEST=1 OMARCHY_APP_SIGNING_IDENTITY=- \
-  bash "$root/Packaging/build-app.sh" "$release" "$output"
+if [[ ${OMARCHY_PRIVATE_LIMINE_TEST:-0} == "1" ]]; then
+  OMARCHY_PRIVATE_PLAIN_TEST=0 OMARCHY_APP_SIGNING_IDENTITY=- \
+    bash "$root/Packaging/build-app.sh" "$release" "$output"
+else
+  OMARCHY_PRIVATE_PLAIN_TEST=1 OMARCHY_APP_SIGNING_IDENTITY=- \
+    bash "$root/Packaging/build-app.sh" "$release" "$output"
+fi
 app="$output/Omarchy MX Mac Installer.app"
 helper="$app/Contents/Resources/omarchy-apple-installer-helper"
 [[ $(/usr/bin/lipo -archs "$helper") == "arm64" ]] || exit 1
