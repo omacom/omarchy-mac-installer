@@ -164,7 +164,7 @@ struct OmarchyAppleInstallerApp: App {
         Button("Remove Omarchy…") { showsRemoval = true }
           .disabled(removalNeedsReview || showsRemoval || liveSession?.canChangeChannel != true)
       }
-      if Bundle.main.object(forInfoDictionaryKey: "OmarchyPrivatePlainTest") as? Bool != true {
+      if InstallerBuildProfile.current.showsReleaseChannels {
         CommandMenu(PlainLanguage.channelMenuTitle) {
           Picker(PlainLanguage.channelMenuTitle, selection: channelBinding) {
             Text(PlainLanguage.channelStable).tag(ReleaseChannel?.some(.stable))

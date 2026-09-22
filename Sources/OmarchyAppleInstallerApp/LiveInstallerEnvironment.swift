@@ -24,8 +24,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
   private var planApproval: CandidateBoundPlanApproval?
   private var reusableAssets: PreparedInstallerAssets?
   private var releaseConfiguration: InstallerReleaseConfiguration?
-  private let privatePlainTest =
-    Bundle.main.object(forInfoDictionaryKey: "OmarchyPrivatePlainTest") as? Bool == true
+  private let buildProfile = InstallerBuildProfile.current
   private var encryptLinuxDisk = true
   private var selectedLane = ReleaseChannel.stable.rawValue
   private let prefetch = PayloadPrefetchOrchestrator()
@@ -341,7 +340,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
   }
 
   func setEncryptLinuxDisk(_ encrypt: Bool) {
-    lock.withLock { encryptLinuxDisk = privatePlainTest ? false : encrypt }
+    lock.withLock { encryptLinuxDisk = buildProfile.allowsEncryption ? encrypt : false }
   }
 
   func cancelPayloadPrefetch() {
@@ -400,7 +399,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     encryptLinuxDisk: Bool,
     journal: @escaping @Sendable (Data) -> Void
   ) async throws -> CompletionDisplay {
-    guard !privatePlainTest || !encryptLinuxDisk else {
+    guard buildProfile.allowsEncryption || !encryptLinuxDisk else {
       throw NSError(
         domain: "OmarchyPrivateTest", code: 1,
         userInfo: [
@@ -643,9 +642,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       throw InstallerAppError.workspaceUnavailable
     }
     let base = applicationSupport.appendingPathComponent(
-      privatePlainTest
-        ? "\(InstallerProductIdentity.appIdentifier).private-m3-20260922"
-        : InstallerProductIdentity.appIdentifier,
+      buildProfile.workspaceName,
       isDirectory: true
     )
     let staging = base.appendingPathComponent("staging", isDirectory: true)

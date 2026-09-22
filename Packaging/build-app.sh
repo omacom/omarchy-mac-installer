@@ -86,6 +86,8 @@ sealed_catalog_signature="$release_directory/catalog.json.sig"
 (( $(stat -f %z "$trust_root") == 32 )) \
   || fail "trust-root.ed25519.pub must contain exactly 32 bytes"
 
+[[ ${OMARCHY_PRIVATE_PLAIN_TEST:-0} != "1" || ${OMARCHY_PRIVATE_LIMINE_TEST:-0} != "1" ]] \
+  || fail "private plain and Limine profiles are mutually exclusive"
 sealed_catalog_available=false
 if [[ -e $sealed_catalog || -L $sealed_catalog \
   || -e $sealed_catalog_signature || -L $sealed_catalog_signature ]]; then
@@ -103,6 +105,14 @@ if [[ -e $sealed_catalog || -L $sealed_catalog \
     fail "catalog.json.sig must contain exactly 64 bytes"
   fi
   sealed_catalog_available=true
+fi
+
+if [[ ${OMARCHY_PRIVATE_LIMINE_TEST:-0} == "1" && $sealed_catalog_available != "true" ]]; then
+  fail "private Limine builds require a sealed private catalog"
+fi
+
+if [[ ${OMARCHY_PRIVATE_LIMINE_TEST:-0} == "1" ]]; then
+  python3 "$script_directory/private-test/prepare-limine-assets.py" --verify-release "$release_directory" >/dev/null
 fi
 
 descriptor_schema="$(plutil -extract schema_version raw -o - "$release_descriptor")"
@@ -186,6 +196,9 @@ install -m 0755 "$app_binary" "$contents/MacOS/$app_executable_name"
 install -m 0755 "$helper_binary" "$resources/$helper_executable_name"
 install -m 0444 "$release_descriptor" "$resources/Release/release.json"
 install -m 0444 "$trust_root" "$resources/Release/trust-root.ed25519.pub"
+if [[ ${OMARCHY_PRIVATE_LIMINE_TEST:-0} == "1" ]]; then
+  install -m 0444 "$release_directory/limine-inputs.json" "$resources/Release/limine-inputs.json"
+fi
 if [[ $sealed_catalog_available == "true" ]]; then
   install -m 0444 "$sealed_catalog" "$resources/Release/catalog.json"
   install -m 0444 \
@@ -237,6 +250,9 @@ plutil -replace CFBundleShortVersionString \
   -string "$marketing_version" "$contents/Info.plist"
 if [[ ${OMARCHY_PRIVATE_PLAIN_TEST:-0} == "1" ]]; then
   plutil -insert OmarchyPrivatePlainTest -bool true "$contents/Info.plist"
+fi
+if [[ ${OMARCHY_PRIVATE_LIMINE_TEST:-0} == "1" ]]; then
+  plutil -insert OmarchyPrivateLimineTest -bool true "$contents/Info.plist"
 fi
 plutil -replace CFBundleVersion \
   -string "$build_number" "$contents/Info.plist"
