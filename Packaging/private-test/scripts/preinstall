@@ -8,10 +8,22 @@ case "$target" in
   j433|j434|j504|j613|j615|j514s|j514c|j514m|j516s|j516c|j516m) ;;
   *) echo "Private M3 package: unsupported hardware $target. No helper may be installed." >&2; exit 1 ;;
 esac
-for path in '/Applications/Omarchy MX Mac Installer.app' '/Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist' '/var/db/com.omarchy.mx.installer'; do
+version=$(/usr/bin/sw_vers -productVersion)
+major=${version%%.*}
+[[ $major =~ ^[0-9]+$ ]] && (( major >= 15 )) || { echo 'macOS 15 or later is required.' >&2; exit 1; }
+for path in '/Applications/Omarchy MX Mac Installer.app' '/Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist' '/Library/PrivilegedHelperTools/com.omarchy.mx.installer.helper' '/var/db/com.omarchy.mx.installer'; do
   if [[ -e $path || -L $path ]]; then
     echo "Private package will not replace existing installer state: $path" >&2
     echo 'Ask the maintainer to review the existing installation first.' >&2
     exit 1
   fi
 done
+if [[ -e /Library/PrivilegedHelperTools || -L /Library/PrivilegedHelperTools ]]; then
+  [[ -d /Library/PrivilegedHelperTools && ! -L /Library/PrivilegedHelperTools && $(/usr/bin/stat -f %u /Library/PrivilegedHelperTools) == "0" ]] || exit 1
+  mode=$(/usr/bin/stat -f %Lp /Library/PrivilegedHelperTools)
+  [[ $mode =~ ^[0-7]+$ ]] && (( (8#$mode & 022) == 0 )) || exit 1
+fi
+if /bin/launchctl print system/com.omarchy.mx.installer.helper >/dev/null 2>&1; then
+  echo 'A helper is already registered. Ask the maintainer to review it first.' >&2
+  exit 1
+fi
