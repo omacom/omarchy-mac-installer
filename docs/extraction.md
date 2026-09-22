@@ -42,3 +42,9 @@ The next integration should separately define the shared Linux image and package
 - The exact model `apple,j614s` remains blocked. Availability of an M4 Pro for development does not qualify it as an installation target.
 
 See [validation.md](validation.md) for the passing Linux and macOS checks and remaining qualification work.
+
+## M3 inspection engine update
+
+The later M3 trial updates the bundled inspection engine to `installer-v0.9.2-omarchy.17.tar.gz`, 17,838,045 bytes, SHA-256 `ecb61645a9c75ba733425fb300b8b53b09f9dbc297a86acce1e0ee41f36e32e5`. The archive was reproduced exactly from locked engine source revision `8cb67b490fc8ffb4d9b338759403c18238a1b11a` and the authenticated `.14` base. The older inspection engine marks M3 devices as expert-only, so an M3-capable catalog alone cannot admit the host. The app locator and packager now pin the same verified `.17` archive. Catalog signatures, artifact verification, and the M4 `apple,j614s` prohibition remain unchanged.
+
+The current imported planner contains a later disk-shortfall change whose hashes differ from the `.17` source lock. Reproduction uses the matching historical revision, not relaxed hash checks. Updating that planner in the runtime requires a separate engine revision. This inspection update does not add replacement support for legacy installations with only one Linux partition.
