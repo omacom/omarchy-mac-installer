@@ -5,22 +5,22 @@
   @testable import OmarchyAppleInstallerTrustCore
 
   final class ValidationEngineArtifactTests: XCTestCase {
-    func testCandidateSixIdentityIsPinnedExactly() {
+    func testM3CapableInspectionIdentityIsPinnedExactly() {
       XCTAssertEqual(
         ValidationEngineArtifactLocator.version,
-        "v0.9.0-omarchy.14"
+        "v0.9.2-omarchy.17"
       )
       XCTAssertEqual(
         ValidationEngineArtifactLocator.fileName,
-        "installer-v0.9.0-omarchy.14.tar.gz"
+        "installer-v0.9.2-omarchy.17.tar.gz"
       )
       XCTAssertEqual(
         ValidationEngineArtifactLocator.expectedDigest,
-        "sha256:9e9277384b6c9e8b269cc79b1b24df7bfcdcbb898a596a677b74d1d18050aebe"
+        "sha256:ecb61645a9c75ba733425fb300b8b53b09f9dbc297a86acce1e0ee41f36e32e5"
       )
       XCTAssertEqual(
         ValidationEngineArtifactLocator.expectedSizeBytes,
-        17_917_578
+        17_838_045
       )
     }
 
