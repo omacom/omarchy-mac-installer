@@ -1,0 +1,3 @@
+[submodule "image-builder/archiso"]
+  path = image-builder/archiso
+  url = https://gitlab.archlinux.org/archlinux/archiso.git

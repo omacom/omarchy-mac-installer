@@ -1,0 +1,72 @@
+#!/bin/bash
+
+MAKE_ARGS=()
+ISO_REF=quattro
+RELEASE_SUFFIX=""
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+  --no-make)
+    MAKE_ARGS+=("$1")
+    shift
+    ;;
+  --rc)
+    MAKE_ARGS+=("$1")
+    ISO_REF=rc
+    RELEASE_SUFFIX="-rc"
+    shift
+    ;;
+  -*)
+    echo "Unknown option: $1"
+    echo "Usage: omarchy-iso-release [--no-make] [--rc] [version]"
+    exit 1
+    ;;
+  *)
+    if [[ -n "${BUILD_VERSION-}" ]]; then
+      echo "Usage: omarchy-iso-release [--no-make] [--rc] [version]"
+      exit 1
+    fi
+    BUILD_VERSION="$1"
+    shift
+    ;;
+  esac
+done
+
+if [[ -z "${BUILD_VERSION-}" ]]; then
+  echo "Usage: omarchy-iso-release [--no-make] [--rc] [version]"
+  exit 1
+fi
+
+BUILD_ROOT=$(realpath "${BASH_SOURCE[0]%/*}/..")
+BUILD_RELEASE_PATH="$BUILD_ROOT/release"
+
+# Make ISOs
+if [[ ! " ${MAKE_ARGS[*]} " =~ " --no-make " ]]; then
+  echo -e "\e[32mMaking $ISO_REF ISO\e[0m"
+  omarchy-iso-make --no-cache --no-boot-offer "${MAKE_ARGS[@]}"
+else
+  echo -e "\e[31mSkipping remaking ISOs\e[0m"
+fi
+
+# Sign and upload ISO
+latest_iso=$(\ls -t "$BUILD_RELEASE_PATH"/*x86_64-"$ISO_REF".iso | head -n1)
+release_iso="$BUILD_RELEASE_PATH/omarchy-$BUILD_VERSION$RELEASE_SUFFIX.iso"
+cp "$latest_iso" "$release_iso"
+
+echo -e "\e[32mSigning $ISO_REF ISO\e[0m"
+omarchy-iso-sign "$release_iso"
+
+# The checksum sidecar names the ISO alone, never the build path: it is
+# downloaded next to the ISO and has to verify with `sha256sum -c` from
+# whatever directory the person who downloaded it happens to be in. A release
+# that cannot write it stops here, because the sidecar left over from the last
+# release reads as a checksum for this one.
+iso_sha=$(sha256sum "$release_iso")
+iso_sha=${iso_sha%% *}
+if [[ -z $iso_sha ]] || ! printf '%s  %s\n' "$iso_sha" "${release_iso##*/}" >"$release_iso.sha256"; then
+  echo -e "\e[31mCould not write the checksum for $release_iso\e[0m" >&2
+  exit 1
+fi
+echo -e "\e[32mSHA256 for $ISO_REF ISO: $iso_sha\e[0m"
+
+omarchy-iso-upload "$release_iso"
