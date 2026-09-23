@@ -234,7 +234,9 @@ grep -Fq -- '--source "omarchy_iso_producer=$producer_binding_identity"' \
 jq -e '
   .common_producer_inputs == ["builder/asahi_stage_inputs.py",
     "builder/build-asahi-os-package.sh",
-    "builder/asahi-package-dispatch.sh"] and
+    "builder/asahi-package-dispatch.sh",
+    "builder/private-limine-qualification.py",
+    "builder/quattro-trust/policy.json"] and
   (.common_admission_inputs | index("builder/asahi_stage_inputs.py") | not) and
   ([$spec.stages | keys[]] | all(
       . as $stage |
