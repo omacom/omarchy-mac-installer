@@ -10,8 +10,11 @@
     func testPrivateLimineProfileSubmitsExplicitEncryptionChoice() async throws {
       for encrypt in [false, true] {
         let environment = MockInstallerEnvironment()
-        let profile = InstallerBuildProfile.resolve(infoDictionary: ["OmarchyPrivateLimineTest": true])
-        let session = InstallerSession(environment: environment, allowsEncryption: profile.allowsEncryption)
+        let profile = InstallerBuildProfile.resolve(infoDictionary: [
+          "OmarchyPrivateLimineTest": true
+        ])
+        let session = InstallerSession(
+          environment: environment, allowsEncryption: profile.allowsEncryption)
         XCTAssertTrue(session.encryptLinuxDisk)
         await session.inspect()
         await session.continueToPlan()
