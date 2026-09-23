@@ -37,6 +37,11 @@ printf '%s\n' \
   "$2: file format pei-aarch64-little" \
   'architecture: aarch64, flags 0x0000012f:'
 STUB
+# A complete header followed by more than a pipe buffer of output must not
+# fail merely because grep found its match before objdump finished writing.
+cat >>"$work/stubs/objdump" <<'STUB'
+for ((line=0; line<10000; line++)); do printf 'additional object detail\n'; done
+STUB
 chmod +x "$work/stubs/objdump"
 cp "$iso_tree/EFI/BOOT/BOOTAA64.EFI" "$work/esp-BOOTAA64.EFI"
 printf 'test Asahi kernel\n' >"$iso_tree/arch/boot/aarch64/vmlinuz-linux-asahi"

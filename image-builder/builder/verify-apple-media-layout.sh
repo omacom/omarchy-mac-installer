@@ -88,11 +88,18 @@ if ! cmp -s -- "$iso_bootaa64" "$esp_bootaa64"; then
   echo "ISO9660 and appended-ESP BOOTAA64.EFI bytes differ" >&2
   exit 1
 fi
-if ! objdump -f "$iso_bootaa64" 2>/dev/null | grep -qF 'file format pei-aarch64-little'; then
+# Consume the complete tool output before matching. With pipefail, grep -q
+# can otherwise close a valid objdump stream early and turn SIGPIPE into a
+# false architecture failure.
+if ! object_header=$(objdump -f "$iso_bootaa64" 2>/dev/null); then
+  echo "Could not inspect BOOTAA64.EFI" >&2
+  exit 1
+fi
+if ! grep -qF 'file format pei-aarch64-little' <<<"$object_header"; then
   echo "BOOTAA64.EFI is not a PE/COFF AArch64 image" >&2
   exit 1
 fi
-if ! objdump -f "$iso_bootaa64" 2>/dev/null | grep -qF 'architecture: aarch64'; then
+if ! grep -qF 'architecture: aarch64' <<<"$object_header"; then
   echo "BOOTAA64.EFI does not declare the AArch64 machine architecture" >&2
   exit 1
 fi
