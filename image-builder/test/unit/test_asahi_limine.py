@@ -300,9 +300,17 @@ class AppleLimine(unittest.TestCase):
         archive = Path(self.tmp.name) / "initrd.cpio"
         original = subprocess.check_output
         def output(argv, **kwargs):
-            # Inspect only this fixture archive, without a chroot or mounts.
+            # This fixture is an uncompressed cpio. Use lsinitcpio's listing
+            # backend directly so non-Arch runners exercise real archive modes
+            # and symlink targets without requiring mkinitcpio or a chroot.
             self.assertEqual(argv[:2], ["arch-chroot", str(self.root)])
-            return original(argv[2:], **kwargs)
+            verbose = "--verbose" in argv
+            expected = (["env", "LC_ALL=C", "lsinitcpio", "--nocolor", "--verbose"]
+                        if verbose else ["lsinitcpio"])
+            self.assertEqual(argv[2:], [*expected, str(archive)])
+            with archive.open("rb") as stream:
+                return original(["bsdcpio", "-itv" if verbose else "-it"],
+                                stdin=stream, env={**os.environ, "LC_ALL": "C"}, **kwargs)
         def check():
             subprocess.run(["bsdtar", "--format=newc", "-cf", str(archive), "-C", str(tree), "usr"], check=True)
             with mock.patch.object(boot.subprocess, "check_output", side_effect=output):
