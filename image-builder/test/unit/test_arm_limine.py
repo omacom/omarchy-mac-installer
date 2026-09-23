@@ -129,11 +129,13 @@ class ArmLimineTest(unittest.TestCase):
             omarchy_install={"boot": {"backend": "asahi-grub"}},
         )
 
-        packages = phases_impl._early_bootstrap_packages(ctx)
+        with patch.object(configured_phases, "_iso_ref", return_value="stable"):
+            packages = phases_impl._early_bootstrap_packages(ctx)
+            settings_package = phases_impl._omarchy_settings_package()
 
         self.assertIn("grub", packages)
         self.assertIn("btrfs-progs", packages)
-        self.assertIn(phases_impl._omarchy_settings_package(), packages)
+        self.assertIn(settings_package, packages)
         self.assertTrue(
             {"limine", "limine-mkinitcpio-hook", "limine-snapper-sync", "snapper"}.isdisjoint(
                 packages
@@ -550,10 +552,13 @@ class ArmLimineTest(unittest.TestCase):
                     "storage": {"esp_device": "/dev/loop-esp"},
                 },
             )
-            with patch.object(phases_impl, "_read_efibootmgr") as read_nvram, patch.object(
-                phases_impl,
+            with patch.object(configured_phases, "_read_efibootmgr") as read_nvram, patch.object(
+                configured_phases,
                 "_register_limine_efi_entry",
-            ) as register:
+            ) as register, patch.object(
+                configured_phases, "_limine_efi_names",
+                return_value=("BOOTAA64.EFI", "limine_aa64.efi", "BOOTAA64.EFI"),
+            ):
                 phases_impl._install_pre_mounted_limine(ctx)
 
             self.assertEqual(
