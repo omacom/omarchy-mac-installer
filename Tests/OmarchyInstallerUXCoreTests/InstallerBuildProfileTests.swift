@@ -22,7 +22,8 @@
     }
 
     func testPrivateLimineCanEncryptWithoutUsingPublicOrChrisState() {
-      let profile = InstallerBuildProfile.resolve(infoDictionary: ["OmarchyPrivateLimineTest": true])
+      let profile = InstallerBuildProfile.resolve(infoDictionary: ["OmarchyPrivateLimineTest": true]
+      )
       XCTAssertEqual(profile, .privateLimine)
       XCTAssertTrue(profile.allowsEncryption)
       XCTAssertFalse(profile.showsReleaseChannels)
