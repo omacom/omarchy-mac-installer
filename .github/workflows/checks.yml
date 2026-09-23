@@ -113,7 +113,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      TMPDIR: ${{ runner.temp }}
       GIT_CONFIG_COUNT: '1'
       GIT_CONFIG_KEY_0: commit.gpgsign
       GIT_CONFIG_VALUE_0: 'false'
@@ -133,7 +132,7 @@ jobs:
       - name: Run VM-free builder suite
         run: |
           mkdir -p "$RUNNER_TEMP/image-builder-ci"
-          bash image-builder/test/all 2>&1 | tee "$RUNNER_TEMP/image-builder-ci/source-tests.log"
+          TMPDIR="$RUNNER_TEMP" bash image-builder/test/all 2>&1 | tee "$RUNNER_TEMP/image-builder-ci/source-tests.log"
       - name: Save source-check evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
