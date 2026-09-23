@@ -4,7 +4,7 @@ The installer application and its Linux image producer are reviewed in this repo
 
 ## Import and provenance
 
-`image-builder-import.json` records original file hashes/modes, the source tree and commit `dbc46807e3c341b82fa518c2db241646ad85446122` from the previously tested builder. `image-builder/archiso` retains gitlink `424e78130db2af6c1ceb55b442d7914b1109ff2b`, declared in the root `.gitmodules`. Initialize it with `git submodule update --init image-builder/archiso`.
+`image-builder-import.json` records original file hashes/modes, the source tree and commit `dbc46807e3c341b82fa518c2db2416464a087dd3` from the previously tested builder. `image-builder/archiso` retains gitlink `424e78130db2af6c1ceb55b442d7914b1109ff2b`, declared in the root `.gitmodules`. Initialize it with `git submodule update --init image-builder/archiso`.
 
 The imported nightly publication workflow is deliberately excluded. Historical release/sign/upload commands and documentation remain attributed source, not configured publication destinations for this fork. No image publishing workflow is activated by this import. Historical validation records describe their original source and are not qualification of the relocated producer.
 
