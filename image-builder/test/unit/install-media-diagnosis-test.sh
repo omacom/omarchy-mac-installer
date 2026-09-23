@@ -310,9 +310,9 @@ STATE
         >/dev/null 2>&1
       ;;
     Linux)
-      # util-linux uses -O for the output log and -- for a command vector.
+      # Use -c for compatibility with util-linux before command-vector support.
       # -e returns the dashboard status and -f flushes its final repaint.
-      script -qef -O "$screen" -- "$BASH" -c "$dashboard_command" \
+      SHELL="$BASH" script -qef -O "$screen" -c "$dashboard_command" \
         >/dev/null 2>&1
       ;;
     *)
