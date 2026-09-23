@@ -519,8 +519,10 @@ if [[ $OMARCHY_MEDIA_TARGET == aarch64/apple-silicon &&
   # prove the generated producer and admission indexes against that immutable
   # snapshot. This closes the host-edit window between identity generation and
   # checkpoint store/restore.
-  BUILD_INPUT_ROOT=$HOST_BUILD_STATE/current-source
-  mkdir "$BUILD_INPUT_ROOT"
+  BUILD_GIT_ROOT=$HOST_BUILD_STATE/current-source
+  source_prefix=$(git -C "$BUILD_ROOT" rev-parse --show-prefix)
+  BUILD_INPUT_ROOT=$BUILD_GIT_ROOT/${source_prefix%/}
+  mkdir -p "$BUILD_INPUT_ROOT"
   for source_directory in archiso bin builder configs; do
     cp -a "$BUILD_ROOT/$source_directory" "$BUILD_INPUT_ROOT/$source_directory"
   done
@@ -533,16 +535,16 @@ if [[ $OMARCHY_MEDIA_TARGET == aarch64/apple-silicon &&
     echo "Apple source provenance Git metadata is missing or unsafe" >&2
     exit 1
   fi
-  cp -a "$git_common_directory" "$BUILD_INPUT_ROOT/.git"
+  cp -a "$git_common_directory" "$BUILD_GIT_ROOT/.git"
   for worktree_metadata in HEAD index; do
     metadata_path=$git_worktree_directory/$worktree_metadata
     if [[ ! -f $metadata_path || -L $metadata_path ]]; then
       echo "Apple source provenance is missing $worktree_metadata" >&2
       exit 1
     fi
-    cp -a "$metadata_path" "$BUILD_INPUT_ROOT/.git/$worktree_metadata"
+    cp -a "$metadata_path" "$BUILD_GIT_ROOT/.git/$worktree_metadata"
   done
-  if find "$BUILD_INPUT_ROOT/.git" -type l -print -quit | grep -q .; then
+  if find "$BUILD_GIT_ROOT/.git" -type l -print -quit | grep -q .; then
     echo "Apple source provenance Git snapshot contains a symlink" >&2
     exit 1
   fi
@@ -560,7 +562,7 @@ if [[ $OMARCHY_MEDIA_TARGET == aarch64/apple-silicon &&
     echo "Immutable Apple build snapshot retained Python bytecode" >&2
     exit 1
   fi
-  chmod -R a-w "$BUILD_INPUT_ROOT"
+  chmod -R a-w "$BUILD_GIT_ROOT"
   ASAHI_STAGE_ADMISSION_RECEIPT=$HOST_BUILD_STATE/stage-admission-receipt.json
   GIT_OPTIONAL_LOCKS=0 PYTHONDONTWRITEBYTECODE=1 python3 - \
     "$BUILD_INPUT_ROOT" \

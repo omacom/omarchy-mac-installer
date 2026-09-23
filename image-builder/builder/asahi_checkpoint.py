@@ -265,8 +265,8 @@ def build_source_manifest(repository: Path, paths: list[str]) -> dict[str, Any]:
         raise CheckpointError(f"source repository is not a directory: {repository}")
     repository = repository.resolve()
     top_level = Path(_git(repository, "rev-parse", "--show-toplevel").strip()).resolve()
-    if top_level != repository:
-        raise CheckpointError(f"source repository must be its Git top level: {repository}")
+    if not repository.is_relative_to(top_level):
+        raise CheckpointError(f"source repository is outside its Git worktree: {repository}")
     normalized_paths = sorted({_normalized_source_path(value) for value in paths})
     if not normalized_paths:
         raise CheckpointError("source manifest requires at least one scoped path")

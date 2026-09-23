@@ -391,7 +391,8 @@ set -e
 # A valid timestamp-based pyc can contain different executable bytes while
 # matching the intended source file's timestamp and size. Prove that such a
 # cache is neither imported by receipt generation nor mounted into the builder.
-bytecode_root=$work/bytecode-root
+bytecode_git_root=$work/bytecode-root
+bytecode_root=$bytecode_git_root/$(git -C "$ROOT" rev-parse --show-prefix)
 mkdir -p "$bytecode_root"
 for source_directory in archiso bin builder configs; do
   cp -a "$ROOT/$source_directory" "$bytecode_root/$source_directory"
@@ -399,9 +400,9 @@ done
 test_git_common=$(git -C "$ROOT" rev-parse --path-format=absolute \
   --git-common-dir)
 test_git_worktree=$(git -C "$ROOT" rev-parse --path-format=absolute --git-dir)
-cp -a "$test_git_common" "$bytecode_root/.git"
-cp -a "$test_git_worktree/HEAD" "$bytecode_root/.git/HEAD"
-cp -a "$test_git_worktree/index" "$bytecode_root/.git/index"
+cp -a "$test_git_common" "$bytecode_git_root/.git"
+cp -a "$test_git_worktree/HEAD" "$bytecode_git_root/.git/HEAD"
+cp -a "$test_git_worktree/index" "$bytecode_git_root/.git/index"
 malicious_pyc=$(python3 - "$bytecode_root/builder/asahi_stage_inputs.py" <<'PYTHON'
 import os
 from pathlib import Path
