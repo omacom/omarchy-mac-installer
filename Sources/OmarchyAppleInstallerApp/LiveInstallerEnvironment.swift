@@ -131,8 +131,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     let configuration = try InstallerReleaseConfigurationLocator()
       .loadFromMainBundle()
     let workspace = try installerWorkspace()
-    let channel = ReleaseChannelPreference()
-      .resolve(descriptorDefault: configuration.defaultChannel)
+    let channel = ReleaseChannelPreference().resolve(configuration: configuration)
     let catalogStore = AcceptedCatalogIdentityStore(
       directory: workspace.state,
       channel: channel
