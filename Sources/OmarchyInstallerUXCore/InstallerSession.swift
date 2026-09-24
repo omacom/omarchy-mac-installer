@@ -99,7 +99,6 @@
     private var isObservingPrefetch = false
     private var prefetchWatcher: Task<Void, Never>?
 
-
     public init(environment: any InstallerEnvironment, allowsEncryption: Bool = true) {
       self.allowsEncryption = allowsEncryption
       encryptLinuxDisk = allowsEncryption
