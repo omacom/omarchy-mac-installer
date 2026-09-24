@@ -7,6 +7,58 @@
 
   @MainActor
   final class InstallerSessionTests: XCTestCase {
+    func testPrivateLimineProfileSubmitsExplicitEncryptionChoice() async throws {
+      for encrypt in [false, true] {
+        let environment = MockInstallerEnvironment()
+        let profile = InstallerBuildProfile.resolve(infoDictionary: [
+          "OmarchyPrivateLimineTest": true
+        ])
+        let session = InstallerSession(
+          environment: environment, allowsEncryption: profile.allowsEncryption)
+        XCTAssertTrue(session.encryptLinuxDisk)
+        await session.inspect()
+        await session.continueToPlan()
+        session.continueToPlanReview()
+        session.setEncryptLinuxDisk(encrypt)
+        XCTAssertEqual(environment.storedEncryptLinuxDisk, encrypt)
+        session.setAcknowledged(true)
+        session.approve()
+        session.presentInstallCredentials()
+        await session.submit(try authorization())
+        XCTAssertEqual(environment.lastEncryptLinuxDisk, encrypt)
+      }
+    }
+
+    func testPlainOnlyProfileCannotEnableEncryptionOrResetIntoIt() async throws {
+      let environment = MockInstallerEnvironment()
+      let session = InstallerSession(environment: environment, allowsEncryption: false)
+      XCTAssertFalse(session.encryptLinuxDisk)
+      XCTAssertFalse(environment.storedEncryptLinuxDisk)
+      await session.inspect()
+      await session.continueToPlan()
+      session.continueToPlanReview()
+      session.setEncryptLinuxDisk(true)
+      XCTAssertFalse(session.encryptLinuxDisk)
+      XCTAssertFalse(environment.storedEncryptLinuxDisk)
+      session.setAcknowledged(true)
+      session.approve()
+      session.presentInstallCredentials()
+      await session.submit(try authorization())
+      XCTAssertEqual(environment.lastEncryptLinuxDisk, false)
+    }
+
+    func testPlainOnlyProfileReinspectKeepsPlainState() async {
+      let environment = MockInstallerEnvironment()
+      let session = InstallerSession(environment: environment, allowsEncryption: false)
+      await session.inspect()
+      await session.continueToPlan()
+      session.continueToPlanReview()
+      session.setEncryptLinuxDisk(true)
+      await session.inspect()
+      XCTAssertFalse(session.encryptLinuxDisk)
+      XCTAssertFalse(environment.storedEncryptLinuxDisk)
+    }
+
     func testHappyPathFollowsTheTransitionTable() async throws {
       let environment = MockInstallerEnvironment()
       let session = InstallerSession(environment: environment)
@@ -176,7 +228,33 @@
       XCTAssertEqual(environment.approveCount, 0)
     }
 
-    func testReplanResetsPrefetchSoInstallWaitsForTheSelectedPayload() async throws {
+    func testReplanKeepsTheRunningDownload() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.payloadPrefetchRequired = true
+      let gate = OperationGate()
+      environment.prefetchGate = gate
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      await session.continueToPlan()
+      await gate.waitUntilEntered()
+      session.continueToPlanReview()
+      let cancelsBefore = environment.prefetchCancelCount
+
+      await session.replan(omarchyBytes: 200_000_000_000)
+
+      XCTAssertEqual(environment.prefetchCancelCount, cancelsBefore)
+      await waitUntil { environment.prefetchStartCount == 2 }
+      XCTAssertNotEqual(session.prefetchState, .verified)
+      session.setAcknowledged(true)
+      session.approve()
+      XCTAssertFalse(session.canStartInstallation)
+
+      await gate.release()
+      await waitUntil { session.prefetchState == .verified }
+      XCTAssertTrue(session.canStartInstallation)
+    }
+
+    func testReplanWaitsForAPayloadTheCatalogReplaced() async throws {
       let environment = MockInstallerEnvironment()
       environment.payloadPrefetchRequired = true
       let first = OperationGate()
@@ -185,16 +263,15 @@
       await session.inspect()
       await session.continueToPlan()
       await first.waitUntilEntered()
-      XCTAssertNotEqual(session.prefetchState, .verified)
       await first.release()
       await waitUntil { session.prefetchState == .verified }
 
       session.continueToPlanReview()
       let second = OperationGate()
       environment.prefetchGate = second
+      environment.payloadPrefetchState = .idle
       await session.replan(omarchyBytes: 200_000_000_000)
 
-      XCTAssertGreaterThanOrEqual(environment.prefetchCancelCount, 1)
       await second.waitUntilEntered()
       XCTAssertNotEqual(session.prefetchState, .verified)
       XCTAssertEqual(environment.prefetchStartCount, 2)
@@ -204,6 +281,66 @@
 
       await second.release()
       await waitUntil { session.prefetchState == .verified }
+      XCTAssertTrue(session.canStartInstallation)
+    }
+
+    func testTheOldDownloadCannotVerifyAPayloadTheCatalogReplaced() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.payloadPrefetchRequired = true
+      let first = OperationGate()
+      environment.prefetchGate = first
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      await session.continueToPlan()
+      await first.waitUntilEntered()
+      session.continueToPlanReview()
+
+      let second = OperationGate()
+      environment.prefetchGate = second
+      environment.payloadPrefetchState = .idle
+      await session.replan(omarchyBytes: 200_000_000_000)
+      await second.waitUntilEntered()
+
+      await first.release()
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertNotEqual(session.prefetchState, .verified)
+      session.setAcknowledged(true)
+      session.approve()
+      XCTAssertFalse(session.canStartInstallation)
+
+      await second.release()
+      await waitUntil { session.prefetchState == .verified }
+      XCTAssertTrue(session.canStartInstallation)
+    }
+
+    func testAFailureDeliveredAfterAReplanCannotBlockTheRetry() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.payloadPrefetchRequired = true
+      let first = OperationGate()
+      environment.prefetchGate = first
+      environment.prefetchFailure = true
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      await session.continueToPlan()
+      await first.waitUntilEntered()
+      session.continueToPlanReview()
+
+      let second = OperationGate()
+      environment.prefetchGate = second
+      environment.prefetchFailure = false
+      await session.replan(omarchyBytes: 200_000_000_000)
+      await second.waitUntilEntered()
+
+      await first.release()
+      try await Task.sleep(for: .milliseconds(50))
+      if case .failed = session.prefetchState {
+        XCTFail("A stale failure reached the session: \(session.prefetchState)")
+      }
+
+      await second.release()
+      await waitUntil { session.prefetchState == .verified }
+      session.setAcknowledged(true)
+      session.approve()
       XCTAssertTrue(session.canStartInstallation)
     }
 
@@ -795,17 +932,17 @@
 
   actor OperationGate {
     private var entered = false
-    private var continuation: CheckedContinuation<Void, Never>?
+    private var continuations: [CheckedContinuation<Void, Never>] = []
     func wait() async {
       entered = true
-      await withCheckedContinuation { continuation = $0 }
+      await withCheckedContinuation { continuations.append($0) }
     }
     func waitUntilEntered() async {
       while !entered { await Task.yield() }
     }
     func release() {
-      continuation?.resume()
-      continuation = nil
+      for continuation in continuations { continuation.resume() }
+      continuations.removeAll()
     }
   }
 
@@ -856,6 +993,7 @@
     var prefetchGate: OperationGate?
     private(set) var prefetchStartCount = 0
     private(set) var prefetchCancelCount = 0
+    var prefetchFailure = false
     var payloadPrefetchState: PayloadPrefetchState = .idle
 
     func preparePlan(
@@ -909,7 +1047,9 @@
     ) async throws {
       prefetchStartCount += 1
       progress(.idle)
+      let fails = prefetchFailure
       await prefetchGate?.wait()
+      if fails { throw PayloadPrefetchError.failed("retry") }
       payloadPrefetchState = .verified
       progress(.verified)
     }

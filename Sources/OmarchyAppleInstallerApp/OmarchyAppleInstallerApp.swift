@@ -105,8 +105,7 @@ struct OmarchyAppleInstallerApp: App {
       onSessionAvailable: { liveSession = $0 })
   }
 
-  @State private var channel: ReleaseChannel = ReleaseChannelPreference()
-    .resolve(descriptorDefault: .stable)
+  @State private var channel = ReleaseChannelPreference().resolveFromMainBundle()
 
   var body: some Scene {
     WindowGroup(PlainLanguage.windowTitle) {
@@ -163,25 +162,29 @@ struct OmarchyAppleInstallerApp: App {
         Button("Remove Omarchy…") { showsRemoval = true }
           .disabled(removalNeedsReview || showsRemoval || liveSession?.canChangeChannel != true)
       }
-      CommandMenu(PlainLanguage.channelMenuTitle) {
-        Picker(PlainLanguage.channelMenuTitle, selection: channelBinding) {
-          Text(PlainLanguage.channelStable).tag(ReleaseChannel.stable)
-          Text(PlainLanguage.channelRC).tag(ReleaseChannel.rc)
-          Text(PlainLanguage.channelRCAurora).tag(ReleaseChannel.rcAurora)
+      if InstallerBuildProfile.current.showsReleaseChannels {
+        CommandMenu(PlainLanguage.channelMenuTitle) {
+          Picker(PlainLanguage.channelMenuTitle, selection: channelBinding) {
+            Text(PlainLanguage.channelStable).tag(ReleaseChannel?.some(.stable))
+            Text(PlainLanguage.channelRC).tag(ReleaseChannel?.some(.rc))
+            Text(PlainLanguage.channelRCAurora).tag(ReleaseChannel?.some(.rcAurora))
+          }
+          .pickerStyle(.inline)
+          .disabled(
+            removalNeedsReview || showsRemoval || liveSession?.canChangeChannel != true
+              || isSimulation || channel == nil)
         }
-        .pickerStyle(.inline)
-        .disabled(
-          removalNeedsReview || showsRemoval || liveSession?.canChangeChannel != true
-            || isSimulation)
       }
     }
   }
 
-  private var channelBinding: Binding<ReleaseChannel> {
+  private var channelBinding: Binding<ReleaseChannel?> {
     Binding(
       get: { channel },
       set: { selected in
-        guard liveSession?.canChangeChannel == true && !isSimulation else { return }
+        guard let selected, liveSession?.canChangeChannel == true && !isSimulation else {
+          return
+        }
         ReleaseChannelPreference().select(selected)
         channel = selected
       }

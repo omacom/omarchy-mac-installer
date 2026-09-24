@@ -24,6 +24,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
   private var planApproval: CandidateBoundPlanApproval?
   private var reusableAssets: PreparedInstallerAssets?
   private var releaseConfiguration: InstallerReleaseConfiguration?
+  private let buildProfile = InstallerBuildProfile.current
   private var encryptLinuxDisk = true
   private var selectedLane = ReleaseChannel.stable.rawValue
   private let prefetch = PayloadPrefetchOrchestrator()
@@ -130,8 +131,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     let configuration = try InstallerReleaseConfigurationLocator()
       .loadFromMainBundle()
     let workspace = try installerWorkspace()
-    let channel = ReleaseChannelPreference()
-      .resolve(descriptorDefault: configuration.defaultChannel)
+    let channel = ReleaseChannelPreference().resolve(configuration: configuration)
     let catalogStore = AcceptedCatalogIdentityStore(
       directory: workspace.state,
       channel: channel
@@ -299,7 +299,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
   }
 
   func setEncryptLinuxDisk(_ encrypt: Bool) {
-    lock.withLock { encryptLinuxDisk = encrypt }
+    lock.withLock { encryptLinuxDisk = buildProfile.allowsEncryption ? encrypt : false }
   }
 
   func cancelPayloadPrefetch() {
@@ -358,6 +358,14 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     encryptLinuxDisk: Bool,
     journal: @escaping @Sendable (Data) -> Void
   ) async throws -> CompletionDisplay {
+    guard buildProfile.allowsEncryption || !encryptLinuxDisk else {
+      throw NSError(
+        domain: "OmarchyPrivateTest", code: 1,
+        userInfo: [
+          NSLocalizedDescriptionKey: "This private M3 test supports plain installation only."
+        ]
+      )
+    }
     let executionStarted = ProcessInfo.processInfo.systemUptime
     let (prepared, approval, configuration, host) = lock.withLock {
       (preparedPlan, planApproval, releaseConfiguration, hostInspection)
@@ -586,7 +594,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       throw InstallerAppError.workspaceUnavailable
     }
     let base = applicationSupport.appendingPathComponent(
-      "com.omarchy.mx.installer",
+      buildProfile.workspaceName,
       isDirectory: true
     )
     let staging = base.appendingPathComponent("staging", isDirectory: true)
