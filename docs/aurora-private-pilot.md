@@ -8,7 +8,7 @@ The package repository owns reusable recipes, pinned source inputs, native ARM b
 
 ## Required image contract
 
-Create a distinct private Aurora/Limine product. `products/omarchy-mx-mac-aurora.json` is the legacy product and is not a shortcut to the new pilot. The existing guards correctly reject Aurora with the schema-4 candidate path. Do not relax those guards before the complete new contract is in place.
+Create a distinct private Aurora/Limine product. `image-builder/builder/products/omarchy-mx-mac-aurora.json` is the legacy product and is not a shortcut to the new pilot. The existing guards correctly reject Aurora with the schema-4 candidate path. Do not relax those guards before the complete new contract is in place.
 
 The new path needs an explicit independently authenticated Aurora overlay containing exactly `linux-aurora`, `linux-aurora-headers` and `m1n1-aurora`. The unsigned CI manifest is review evidence, not an image admission credential. The release boundary must approve the retained complete set, verify its manifest digest and archives, and sign those exact bytes without rebuilding. Exercise the consumer with disposable keys before using the private development signing process; no production key or new installed-system trust is required for the prototype.
 
@@ -25,7 +25,7 @@ All paths below are relative to `image-builder/`.
 - `builder/private-limine-qualification.py`: a separate Aurora contract requiring measured pins; never a general kernel-name bypass.
 - `builder/quattro-dependencies.py` and `builder/quattro-dependencies.sh`: authenticated overlay composition, exact platform replacement and transaction evidence.
 - `builder/asahi-stage-inputs.json` and `builder/checkpoint-verified-package-cache.sh`: source ownership and cache identities for the new verifier and snapshot.
-- `builder/finalized-boot.sh` and `builder/sealed-release-package.sh`: select the new product's measured branding manifest. Selecting Limine currently chooses the Asahi private manifest, which is unsuitable for Aurora.
+- `builder/asahi-stages/finalized-boot.sh` and `builder/asahi-stages/sealed-release-package.sh`: select the new product's measured branding manifest. Selecting Limine currently chooses the Asahi private manifest, which is unsuitable for Aurora.
 
 The new product and branding manifest must be derived from actual package bytes: Aurora m1n1, Aurora DTBs and the coordinated U-Boot candidate. Record the resulting boot binary digest and sizes. Neither the legacy Aurora hash nor the tested Asahi/Limine hash can stand in for this measurement.
 
