@@ -16,8 +16,12 @@ import fixtures  # noqa: E402
 inspection = fixtures.load("inspection", "builder/inspection.py")
 inspection.OWNER_UID = os.geteuid()
 CHECKS = ("candidate-versions", "minimum-versions", "refused-packages", "installed-boot-payloads", "candidate-files",
-          "m1n1-stage2", "aurora-device-trees", "limine-uki", "embedded-initramfs", "boot-maintenance",
-          "image-target", "first-boot", "pacman-config", "installed-system", "factory")
+          "m1n1-stage2", "aurora-device-trees", "limine-uki", "embedded-initramfs", "boot-splash", "boot-maintenance",
+          "image-target", "first-boot", "snapshots", "pacman-config", "installed-system", "factory")
+# Fixture roots live on whatever filesystem the tests run on: these paths stand in for btrfs subvolumes.
+SUBVOLUMES: set[Path] = set()
+real_is_subvolume = inspection.is_subvolume
+inspection.is_subvolume = lambda path: path in SUBVOLUMES
 
 
 class InspectionTest(unittest.TestCase):
@@ -47,6 +51,8 @@ class InspectionTest(unittest.TestCase):
         shutil.copytree(self.good, self.root, symlinks=True)
         self.factory = work / "factory"
         fixtures.make_factory(self.factory, self.root, self.summary)
+        SUBVOLUMES.clear()
+        SUBVOLUMES.add(self.root / ".snapshots")
 
     def inspect(self, candidates=None):
         return inspection.inspect(self.root, candidates or self.candidates, "edge", self.factory,
@@ -169,6 +175,92 @@ class InspectionTest(unittest.TestCase):
         menu = self.root / "boot/efi/limine.conf"
         menu.write_text(menu.read_text().split("#")[0] + "#" + hashlib.blake2b(data).hexdigest() + "\n")
         self.assertFails("embedded-initramfs", "omarchy-mac-encrypt")
+
+    def replace_uki(self, initrd=None, cmdline=None):
+        """Rebuilds the UKI with another initramfs or command line, keeping the menu's hash and
+        /etc/default/limine in step so only the splash is wrong."""
+        limine = inspection.limine
+        uki = self.root / "boot/efi/EFI/Linux/omarchy_linux-aurora.efi"
+        sections = limine.pe_sections(uki)
+        if initrd is not None:
+            sections[".initrd"] = initrd
+        if cmdline is not None:
+            sections[".cmdline"] = cmdline.encode() + b" \n\0"
+            fixtures.write(self.root, "etc/default/limine", f'KERNEL_CMDLINE[default]="{cmdline}"\n')
+        data = fixtures.pe_image(sections)
+        uki.write_bytes(data)
+        menu = self.root / "boot/efi/limine.conf"
+        menu.write_text(menu.read_text().split("#")[0] + "#" + hashlib.blake2b(data).hexdigest() + "\n")
+
+    def test_boot_splash(self):
+        bgrt = b"# Administrator customizations go in this file\n[Daemon]\nTheme=bgrt\n"
+        cmdline = self.inspect()["uki"]["cmdline"]
+        cases = (
+            ("the image's own theme", lambda: fixtures.write(self.root, "etc/plymouth/plymouthd.conf", bgrt),
+             "image's Plymouth theme is bgrt"),
+            ("no theme chosen, so the packaged bgrt",
+             lambda: fixtures.write(self.root, "etc/plymouth/plymouthd.conf",
+                                    b"# Administrator customizations go in this file\n#[Daemon]\n#Theme=fade-in\n"),
+             "image's Plymouth theme is bgrt"),
+            ("the initramfs's theme", lambda: self.replace_uki(
+                initrd=fixtures.good_initramfs(fixtures.plymouth_members(config=bgrt))), "initramfs shows the bgrt"),
+            ("an initramfs without the configuration", lambda: self.replace_uki(
+                initrd=fixtures.good_initramfs(fixtures.plymouth_members(config=None))), "initramfs shows the bgrt"),
+            ("an initramfs without Plymouth", lambda: self.replace_uki(initrd=fixtures.good_initramfs({})),
+             "initramfs shows the unset"),
+            ("an initramfs without the theme", lambda: self.replace_uki(
+                initrd=fixtures.good_initramfs(fixtures.plymouth_members(theme=False))), "initramfs lacks"),
+            ("a boot line that lets Plymouth fall back to text",
+             lambda: self.replace_uki(cmdline=cmdline.replace(" plymouth.ignore-serial-consoles", "")),
+             "lacks plymouth.ignore-serial-consoles"),
+            ("a boot line without the splash", lambda: self.replace_uki(cmdline=cmdline.replace(" splash", "")),
+             "lacks splash"),
+        )
+        for name, change, pattern in cases:
+            with self.subTest(name):
+                self.setUp()
+                change()
+                report = self.assertFails("boot-splash", pattern)
+                self.assertEqual(report["failed_checks"], ["boot-splash"])
+
+    def test_snapshots(self):
+        snapshots = lambda: self.root / ".snapshots"
+        cases = (
+            ("flattened by the image copy", lambda: SUBVOLUMES.clear(), "plain directory"),
+            ("carrying the build's snapshots", lambda: (snapshots() / "1/snapshot").mkdir(parents=True),
+             "taken during the build"),
+            ("without snapper's configuration", lambda: (self.root / "etc/snapper/configs/root").unlink(),
+             "no snapper root configuration"),
+            ("a file", lambda: (snapshots().rmdir(), snapshots().write_text("")), "not a directory"),
+            ("missing, with nothing to create it", lambda: snapshots().rmdir(), "no deferred hardware step"),
+        )
+        for name, change, pattern in cases:
+            with self.subTest(name):
+                self.setUp()
+                change()
+                self.assertFails("snapshots", pattern)
+
+    def test_snapshots_created_on_first_boot(self):
+        (self.root / ".snapshots").rmdir()
+        fixtures.write(self.root, "var/lib/omarchy/image/deferred-steps", "install/hardware/apple/snapshots-subvolume.sh\n")
+        fixtures.write(self.root, "usr/bin/omarchy-provision-hardware", "#!/bin/bash\n", 0o755)
+        (self.root / "etc/systemd/system/multi-user.target.wants/omarchy-provision-hardware.service").symlink_to(
+            "/etc/systemd/system/omarchy-provision-hardware.service")
+        report = self.inspect()
+        self.assertEqual(report["checks"]["snapshots"]["result"], "passed", report["checks"]["snapshots"])
+        self.assertIn("snapshots-subvolume.sh", report["checks"]["snapshots"]["detail"])
+
+    def test_a_plain_directory_is_not_a_subvolume(self):
+        self.assertFalse(real_is_subvolume(self.root / ".snapshots"))
+        self.assertFalse(real_is_subvolume(self.root / "etc"))
+
+    def test_audio_stack_missing(self):
+        for name in ("alsa-ucm-conf-asahi", "asahi-audio"):
+            with self.subTest(name):
+                self.setUp()
+                shutil.rmtree(next((self.root / "var/lib/pacman/local").glob(f"{name}-1.0-1")))
+                report = self.assertFails("installed-system", "packages-required-present")
+                self.assertIn(name, report["installed_system"]["packages-required-present"]["detail"])
 
     def test_installed_version_below_the_minimum(self):
         local = self.root / "var/lib/pacman/local"

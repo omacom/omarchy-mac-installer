@@ -117,6 +117,8 @@ for name in omarchy omarchy-settings omarchy-mac omarchy-mac-boot linux-aurora m
 done
 grep -Fxq hyprland "$scratch/requested" && ! grep -Fxq obs-studio "$scratch/requested" ||
   fail "the pre-check resolves the base names the repositories carry, and only those"
+grep -Fxq alsa-ucm-conf-asahi "$scratch/requested" && grep -Fxq asahi-audio "$scratch/requested" ||
+  fail "the pre-check resolves the speaker stack's profiles and DSP chain"
 pass "the pre-check passes a set that resolves from itself and records base names the repositories lack"
 runtime_list() {
   case $1 in
@@ -164,7 +166,10 @@ mapfile -t transactions <"$scratch/transactions"
 for name in omarchy-mac omarchy-mac-boot linux-aurora m1n1-aurora uboot-asahi; do
   [[ " ${transactions[2]} " == *" omarchy-candidates/$name "* ]] || fail "the Apple set installs $name by its qualified name"
 done
+[[ " ${transactions[2]} " == *" alsa-ucm-conf-asahi asahi-audio "* ]] ||
+  fail "the Apple set installs alsa-ucm-conf-asahi and asahi-audio: ${transactions[2]}"
 pass "omarchy-settings installs alone, then the manifest, the runtime and the Apple set, set packages by qualified name"
+pass "the Apple set carries the speaker stack's model profiles and DSP chain"
 
 [[ $(<"$target/var/lib/omarchy/image/target") == $'format=1\nplatform=apple-silicon' ]] ||
   fail "the image-target manifest names the platform"
@@ -195,6 +200,37 @@ make_first_boot "/usr/bin/omarchy-provision-hardware"
 [[ -f $target/var/lib/omarchy/mac-first-boot/pending && ! -e $target/var/lib/omarchy/mac-first-boot/deferred-steps ]] ||
   fail "a first boot without that contract gets pending only"
 pass "first boot is armed by the boot package, with deferred-steps only for the contract it reads"
+
+# ── snapper's subvolume ────────────────────────────────────────────────────
+# The build root's btrfs subvolumes, as btrfs subvolume show would find them.
+: >"$scratch/subvolumes"
+btrfs() {
+  case "$1 $2" in
+    "subvolume show") grep -Fxq "$3" "$scratch/subvolumes" ;;
+    "subvolume create") mkdir "$3" && printf '%s\n' "$3" >>"$scratch/created" ;;
+    *) return 1 ;;
+  esac
+}
+carry() {
+  rm -rf "$scratch/build" "$scratch/sealed" "$scratch/created"
+  mkdir -p "$scratch/build" "$scratch/sealed"
+  : >"$scratch/created"
+  "$@"
+  (fail() { builder_fail "$@"; }; carry_snapshots_subvolume "$scratch/build" "$scratch/sealed") >/dev/null 2>&1
+}
+carry true || fail "a build root without /.snapshots seals"
+[[ ! -s $scratch/created ]] || fail "no /.snapshots is made when the runtime made none"
+carry eval 'mkdir "$scratch/build/.snapshots"; echo "$scratch/build/.snapshots" >"$scratch/subvolumes"' ||
+  fail "an empty /.snapshots subvolume is carried"
+[[ $(<"$scratch/created") == "$scratch/sealed/.snapshots" ]] || fail "the sealed @ gets its own /.snapshots subvolume"
+if carry eval 'mkdir "$scratch/build/.snapshots"; : >"$scratch/subvolumes"'; then
+  fail "a flattened /.snapshots is carried as a plain directory"
+fi
+if carry eval 'mkdir -p "$scratch/build/.snapshots/1"; echo "$scratch/build/.snapshots" >"$scratch/subvolumes"'; then
+  fail "snapshots taken during the build are carried"
+fi
+unset -f btrfs carry
+pass "snapper's empty /.snapshots subvolume is carried into the sealed @; a plain or non-empty one stops the build"
 
 # ── desktop automounters ───────────────────────────────────────────────────
 if ((EUID != 0)); then

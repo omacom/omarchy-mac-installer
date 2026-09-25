@@ -220,10 +220,27 @@ def initramfs(members: dict[str, bytes | str]) -> bytes:
                               check=True, capture_output=True).stdout
 
 
-def good_initramfs() -> bytes:
+PLYMOUTH_CONFIG = b"[Daemon]\nTheme=omarchy\n# Administrator customizations go in this file\n#[Daemon]\n#Theme=fade-in\n"
+PLYMOUTH_DEFAULTS = b"# Distribution defaults.\n[Daemon]\nTheme=bgrt\nShowDelay=0\n"
+SPLASH = "quiet splash loglevel=0 plymouth.ignore-serial-consoles"
+
+
+def plymouth_members(config: bytes | None = PLYMOUTH_CONFIG, theme: bool = True) -> dict[str, bytes]:
+    """What mkinitcpio's plymouth hook adds: the configuration, the packaged
+    defaults and the chosen theme."""
+    members = {"usr/share/plymouth/plymouthd.defaults": PLYMOUTH_DEFAULTS}
+    if config is not None:
+        members["etc/plymouth/plymouthd.conf"] = config
+    if theme:
+        members["usr/share/plymouth/themes/omarchy/omarchy.plymouth"] = b"[Plymouth Theme]\nModuleName=script\n"
+    return members
+
+
+def good_initramfs(plymouth: dict[str, bytes] | None = None) -> bytes:
     limine = load("apple_limine", "builder/apple_limine.py")
     members: dict[str, bytes | str] = {name: b"#!/bin/sh\n" for name in limine.INITRD_FILES}
     members.update(limine.INITRD_LINKS)
+    members.update(plymouth_members() if plymouth is None else plymouth)
     return initramfs(members)
 
 
@@ -265,7 +282,7 @@ def make_root(root: Path, candidates: Path) -> None:
         subprocess.run(["bsdtar", "-xf", str(candidates / package["filename"]), "-C", str(root),
                         "--exclude", ".PKGINFO"], check=True)
     uuid = "4f4d5801-524f-4f54-8000-000000000001"
-    cmdline = f"root=UUID={uuid} rootflags=subvol=@ rw rootfstype=btrfs quiet"
+    cmdline = f"root=UUID={uuid} rootflags=subvol=@ rw rootfstype=btrfs {SPLASH}"
     write(root, "etc/fstab", f"UUID={uuid} / btrfs noatime,subvol=@ 0 0\n")
     write(root, "etc/default/limine", f'KERNEL_CMDLINE[default]="{cmdline}"\n')
     write(root, "usr/lib/os-release", b'NAME="Arch Linux ARM"\nVERSION_ID=rolling\n')
@@ -306,8 +323,9 @@ def make_root(root: Path, candidates: Path) -> None:
         owners.setdefault(owner, []).append(rel)
     owners.setdefault("limine", []).append("usr/share/limine/BOOTAA64.EFI")
     versions = {p["name"]: p["version"] for p in summary["packages"]}
-    others = {name: "1.0-1" for name in ("limine", "limine-snapper-sync", "asahi-fwextract", "speakersafetyd", "iwd",
-                                         "networkmanager", "bluez", "wireplumber")}
+    others = {name: "1.0-1" for name in ("limine", "limine-snapper-sync", "asahi-fwextract", "speakersafetyd",
+                                         "alsa-ucm-conf-asahi", "asahi-audio", "iwd", "networkmanager", "bluez",
+                                         "wireplumber")}
     for name, version in {**versions, **others}.items():
         local_package(root, name, version, owners.get(name, []))
     state = root / "var/lib/omarchy"
@@ -340,6 +358,12 @@ def make_root(root: Path, candidates: Path) -> None:
         (wants / unit).symlink_to(where)
     (root / "etc/systemd/system/dbus-org.bluez.service").symlink_to("/usr/lib/systemd/system/bluetooth.service")
     write(root, "usr/share/omarchy/version", "4.0.0\n")
+    for rel, data in plymouth_members().items():
+        write(root, rel, data)
+    # Snapper's root configuration and its /.snapshots, which a real image
+    # carries as a btrfs subvolume (the tests say which paths count as one).
+    write(root, "etc/snapper/configs/root", 'SUBVOLUME="/"\nFSTYPE="btrfs"\n', 0o640)
+    (root / ".snapshots").mkdir(mode=0o750)
 
 
 def make_factory(factory: Path, root: Path, summary: dict) -> None:

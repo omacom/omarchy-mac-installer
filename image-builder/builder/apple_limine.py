@@ -201,9 +201,9 @@ def validate_artifacts(root: Path, kernel: str) -> dict[str, bytes]:
     return sections
 
 
-def initramfs_listing(archive: bytes) -> list[str]:
-    """bsdtar's verbose listing of every cpio in an initramfs, early ones included."""
-    listing: list[str] = []
+def initramfs_archives(archive: bytes) -> list[bytes]:
+    """Every cpio in an initramfs, early uncompressed ones first."""
+    archives: list[bytes] = []
     rest = archive
     while rest:
         rest = rest.lstrip(b"\0")
@@ -218,11 +218,35 @@ def initramfs_listing(archive: bytes) -> list[str]:
             chunk, rest = rest[:size], rest[size:]
         else:
             chunk, rest = rest, b""
-        result = subprocess.run(["bsdtar", "-tvf", "-"], input=chunk, capture_output=True, env={**os.environ, "LC_ALL": "C"})
-        if result.returncode != 0:
-            raise ContractError("initramfs is not a readable archive: " + result.stderr.decode(errors="replace").strip())
-        listing += result.stdout.decode(errors="replace").splitlines()
+        archives.append(chunk)
+    return archives
+
+
+def _bsdtar(chunk: bytes, mode: str, *members: str) -> bytes:
+    result = subprocess.run(["bsdtar", mode, "-f", "-", *members], input=chunk, capture_output=True,
+                            env={**os.environ, "LC_ALL": "C"})
+    if result.returncode != 0:
+        raise ContractError("initramfs is not a readable archive: " + result.stderr.decode(errors="replace").strip())
+    return result.stdout
+
+
+def initramfs_listing(archive: bytes) -> list[str]:
+    """bsdtar's verbose listing of every cpio in an initramfs, early ones included."""
+    listing: list[str] = []
+    for chunk in initramfs_archives(archive):
+        listing += _bsdtar(chunk, "-tv").decode(errors="replace").splitlines()
     return listing
+
+
+def initramfs_files(archive: bytes, wanted: set[str]) -> dict[str, bytes]:
+    """The bytes of each WANTED regular file the initramfs carries; a later cpio
+    overrides an earlier one, as the kernel unpacks them."""
+    found: dict[str, bytes] = {}
+    for chunk in initramfs_archives(archive):
+        for name in _bsdtar(chunk, "-t").decode(errors="replace").splitlines():
+            if unescape(name).removeprefix("./") in wanted:
+                found[unescape(name).removeprefix("./")] = _bsdtar(chunk, "-xO", name)
+    return found
 
 
 _ESCAPES = {"\\": "\\", "a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v"}

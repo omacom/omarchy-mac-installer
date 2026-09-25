@@ -26,6 +26,13 @@ HERE = Path(__file__).resolve().parent
 KERNEL = "linux-aurora"
 PLATFORM = "apple-silicon"
 LIMINE_STEP = "install/hardware/apple/limine-boot.sh"
+PLYMOUTH_THEME = "omarchy"
+PLYMOUTH_CONFIG = "etc/plymouth/plymouthd.conf"
+PLYMOUTH_DEFAULTS = "usr/share/plymouth/plymouthd.defaults"
+PLYMOUTH_THEME_FILE = f"usr/share/plymouth/themes/{PLYMOUTH_THEME}/{PLYMOUTH_THEME}.plymouth"
+# The splash words of mx-mac's qualified boot line: the Mac's device tree
+# registers a serial console, and Plymouth shows its text view while one is active.
+SPLASH_WORDS = ("quiet", "splash", "plymouth.ignore-serial-consoles")
 # The m1n1 options update-m1n1 copies from /etc/m1n1.conf into stage 2.
 M1N1_OPTION = re.compile(r"(chosen\.[^=]*|display|mitigations)=.*")
 
@@ -255,6 +262,69 @@ def check_embedded_initramfs(root: Path, report: dict) -> str:
     return f"{count} members, including the encryption and vendor firmware units and their activation links"
 
 
+def plymouth_theme(config: bytes | None, defaults: bytes | None) -> str | None:
+    """The theme plymouthd shows: [Daemon] Theme= in plymouthd.conf, else in the
+    packaged defaults. A file naming two themes names none."""
+    for text in (config, defaults):
+        themes, section = set(), None
+        for line in (text or b"").decode(errors="replace").splitlines():
+            line = line.strip()
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1].strip()
+            elif section == "Daemon" and "=" in line and line.split("=", 1)[0].strip() == "Theme":
+                themes.add(line.split("=", 1)[1].strip())
+        if themes:
+            return themes.pop() if len(themes) == 1 else None
+    return None
+
+
+def optional_bytes(path: Path) -> bytes | None:
+    return limine.regular(path) if path.exists() or path.is_symlink() else None
+
+
+def check_boot_splash(root: Path, report: dict) -> str:
+    """The encrypted Mac's unlock screen is Plymouth in the UKI's initramfs: the
+    Omarchy theme, on a splash boot line that ignores the serial console."""
+    theme = plymouth_theme(optional_bytes(root / PLYMOUTH_CONFIG), optional_bytes(root / PLYMOUTH_DEFAULTS))
+    require(theme == PLYMOUTH_THEME, f"the image's Plymouth theme is {theme or 'unset'}, not {PLYMOUTH_THEME}")
+    require((root / PLYMOUTH_THEME_FILE).is_file(), f"/{PLYMOUTH_THEME_FILE} is missing")
+    sections = limine.pe_sections(root / f"boot/efi/EFI/Linux/omarchy_{KERNEL}.efi")
+    words = sections.get(".cmdline", b"").rstrip(b"\0 \n").decode(errors="replace").split()
+    missing = [word for word in SPLASH_WORDS if word not in words]
+    require(not missing, "the UKI's command line lacks " + " ".join(missing))
+    files = limine.initramfs_files(sections.get(".initrd") or b"",
+                                   {PLYMOUTH_CONFIG, PLYMOUTH_DEFAULTS, PLYMOUTH_THEME_FILE})
+    embedded = plymouth_theme(files.get(PLYMOUTH_CONFIG), files.get(PLYMOUTH_DEFAULTS))
+    require(embedded == PLYMOUTH_THEME,
+            f"the UKI's initramfs shows the {embedded or 'unset'} Plymouth theme, not {PLYMOUTH_THEME}")
+    require(PLYMOUTH_THEME_FILE in files, f"the UKI's initramfs lacks /{PLYMOUTH_THEME_FILE}")
+    report["plymouth_theme"] = embedded
+    return f"Plymouth shows {PLYMOUTH_THEME} from the UKI's initramfs; the command line has " + " ".join(SPLASH_WORDS)
+
+
+def is_subvolume(path: Path) -> bool:
+    """A btrfs subvolume's root is inode 256 on a device of its own."""
+    status = path.lstat()
+    return stat.S_ISDIR(status.st_mode) and status.st_ino == 256 and status.st_dev != path.parent.lstat().st_dev
+
+
+def check_snapshots(root: Path) -> str:
+    """Snapper keeps its snapshots in a /.snapshots subvolume nested in @. A copy
+    that flattened it leaves a plain directory, and snapper fails on the Mac."""
+    snapshots = root / ".snapshots"
+    queue = root / "var/lib/omarchy/image/deferred-steps"
+    if snapshots.is_symlink() or snapshots.exists():
+        require(snapshots.is_dir() and not snapshots.is_symlink(), "/.snapshots is not a directory")
+        require(is_subvolume(snapshots), "/.snapshots is a plain directory, not a btrfs subvolume: the copy flattened it")
+        require(not any(snapshots.iterdir()), "/.snapshots holds snapshots taken during the build")
+        require((root / "etc/snapper/configs/root").is_file(), "/.snapshots has no snapper root configuration")
+        return "/.snapshots is an empty btrfs subvolume under snapper's root configuration"
+    steps = queue.read_text().split() if queue.is_file() and not queue.is_symlink() else []
+    deferred = [step for step in steps if "snapshots" in PurePosixPath(step).name]
+    require(deferred, "/.snapshots is missing and no deferred hardware step creates it")
+    return f"/.snapshots is created on first boot by {deferred[0]}"
+
+
 def check_maintenance(root: Path) -> str:
     owners = limine.local_owners(root)
     limine.validate_maintenance(root, owners)
@@ -378,9 +448,11 @@ def inspect(root: Path, candidates_dir: Path, channel: str, factory: Path | None
         ("aurora-device-trees", lambda: check_supported_models(root, candidates, report)),
         ("limine-uki", lambda: check_limine(root, candidates, report)),
         ("embedded-initramfs", lambda: check_embedded_initramfs(root, report)),
+        ("boot-splash", lambda: check_boot_splash(root, report)),
         ("boot-maintenance", lambda: check_maintenance(root)),
         ("image-target", lambda: check_image_target(root)),
         ("first-boot", lambda: check_first_boot(root, report)),
+        ("snapshots", lambda: check_snapshots(root)),
         ("pacman-config", lambda: check_pacman_config(root, channel)),
         ("installed-system", lambda: check_installed_system(root, report)),
     ]
