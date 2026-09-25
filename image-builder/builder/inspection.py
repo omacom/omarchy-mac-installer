@@ -47,6 +47,7 @@ def _load(name: str, file: str):
 candidate_set = _load("candidate_set", "candidate_set.py")
 limine = _load("apple_limine", "apple_limine.py")
 installed_system = _load("verify_installed_system", "verify_installed_system.py")
+test_image_pin = _load("test_image_pin", "test_image_pin.py")
 
 
 class InspectionError(RuntimeError):
@@ -395,14 +396,17 @@ def check_first_boot(root: Path, report: dict) -> str:
     return f"first boot and owner provisioning armed, Limine gate set, {contract}, hardware setup {report['hardware_setup']}"
 
 
-def check_pacman_config(root: Path, channel: str) -> str:
+def check_pacman_config(root: Path, channel: str, candidates: Candidates) -> str:
     template = root / f"usr/share/omarchy/default/pacman/aarch64/pacman-{channel}.conf"
     mirrorlist = root / f"usr/share/omarchy/default/pacman/aarch64/mirrorlist-{channel}"
-    require((root / "etc/pacman.conf").read_bytes() == limine.regular(template),
-            f"/etc/pacman.conf is not the runtime's aarch64 {channel} configuration")
+    pinned = test_image_pin.pinned(candidates.summary)
+    require((root / "etc/pacman.conf").read_bytes() == test_image_pin.render(limine.regular(template), pinned),
+            f"/etc/pacman.conf is not the runtime's aarch64 {channel} configuration"
+            + (" with the test image's pin" if pinned else ""))
     require((root / "etc/pacman.d/mirrorlist").read_bytes() == limine.regular(mirrorlist),
             f"/etc/pacman.d/mirrorlist is not the runtime's aarch64 {channel} mirror list")
-    return f"the runtime's aarch64 {channel} pacman.conf and mirror list"
+    return (f"the runtime's aarch64 {channel} pacman.conf and mirror list"
+            + (f"; test image pin: IgnorePkg = {' '.join(pinned)}" if pinned else ""))
 
 
 def check_installed_system(root: Path, report: dict) -> str:
@@ -455,7 +459,7 @@ def inspect(root: Path, candidates_dir: Path, channel: str, factory: Path | None
         ("image-target", lambda: check_image_target(root)),
         ("first-boot", lambda: check_first_boot(root, report)),
         ("snapshots", lambda: check_snapshots(root)),
-        ("pacman-config", lambda: check_pacman_config(root, channel)),
+        ("pacman-config", lambda: check_pacman_config(root, channel, candidates)),
         ("installed-system", lambda: check_installed_system(root, report)),
     ]
     if factory is not None:

@@ -7,6 +7,12 @@ with its detached .sig. Trust comes only from candidate-trust/ beside this
 file: the signer's fingerprints, the digest of its public key and the package
 set the plan names. The key file that travels with a set is never read.
 
+Besides the runtime and boot packages the plan names, a set may carry the
+rest of the Apple default set's closure that the Apple repository order takes
+from an Omarchy channel. Those, the boot packages and the boot package the
+policy allows may come from that channel instead of a pull request build or
+the source commit; each is still signed by the set's key.
+
   candidate_set.py import --input DIR --output DIR --receipt-sha256 HEX
                           --manifest-sha256 HEX --source-commit HEX
   candidate_set.py describe --input DIR
@@ -44,6 +50,8 @@ REQUIRED_OWNERS = {
     'usr/share/libalpm/scripts/limine-apple-gate': 'limine-mkinitcpio-hook',
     'usr/share/omarchy/default/limine/limine.conf': 'omarchy-settings',
 }
+# A package the set took from an Omarchy channel's aarch64 repository, by its own file name.
+CHANNEL_URL = re.compile(r'https://pkgs\.omarchy\.org/(edge|rc|stable)/aarch64/([^/]+)')
 BAD_STATUS = re.compile(r'\b(BADSIG|ERRSIG|REVKEYSIG|EXPKEYSIG|EXPSIG|KEYREVOKED|KEYEXPIRED|SIGEXPIRED)\b')
 
 
@@ -168,6 +176,13 @@ def pkginfo(package):
     return fields
 
 
+def from_channel(origin, filename):
+    # A release asset cannot hold the colon of an epoch, so the set names it with a dot.
+    match = CHANNEL_URL.fullmatch(origin.get('url', ''))
+    return (match is not None and match[2].replace(':', '.') == filename
+            and origin.get('channel') == f'omacom {match[1]} aarch64' and 'commit' not in origin)
+
+
 def verify_payloads(payloads):
     """Every file has one owner, and each boot payload the image needs its expected one."""
     owners = {}
@@ -221,11 +236,12 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
         names = [p['name'] for p in packages]
         require(len(set(names)) == len(names), 'duplicate package in the set')
         require(not set(names) & set(policy['refused_packages']), 'refused package in the set')
-        require(set(names) == runtime | boot, 'wrong package set')
+        require(runtime | boot <= set(names), 'wrong package set: missing '
+                + ', '.join(sorted(runtime | boot - set(names))))
         signatures = {entry['file']: entry for entry in receipt.get('signatures', [])}
         require(len(signatures) == len(receipt.get('signatures', []))
                 and set(signatures) == {p['filename'] for p in packages}, 'unexpected signed inventory')
-        versions, payloads, fields_of = {}, {}, {}
+        versions, payloads, fields_of, origins = {}, {}, {}, {}
         for package in packages:
             name, filename = package['name'], package['filename']
             require(ARCHIVE.fullmatch(filename) is not None, 'invalid archive name')
@@ -237,17 +253,30 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
             require(digest(Path(str(path) + '.sig')) == entry['signature_sha256'], 'signature file mismatch')
             verify_signature(home, path, policy)
             fields = pkginfo(path)
+            # Only the closure may hold architecture-independent packages (a keyring, fonts).
+            arches = ['aarch64'] if name in runtime | boot else ['aarch64', 'any']
             require(fields.get('pkgname') == [name] and fields.get('pkgver') == [package['version']]
-                    and fields.get('arch') == [package['arch']] == ['aarch64'], 'package metadata mismatch: ' + name)
+                    and fields.get('arch') == [package['arch']] and package['arch'] in arches,
+                    'package metadata mismatch: ' + name)
             origin = package.get('source', {})
             if name in runtime:
-                require(origin.get('repository') == policy['source_repository']
-                        and origin.get('commit') == source_commit, 'mixed package sources: ' + name)
-                require(member(path, REVISION_FILES[name]).decode().strip() == source_commit,
-                        'mixed package sources: ' + name)
+                revision = member(path, REVISION_FILES[name]).decode().strip()
+                if origin.get('repository') == policy['source_repository'] and origin.get('commit') == source_commit:
+                    require(revision == source_commit, 'mixed package sources: ' + name)
+                    origins[name] = 'commit'
+                else:
+                    # Published from another commit; the revision it names is recorded.
+                    require(name in policy['channel_runtime_packages'] and from_channel(origin, filename)
+                            and HEX40.fullmatch(revision) is not None, 'mixed package sources: ' + name)
+                    origins[name] = 'channel ' + revision
+            elif name in boot:
+                require((origin.get('repository') == policy['boot_repository']
+                         and HEX40.fullmatch(origin.get('commit', '')) is not None) or from_channel(origin, filename),
+                        'unknown boot package source: ' + name)
+                origins[name] = 'channel' if from_channel(origin, filename) else 'pull-request'
             else:
-                require(origin.get('repository') == policy['boot_repository']
-                        and HEX40.fullmatch(origin.get('commit', '')) is not None, 'unknown boot package source: ' + name)
+                require(from_channel(origin, filename), 'unknown closure package source: ' + name)
+                origins[name] = 'channel'
             minimum = policy['minimum_versions'].get(name)
             require(minimum is None or vercmp(package['version'], minimum) >= 0,
                     f'{name} {package["version"]} is below the minimum {minimum}')
@@ -269,13 +298,15 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
     summary = {
         'schema': 1,
         'set': data['set'],
+        'candidate_only': True,
         'source_commit': source_commit,
         'signer': policy['primary_fingerprint'].upper(),
         'receipt_sha256': receipt_sha256,
         'manifest_sha256': receipt['manifest_sha256'],
         'set_sha256': data['set_sha256'],
         'packages': [{'name': p['name'], 'version': p['version'], 'filename': p['filename'], 'sha256': p['sha256'],
-                      'group': 'runtime' if p['name'] in runtime else 'boot'} for p in packages],
+                      'group': 'runtime' if p['name'] in runtime else 'boot' if p['name'] in boot else 'closure',
+                      'origin': origins[p['name']]} for p in packages],
     }
     (destination / 'import.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
     for path in destination.iterdir():

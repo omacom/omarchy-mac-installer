@@ -327,6 +327,47 @@ class InspectionTest(unittest.TestCase):
         (self.root / "etc/pacman.conf").write_text("[omarchy-candidates]\nServer = file:///work/repos\n")
         self.assertFails("pacman-config", "pacman.conf")
 
+    def test_test_image_keeps_the_sets_runtime(self):
+        conf = (self.root / "etc/pacman.conf").read_text()
+        self.assertIn("[options]\n" + fixtures.test_image_pin.MARK + "\n", conf)
+        self.assertIn("\nIgnorePkg = omarchy omarchy-mac omarchy-mac-boot omarchy-settings\n", conf)
+        self.assertRegex(self.inspect()["checks"]["pacman-config"]["detail"], "IgnorePkg = omarchy ")
+        template = self.root / "usr/share/omarchy/default/pacman/aarch64/pacman-edge.conf"
+        for name, text in (("unpinned", template.read_text()),
+                           ("another pin", conf.replace("IgnorePkg = omarchy ", "IgnorePkg = "))):
+            with self.subTest(name):
+                (self.root / "etc/pacman.conf").write_text(text)
+                self.assertFails("pacman-config", "with the test image's pin")
+
+
+class TestImagePinTest(unittest.TestCase):
+    TEMPLATE = b"# pacman\n\n[options]\nArchitecture = auto\n\n[core]\nInclude = /etc/pacman.d/mirrorlist\n"
+
+    def summary(self, candidate_only=True):
+        return {"candidate_only": candidate_only, "packages": [
+            {"name": "omarchy", "origin": "commit"}, {"name": "omarchy-settings", "origin": "commit"},
+            {"name": "omarchy-mac", "origin": "commit"}, {"name": "omarchy-mac-boot", "origin": "channel " + "b" * 40},
+            {"name": "linux-aurora", "origin": "channel"}, {"name": "uboot-asahi", "origin": "pull-request"},
+            {"name": "hyprland", "origin": "channel"}]}
+
+    def test_pins_only_what_the_source_commit_built(self):
+        pin = fixtures.test_image_pin
+        names = pin.pinned(self.summary())
+        self.assertEqual(names, ["omarchy", "omarchy-mac", "omarchy-settings"])
+        rendered = pin.render(self.TEMPLATE, names).decode()
+        self.assertEqual(rendered, "# pacman\n\n[options]\n" + pin.MARK + "\n" + pin.REASON
+                         + "\nIgnorePkg = omarchy omarchy-mac omarchy-settings\nArchitecture = auto\n\n[core]\n"
+                         "Include = /etc/pacman.d/mirrorlist\n")
+
+    def test_no_pin_outside_a_test_set(self):
+        pin = fixtures.test_image_pin
+        self.assertEqual(pin.pinned(self.summary(candidate_only=False)), [])
+        self.assertEqual(pin.render(self.TEMPLATE, []), self.TEMPLATE)
+
+    def test_template_needs_one_options_section(self):
+        with self.assertRaisesRegex(ValueError, "options"):
+            fixtures.test_image_pin.render(b"[core]\n", ["omarchy"])
+
 
 if __name__ == "__main__":
     unittest.main()

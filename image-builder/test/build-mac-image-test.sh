@@ -78,6 +78,20 @@ EOF
   fail "set packages are installed by their repository-qualified name"
 pass "a plain uboot-asahi request cannot resolve to asahi-alarm: set packages are qualified"
 
+# What omarchy-pkg-defaults composes before the Apple list: base, then aarch64 when the runtime ships it.
+mkdir -p "$scratch/runtime/usr/share/omarchy/install"
+printf '# Base\nhyprland\nzram-generator\n' >"$scratch/runtime/usr/share/omarchy/install/omarchy-base.packages"
+printf 'omarchy-mac\n' >"$scratch/runtime/usr/share/omarchy/install/omarchy-apple.packages"
+(cd "$scratch/runtime" && bsdtar -cJf "$candidates/omarchy-4.0.0-1-aarch64.pkg.tar.xz" usr)
+[[ $(runtime_lists | paste -sd' ' -) == "hyprland zram-generator" ]] ||
+  fail "a runtime without an aarch64 list composes the base list alone"
+printf '# aarch64\nzram-generator\n' >"$scratch/runtime/usr/share/omarchy/install/omarchy-aarch64.packages"
+(cd "$scratch/runtime" && bsdtar -cJf "$candidates/omarchy-4.0.0-1-aarch64.pkg.tar.xz" usr)
+[[ $(runtime_lists | paste -sd' ' -) == "hyprland zram-generator zram-generator" ]] ||
+  fail "the aarch64 additions follow the base list"
+rm -f "$candidates/omarchy-4.0.0-1-aarch64.pkg.tar.xz"
+pass "the runtime's base list, then its aarch64 additions, as omarchy-pkg-defaults composes them"
+
 runtime_list() {
   case $1 in
     base) printf 'hyprland\nobs-studio\n' ;;

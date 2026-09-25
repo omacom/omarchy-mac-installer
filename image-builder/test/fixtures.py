@@ -35,6 +35,7 @@ def load(name: str, relative: str):
 
 
 candidate_set = load("candidate_set", "builder/candidate_set.py")
+test_image_pin = load("test_image_pin", "builder/test_image_pin.py")
 POLICY = json.loads((ROOT / "builder/candidate-trust/policy.json").read_text())
 
 VERSIONS = {
@@ -99,8 +100,9 @@ def depends(name: str, versions: dict[str, str]) -> list[str]:
     return []
 
 
-def write_archive(path: Path, name: str, version: str, files: dict[str, bytes], deps: list[str]) -> None:
-    pkginfo = "\n".join([f"pkgname = {name}", f"pkgver = {version}", "arch = aarch64",
+def write_archive(path: Path, name: str, version: str, files: dict[str, bytes], deps: list[str],
+                  arch: str = "aarch64") -> None:
+    pkginfo = "\n".join([f"pkgname = {name}", f"pkgver = {version}", f"arch = {arch}",
                          *[f"depend = {d}" for d in deps]]) + "\n"
     with tarfile.open(path, "w:xz") as archive:
         for member, data in {".PKGINFO": pkginfo.encode(), **files}.items():
@@ -145,24 +147,37 @@ class Signer:
         shutil.rmtree(self.home, ignore_errors=True)
 
 
+def channel_source(filename: str, lane: str = "edge") -> dict:
+    """How the candidate-set tool records a package it took from an Omarchy channel."""
+    return {"channel": f"omacom {lane} aarch64", "url": f"https://pkgs.omarchy.org/{lane}/aarch64/{filename}",
+            "omacom_signature": "fixture"}
+
+
 def make_set(directory: Path, signer: Signer, *, versions=None, contents=None, names=None,
-             manifest_edit=None, key_signer: Signer | None = None) -> str:
-    """Writes a signed set into DIRECTORY; returns its receipt's sha256."""
+             manifest_edit=None, key_signer: Signer | None = None, channel=(), arches=None) -> str:
+    """Writes a signed set into DIRECTORY; returns its receipt's sha256. Packages
+    named in CHANNEL, and any outside the plan (the closure), come from edge."""
     versions = dict(VERSIONS, **(versions or {}))
     contents = contents or default_contents()
     names = names or list(VERSIONS)
+    arches = arches or {}
     directory.mkdir(parents=True)
     packages = []
     for name in names:
         version = versions[name]
-        filename = f"{name}-{version}-aarch64.pkg.tar.xz"
-        write_archive(directory / filename, name, version, contents.get(name, {}), depends(name, versions))
+        arch = arches.get(name, "aarch64")
+        filename = f"{name}-{version.replace(':', '.')}-{arch}.pkg.tar.xz"
+        write_archive(directory / filename, name, version, contents.get(name, {}), depends(name, versions), arch)
         runtime = name in POLICY["runtime_packages"]
+        planned = runtime or name in POLICY["boot_packages"]
+        if name in channel or not planned:
+            source = channel_source(f"{name}-{version}-{arch}.pkg.tar.xz")
+        else:
+            source = {"repository": POLICY["source_repository"] if runtime else POLICY["boot_repository"],
+                      "commit": SOURCE if runtime else BOOT_SOURCE}
         packages.append({
-            "name": name, "version": version, "arch": "aarch64", "filename": filename,
-            "sha256": candidate_set.digest(directory / filename),
-            "source": {"repository": POLICY["source_repository"] if runtime else POLICY["boot_repository"],
-                       "commit": SOURCE if runtime else BOOT_SOURCE},
+            "name": name, "version": version, "arch": arch, "filename": filename,
+            "sha256": candidate_set.digest(directory / filename), "source": source,
         })
     manifest = {"schema": 1, "candidate_only": True, "set": "apple-test-fixture",
                 "source": {"repository": POLICY["source_repository"], "commit": SOURCE}, "packages": packages}
@@ -352,7 +367,7 @@ def make_root(root: Path, candidates: Path) -> None:
     template += "\n[omarchy]\nServer = https://pkgs.omarchy.org/edge/$arch\n"
     write(root, "usr/share/omarchy/default/pacman/aarch64/pacman-edge.conf", template)
     write(root, "usr/share/omarchy/default/pacman/aarch64/mirrorlist-edge", "Server = https://mirror.invalid/$arch/$repo\n")
-    write(root, "etc/pacman.conf", template)
+    write(root, "etc/pacman.conf", test_image_pin.render(template.encode(), test_image_pin.pinned(summary)))
     write(root, "etc/pacman.d/mirrorlist", "Server = https://mirror.invalid/$arch/$repo\n")
     # What the installed-system checks read.
     write(root, "usr/lib/NetworkManager/conf.d/20-omarchy-mac-wifi.conf", "[device]\nwifi.backend=iwd\n")
