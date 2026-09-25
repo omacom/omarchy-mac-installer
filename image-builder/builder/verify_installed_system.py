@@ -164,6 +164,17 @@ def check_network(verification: Verification, root: Path) -> None:
                         "effective NetworkManager configuration must select iwd without a conflicting device override")
 
 
+BLUETOOTH_STEP = "install/hardware/bluetooth.sh"
+
+
+def deferred_steps(root: Path) -> list[str]:
+    """The hardware steps an image queued for the Mac's first boot (omacom/omarchy-mac#528)."""
+    queue = root / "var/lib/omarchy/image/deferred-steps"
+    if queue.is_symlink() or not queue.is_file():
+        return []
+    return queue.read_text(errors="replace").splitlines()
+
+
 def check_enabled_units(verification: Verification, root: Path) -> None:
     system = root / "etc/systemd/system"
     wants = system / "multi-user.target.wants"
@@ -183,10 +194,14 @@ def check_enabled_units(verification: Verification, root: Path) -> None:
     bluetooth_alias = system / "dbus-org.bluez.service"
     bluetooth_wants = system / "bluetooth.target.wants/bluetooth.service"
     bluetooth_enabled = bluetooth_alias.is_symlink() or bluetooth_wants.is_symlink() or bluetooth_wants.is_file()
+    # An image with deferred hardware setup enables it on the Mac's first boot.
+    bluetooth_deferred = not bluetooth_enabled and BLUETOOTH_STEP in deferred_steps(root)
     verification.record(
         "unit-enabled-bluetooth",
-        bluetooth_enabled,
-        "bluetooth.service is enabled" if bluetooth_enabled else "bluetooth.service is not enabled",
+        bluetooth_enabled or bluetooth_deferred,
+        "bluetooth.service is enabled" if bluetooth_enabled
+        else f"bluetooth.service is enabled on first boot by the deferred {BLUETOOTH_STEP}" if bluetooth_deferred
+        else "bluetooth.service is not enabled",
     )
 
     firmware_unit = system / "omarchy-vendor-firmware.service"

@@ -32,14 +32,14 @@ A build takes about 15 minutes and 25 GB of disk. On a host with a desktop sessi
 
 - every set package installed at the set's version, `omarchy-mac-boot` and `limine-mkinitcpio-hook` at or above the minimums in `builder/candidate-trust/policy.json`, no refused package (`linux-asahi`, `m1n1`, `omarchy-apple-boot`, `omarchy-first-boot`)
 - m1n1's stage 2 on the ESP is the set's m1n1, then every device tree of the set's kernel in C order, then the set's U-Boot, then exactly the options the image's `/etc/m1n1.conf` sets; every Mac the set's U-Boot supports has an Aurora device tree there
-- every file and link of every set package is in the image with the set's bytes and modes (m1n1, U-Boot, the kernel and device trees, the boot package's hooks and scripts, the Limine gate, the runtime), and Limine's loader is the bytes its pinned package installed
+- every file and link of every runtime and boot package of the set is in the image with the set's bytes and modes (m1n1, U-Boot, the kernel and device trees, the boot package's hooks and scripts, the Limine gate, the runtime), and Limine's loader is the bytes its pinned package installed; the closure's packages are held to the set's versions and archives, since the runtime may restyle their files
 - Limine at `EFI/BOOT/BOOTAA64.EFI` is the installed `limine` package's, its menu boots `omarchy_linux-aurora.efi` (with a matching BLAKE2 hash when the menu carries one), and the UKI's kernel is the set's, its release, os-release and command line match the image
 - the initramfs the UKI embeds carries the boot package's encryption and vendor firmware units and their activation links
 - the unlock screen is Plymouth's `omarchy` theme, in the image and in the UKI's initramfs, and the UKI's command line has `quiet splash plymouth.ignore-serial-consoles`
 - the pacman hooks that rebuild the UKI and redeploy Limine come from their packages, the Apple gate included
 - the image-target manifest, first boot, owner provisioning, the Limine gate and the fresh-image `deferred-steps` contract
 - `/.snapshots` is an empty btrfs subvolume under snapper's root configuration, or absent with a deferred hardware step queued to create it; a plain directory fails
-- the installed pacman configuration is the runtime's aarch64 template for the channel, with the test image's pin below, and the installed-system checks (`builder/verify_installed_system.py`) pass, `alsa-ucm-conf-asahi` and `asahi-audio` included
+- the installed pacman configuration is the runtime's Apple Silicon template for the channel (`default/pacman/apple-silicon`, or `aarch64` on an older runtime) with the aarch64 mirror list, as the runtime stages it on a Mac, plus the test image's pin below, and the installed-system checks (`builder/verify_installed_system.py`) pass, `alsa-ucm-conf-asahi` and `asahi-audio` included; Bluetooth counts as enabled when its hardware step is queued for first boot
 - `@factory` is sealed for the set without fresh-image or owner state
 
 `bin/mac-image-check` also holds the payload to the installer engine's contract and checks `PROVENANCE` and `IMAGE` against the bytes beside them.

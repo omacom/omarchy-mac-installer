@@ -271,6 +271,16 @@ class InspectionTest(unittest.TestCase):
                 report = self.assertFails("installed-system", "packages-required-present")
                 self.assertIn(name, report["installed_system"]["packages-required-present"]["detail"])
 
+    def test_bluetooth_enabled_by_a_deferred_hardware_step(self):
+        (self.root / "etc/systemd/system/dbus-org.bluez.service").unlink()
+        report = self.assertFails("installed-system", "unit-enabled-bluetooth")
+        queue = self.root / "var/lib/omarchy/image/deferred-steps"
+        queue.write_text("install/hardware/apple/audio.sh\ninstall/hardware/bluetooth.sh\n")
+        report = self.inspect()
+        self.assertEqual(report["checks"]["installed-system"]["result"], "passed", report["checks"]["installed-system"])
+        self.assertIn("deferred install/hardware/bluetooth.sh",
+                      report["installed_system"]["unit-enabled-bluetooth"]["detail"])
+
     def test_installed_version_below_the_minimum(self):
         local = self.root / "var/lib/pacman/local"
         entry = next(local.glob("limine-mkinitcpio-hook-*"))
@@ -327,6 +337,20 @@ class InspectionTest(unittest.TestCase):
         (self.root / "etc/pacman.conf").write_text("[omarchy-candidates]\nServer = file:///work/repos\n")
         self.assertFails("pacman-config", "pacman.conf")
 
+    def test_pacman_config_follows_the_runtimes_apple_silicon_template(self):
+        templates = self.root / "usr/share/omarchy/default/pacman"
+        apple = "[options]\nArchitecture = auto\n\n[omarchy]\nServer = https://pkgs.omarchy.org/edge/$arch\n"
+        apple += "\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
+        apple += "".join(f"\n[{r}]\nInclude = /etc/pacman.d/mirrorlist\n" for r in ("core", "extra", "alarm", "aur"))
+        (templates / "apple-silicon").mkdir()
+        (templates / "apple-silicon/pacman-edge.conf").write_text(apple)
+        self.assertFails("pacman-config", "apple-silicon edge configuration")
+        pinned = fixtures.test_image_pin.pinned(self.summary)
+        (self.root / "etc/pacman.conf").write_bytes(fixtures.test_image_pin.render(apple.encode(), pinned))
+        report = self.inspect()
+        self.assertEqual(report["checks"]["pacman-config"]["result"], "passed", report["checks"]["pacman-config"])
+        self.assertIn("apple-silicon edge pacman.conf", report["checks"]["pacman-config"]["detail"])
+
     def test_test_image_keeps_the_sets_runtime(self):
         conf = (self.root / "etc/pacman.conf").read_text()
         self.assertIn("[options]\n" + fixtures.test_image_pin.MARK + "\n", conf)
@@ -338,6 +362,42 @@ class InspectionTest(unittest.TestCase):
             with self.subTest(name):
                 (self.root / "etc/pacman.conf").write_text(text)
                 self.assertFails("pacman-config", "with the test image's pin")
+
+
+class ClosureInspectionTest(unittest.TestCase):
+    """A set that carries the Apple default set's closure from a channel."""
+
+    def test_runtime_may_change_a_closure_packages_files(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            base = Path(scratch)
+            signer = fixtures.Signer(base / "signer")
+            try:
+                contents = fixtures.default_contents()
+                contents["yaru-icon-theme"] = {"usr/share/icons/Yaru/scalable/actions/go-next-symbolic.svg": b"<svg/>"}
+                receipt = fixtures.make_set(base / "set", signer, versions={"yaru-icon-theme": "26.04-1"},
+                                            contents=contents, names=[*fixtures.VERSIONS, "yaru-icon-theme"])
+                candidates = base / "candidates"
+                fixtures.import_set(base / "set", candidates, signer, receipt)
+                root = base / "root"
+                fixtures.make_root(root, candidates)
+                (root / ".snapshots").chmod(0o750)
+                SUBVOLUMES.clear()
+                SUBVOLUMES.add(root / ".snapshots")
+                (root / "usr/share/icons/Yaru/scalable/actions/go-next-symbolic.svg").write_bytes(b"<svg restyled/>")
+                report = inspection.inspect(root, candidates, "edge", trust=signer.trust)
+                self.assertEqual(report["checks"]["candidate-files"]["result"], "passed", report["checks"]["candidate-files"])
+                self.assertEqual(report["checks"]["candidate-versions"]["result"], "passed")
+                self.assertIn("of the 9 runtime and boot packages", report["checks"]["candidate-files"]["detail"])
+                (root / "usr/share/icons/Yaru/scalable/actions/go-next-symbolic.svg").unlink()
+                local = next((root / "var/lib/pacman/local").glob("yaru-icon-theme-*"))
+                (local / "desc").write_text((local / "desc").read_text().replace("26.04-1", "26.04-2"))
+                report = inspection.inspect(root, candidates, "edge", trust=signer.trust)
+                self.assertEqual(report["checks"]["candidate-versions"]["result"], "failed")
+            finally:
+                signer.close()
+                for path in base.rglob("*"):
+                    if path.is_dir() and not path.is_symlink():
+                        path.chmod(0o700)
 
 
 class TestImagePinTest(unittest.TestCase):
