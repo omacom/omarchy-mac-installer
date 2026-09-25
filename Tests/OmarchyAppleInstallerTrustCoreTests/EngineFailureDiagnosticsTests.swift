@@ -239,7 +239,7 @@
     func testUserLogHoldsOnlyTheNotice() throws {
       let root = try temporaryDirectory()
       defer { try? FileManager.default.removeItem(at: root) }
-      let directory = root.appendingPathComponent("Logs/Omarchy MX Mac Installer")
+      let directory = root.appendingPathComponent("Logs/\(InstallerProductIdentity.appName)")
       let url = try XCTUnwrap(
         EngineFailureUserLog.write(
           EngineFailureNotice(
@@ -249,7 +249,7 @@
       XCTAssertEqual(try mode(of: url), 0o600)
       let body = try String(contentsOf: url, encoding: .utf8)
       XCTAssertTrue(body.contains("approved extent changed"))
-      XCTAssertTrue(body.contains("/var/db/com.omarchy.mx.installer/diagnostics"))
+      XCTAssertTrue(body.contains("/var/db/\(InstallerProductIdentity.appIdentifier)/diagnostics"))
     }
 
     private func temporaryDirectory() throws -> URL {

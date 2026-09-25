@@ -96,7 +96,8 @@
       XCTAssertTrue(
         scene.contains("environment: InstallerEnvironmentFactory.make(), channel: channel,"))
       XCTAssertFalse(scene.contains("channel = ."))
-      XCTAssertTrue(download.contains("ReleaseChannelPreference().resolve(configuration: configuration)"))
+      XCTAssertTrue(
+        download.contains("ReleaseChannelPreference().resolve(configuration: configuration)"))
     }
 
     private static var packageRoot: URL {

@@ -337,7 +337,7 @@
 
     public static let replanAction = "Check available space"
     public static let engineDiagnosticsLocation =
-      "Use Copy error details to keep them. A copy is normally saved in ~/Library/Logs/Omarchy MX Mac Installer."
+      "Use Copy error details to keep them. A copy is normally saved in ~/Library/Logs/\(EngineFailureUserLog.directoryName)."
 
     /// Plain wording for a typed engine failure. The disk-unchanged sentence
     /// appears only when the helper proved it from the installation journal.

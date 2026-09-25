@@ -12,6 +12,10 @@ The extraction base is `0d6f8661a5ad7b263d6167f0afea7cae033419a0`. All 206 files
 
 The installer work and its recorded Git attribution are preserved, including Marcelo Alcantara's contributions and upstream Omarchy contributors. The root copyright notice remains unchanged. Asahi engine sources are external dependencies identified by [Engine/source-lock.json](../Engine/source-lock.json); their own licenses and notices must accompany distributed artifacts.
 
+## Later imports
+
+The installer changes from 2.0.6 to 2.0.10 were replayed from [maralcbr/omarchy-mx-mac `4db862da..92a9054f`](https://github.com/maralcbr/omarchy-mx-mac/compare/4db862da7a0957758c504c5a3e041202019dbabf...92a9054f4565b37739ac3bd4f0fb4fcf8bd48625), limited to `apps/omarchy-apple-installer`: source PRs #195, #197, #198, #223, #225, #228, #232, #259, #262 and #263. Each was exported with `git format-patch --relative=apps/omarchy-apple-installer` and applied with `git am`, keeping the original author, date and message. Each message ends with `Imported from maralcbr/omarchy-mx-mac@<sha>.` naming the source commit. Conflicts with `Packaging/identity.conf` were resolved in place, and the following commit derives the new identifiers from it and pins the runbook's source links.
+
 ## Reproducing the import
 
 Use the recorded source revision, not a moving branch. In a dedicated source clone, create a temporary `export/installer` branch at that revision, then export the listed paths with `git fast-export --show-original-ids --signed-tags=strip --tag-of-filtered-object=rewrite --reencode=no --use-done-feature export/installer -- PATHS...`. All paths must be available if using a sparse checkout.

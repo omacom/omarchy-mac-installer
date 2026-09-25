@@ -306,7 +306,8 @@
     private var truncated = false
     private var source: (any DispatchSourceRead)?
     private let drained = DispatchSemaphore(value: 0)
-    private let queue = DispatchQueue(label: "com.omarchy.mx.installer.engine-stderr")
+    private let queue = DispatchQueue(
+      label: InstallerProductIdentity.appIdentifier + ".engine-stderr")
 
     init(limit: Int = BoundedStandardErrorCollector.defaultLimit) {
       self.limit = limit
@@ -465,10 +466,10 @@
   }
 
   /// The app's copy, in the person's own logs, of what the helper sent back:
-  /// `~/Library/Logs/Omarchy MX Mac Installer/engine-failure-<time>.log`.
+  /// `~/Library/Logs/<app name>/engine-failure-<time>.log`.
   /// It holds only the XPC notice, which is already credential-free.
   public enum EngineFailureUserLog {
-    public static let directoryName = "Omarchy MX Mac Installer"
+    public static let directoryName = InstallerProductIdentity.appName
 
     public static func defaultDirectory() -> URL? {
       FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first?

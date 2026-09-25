@@ -342,7 +342,8 @@
           }
           let file = directory.appendingPathComponent(artifact.fileName)
           try Data("payload".utf8).write(to: file)
-          return StagedInstallerArtifact(artifact: artifact, fileURL: file, reusedExistingFile: false)
+          return StagedInstallerArtifact(
+            artifact: artifact, fileURL: file, reusedExistingFile: false)
         }
       )
       orchestrator.begin(

@@ -3,9 +3,9 @@
 > Historical. This covers the v8 prototype distributed as a GitHub ZIP with the
 > old six-screen flow. The current installer is a signed `.pkg` (2.0.10) from
 > `https://downloads.aicodelabs.com.au/installer/stable/Omarchy-MX-Mac-Installer.pkg`;
-> see the [install guide](../../../docs/site/content/02-install.md) and the
+> see the [install guide](https://github.com/maralcbr/omarchy-mx-mac/blob/92a9054f4565b37739ac3bd4f0fb4fcf8bd48625/docs/site/content/02-install.md) and the
 > post-install checks in
-> [`apple-silicon-hardware-validation.md`](../../../docs/apple-silicon-hardware-validation.md).
+> [`apple-silicon-hardware-validation.md`](https://github.com/maralcbr/omarchy-mx-mac/blob/92a9054f4565b37739ac3bd4f0fb4fcf8bd48625/docs/apple-silicon-hardware-validation.md).
 
 This is the whole test, start to finish, in order. It proves that a person who
 was handed nothing but a GitHub link can install Omarchy on an M1 Pro, that the
