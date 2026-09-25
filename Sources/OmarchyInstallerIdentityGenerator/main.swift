@@ -67,6 +67,9 @@ func parse(_ source: String) -> [IdentityEntry] {
       fail("line \(lineNumber) value contains a quote, backslash, dollar or backtick")
     }
     let entry = IdentityEntry(name: String(name), value: String(value))
+    guard entry.propertyName != "entries" else {
+      fail("line \(lineNumber) uses the reserved name \(name)")
+    }
     guard seen.insert(entry.propertyName).inserted else {
       fail("line \(lineNumber) repeats \(name)")
     }

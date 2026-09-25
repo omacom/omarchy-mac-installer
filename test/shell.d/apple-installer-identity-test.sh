@@ -10,21 +10,32 @@ trap 'rm -rf "$test_tmp"' EXIT
 
 # The Swift generator parses this file while the shell sources it, so only
 # lines whose meaning is identical in both are allowed.
+# Names map to Swift properties by lower-camel-casing the words after
+# INSTALLER_, so two names must never map to the same property.
 entry_pattern='^(INSTALLER_[A-Z][A-Z0-9]*(_[A-Z0-9]+)*)="([^"\$`]+)"$'
-declare -A seen=()
+declare -A seen=() properties=()
 line_number=0
 while IFS= read -r line || [[ -n $line ]]; do
   line_number=$((line_number + 1))
   [[ -z $line || $line == \#* ]] && continue
   [[ $line =~ $entry_pattern ]] ||
     fail "identity.conf line $line_number is NAME=\"value\" without quoting or expansion" "$line"
-  [[ -z ${seen[${BASH_REMATCH[1]}]:-} ]] || fail "identity.conf defines ${BASH_REMATCH[1]} once"
-  seen[${BASH_REMATCH[1]}]=1
+  name=${BASH_REMATCH[1]}
+  IFS=_ read -r -a words <<<"${name#INSTALLER_}"
+  property=${words[0],,}
+  for word in "${words[@]:1}"; do
+    word=${word,,}
+    property+=${word^}
+  done
+  [[ $property != entries && -z ${properties[$property]:-} ]] ||
+    fail "identity.conf line $line_number maps to a distinct Swift property" "$name"
+  properties[$property]=1
+  seen[$name]=1
 done <"$config"
 source "$config"
 for name in INSTALLER_APP_NAME INSTALLER_FILE_STEM INSTALLER_APP_IDENTIFIER \
   INSTALLER_HELPER_IDENTIFIER INSTALLER_PKG_IDENTIFIER INSTALLER_TEAM_ID \
-  INSTALLER_APP_SIGNING_IDENTITY INSTALLER_PKG_SIGNING_IDENTITY INSTALLER_TRUST_ROOT \
+  INSTALLER_APP_SIGNING_IDENTITY INSTALLER_PKG_SIGNING_IDENTITY INSTALLER_TRUST_ROOT_FINGERPRINT \
   INSTALLER_CATALOG_KEY_SERVICE INSTALLER_PUBLIC_BASE INSTALLER_R2_BUCKET \
   INSTALLER_R2_ENDPOINT INSTALLER_GITHUB_RELEASE_REPO INSTALLER_GITHUB_RELEASE_LOGIN; do
   [[ -n ${seen[$name]:-} ]] || fail "identity.conf defines $name"
@@ -36,9 +47,11 @@ done
   fail "the package signing identity belongs to the configured team"
 [[ $INSTALLER_PUBLIC_BASE == https://?* && $INSTALLER_PUBLIC_BASE != */ ]] ||
   fail "the public base is https without a trailing slash"
-trust_root=$ROOT/$INSTALLER_TRUST_ROOT
+trust_root=$ROOT/Release/trust-root.ed25519.pub
 [[ -f $trust_root && ! -L $trust_root && $(wc -c <"$trust_root") -eq 32 ]] ||
-  fail "the configured trust root is a 32-byte public key"
+  fail "the trust root is a 32-byte public key"
+[[ $INSTALLER_TRUST_ROOT_FINGERPRINT == "sha256:$(sha256sum "$trust_root" | cut -d' ' -f1)" ]] ||
+  fail "Release/trust-root.ed25519.pub is the configured trust root"
 pass "identity.conf is well formed and internally consistent"
 
 # Release inputs that embed identity or hosting must be derived from it.
@@ -74,6 +87,7 @@ guarded=(
   "$INSTALLER_CATALOG_KEY_SERVICE" "${INSTALLER_PUBLIC_BASE#https://}"
   "$INSTALLER_R2_BUCKET" "${INSTALLER_R2_ENDPOINT#https://}"
   "$INSTALLER_GITHUB_RELEASE_REPO" "$INSTALLER_GITHUB_RELEASE_LOGIN"
+  "${INSTALLER_TRUST_ROOT_FINGERPRINT#sha256:}"
 )
 patterns=()
 for value in "${guarded[@]}"; do
