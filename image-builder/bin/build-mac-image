@@ -117,6 +117,11 @@ hide_loop_devices() {
   ((EUID == 0)) || as_root=(sudo -k -n)
   if [[ -d /run/udev ]] && "${as_root[@]}" true 2>/dev/null; then
     ((EUID == 0)) || as_root=(sudo -n)
+    # devmon and udevil mount without udisks, so no rule hides loop devices from them.
+    for automounter in devmon udevil; do
+      ! pgrep -f "(^|/)$automounter( |\$)" >/dev/null 2>&1 ||
+        fail "$automounter would mount the build's loop devices; stop it first"
+    done
     loop_rule=/run/udev/rules.d/60-omarchy-image-build-$$.rules
     printf 'SUBSYSTEM=="block", KERNEL=="loop*", ENV{UDISKS_IGNORE}="1"\n' |
       "${as_root[@]}" install -D -m 0644 /dev/stdin "$loop_rule" &&
@@ -945,7 +950,6 @@ configure_image() {
   write_installed_config
   stage_owner_provisioning
   forget_private_pacman
-  record_packages
 
   isolated_chroot "$target" mkinitcpio -P >"$logs/mkinitcpio.log" 2>&1 || fail "mkinitcpio failed (logs/mkinitcpio.log)"
   [[ -s $target/boot/vmlinuz-$KERNEL && -s $target/boot/initramfs-$KERNEL.img ]] ||
@@ -957,6 +961,8 @@ configure_image() {
     fail "update-m1n1 failed (logs/update-m1n1.log)"
   activate_limine
   arm_first_boot
+  # Recorded once the boot setup, which could change packages, is done.
+  record_packages
   [[ -s $target/boot/efi/m1n1/boot.bin && -s $target/boot/efi/EFI/BOOT/BOOTAA64.EFI ]] ||
     fail "the boot chain is incomplete"
   [[ -d $target/boot/efi/omarchy && -z $(ls -A "$target/boot/efi/omarchy") ]] ||

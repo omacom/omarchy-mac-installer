@@ -79,7 +79,8 @@ def default_contents() -> dict[str, dict[str, bytes]]:
             **{f"usr/lib/modules/{RELEASE}/dtbs/{model}.dtb": dtb(model) for model in MODELS},
             f"usr/lib/modules/{RELEASE}/dtbs/s8000-n66.dtb": dtb("s8000-n66"),
         },
-        "linux-aurora-headers": {f"usr/lib/modules/{RELEASE}/build/Makefile": b"# headers\n"},
+        "linux-aurora-headers": {f"usr/lib/modules/{RELEASE}/build/Makefile": b"# headers\n",
+                                 f"usr/lib/modules/{RELEASE}/source": "build"},
         "m1n1-aurora": {"usr/lib/asahi-boot/m1n1.bin": b"m1n1 stage 1 payload"},
         "uboot-asahi": {
             "usr/lib/asahi-boot/u-boot-nodtb.bin": b"u-boot for apple silicon" * 8,
@@ -104,6 +105,11 @@ def write_archive(path: Path, name: str, version: str, files: dict[str, bytes], 
     with tarfile.open(path, "w:xz") as archive:
         for member, data in {".PKGINFO": pkginfo.encode(), **files}.items():
             info = tarfile.TarInfo(member)
+            if isinstance(data, str):
+                # A symlink to TARGET.
+                info.type, info.linkname = tarfile.SYMTYPE, data
+                archive.addfile(info)
+                continue
             info.size = len(data)
             info.mode = 0o755 if data.startswith(b"#!") else 0o644
             archive.addfile(info, io.BytesIO(data))

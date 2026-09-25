@@ -98,7 +98,8 @@ if "$BASH" "$inputs" dbs "$work/inputs" "$work/dbs" --cache "$work/cache" >/dev/
 fi
 pass "dbs needs an empty directory"
 
-if "$BASH" "$inputs" resolve "$work/new" --candidates "$work" --alarm-server http://mirror.invalid >/dev/null 2>&1; then
+if "$BASH" "$inputs" resolve "$work/new" --candidates "$work" --alarm-server http://mirror.invalid >"$work/out" 2>&1; then
   fail "resolve accepts an http server"
 fi
+grep -Fq "not an https server URL: http://mirror.invalid" "$work/out" || fail "resolve refuses an http server by name"
 pass "resolve refuses an http server"

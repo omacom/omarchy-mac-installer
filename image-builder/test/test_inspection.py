@@ -116,9 +116,18 @@ class InspectionTest(unittest.TestCase):
                 (self.root / rel).write_bytes(b"#!/bin/bash\nexit 0\n")
                 self.assertFails("candidate-files", re.escape(rel))
 
-    def test_a_set_file_with_another_mode_or_link(self):
+    def test_a_set_file_with_another_mode(self):
         (self.root / "usr/lib/omarchy/initcpio/omarchy-mac-encrypt").chmod(0o644)
         self.assertFails("candidate-files", "omarchy-mac-encrypt.*mode")
+
+    def test_a_set_link_retargeted_or_replaced(self):
+        cases = (("retargeted", lambda link: (link.unlink(), link.symlink_to("elsewhere"))),
+                 ("replaced by a directory", lambda link: (link.unlink(), link.mkdir())))
+        for name, change in cases:
+            with self.subTest(name):
+                self.setUp()
+                change(self.root / f"usr/lib/modules/{fixtures.RELEASE}/source")
+                self.assertFails("candidate-files", "source.*link")
 
     def test_m1n1_options_as_update_m1n1_reads_them(self):
         (self.root / "etc/m1n1.conf").write_text("chosen.asahi,efi-system-partition=EFI\ndisplay=1920x1080")
