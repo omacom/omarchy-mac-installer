@@ -1,5 +1,7 @@
 # Linux image builder
 
+This import is being replaced. [One image producer](image-producer.md) records the decision: mx-mac's `build-mac-image` becomes the base, this builder's candidate importer and installed-system checks move beside it, and the rest is removed.
+
 The installer application and its Linux image producer are reviewed in this repository. The producer source lives in `image-builder/`; the macOS application/engine layout is unchanged. Runtime changes remain in `omacom/omarchy-mac:quattro-upstream`, and package recipes remain in `omarchy-mac/omarchy-pkgs-aarch64`.
 
 ## Import and provenance

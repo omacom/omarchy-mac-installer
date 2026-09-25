@@ -46,4 +46,4 @@ The original [MIT license](LICENSE), copyright notice and Git attribution are re
 
 ## Linux image producer
 
-The Linux image-builder source is maintained in `image-builder/`. See [source ownership, provenance and checks](docs/image-builder.md).
+The Linux image-builder source is maintained in `image-builder/`. See [source ownership, provenance and checks](docs/image-builder.md). [One image producer](docs/image-producer.md) records how it is replaced by mx-mac's `build-mac-image`, keeping the authenticated candidate importer.
