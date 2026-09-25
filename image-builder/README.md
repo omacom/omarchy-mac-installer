@@ -1,182 +1,54 @@
-# Omarchy ISO
+# Apple Silicon image producer
 
-The Omarchy ISO is the only supported way to install Omarchy. It ships the Omarchy Configurator, installs Arch Linux, installs the Omarchy packages from the bundled mirror, runs target system setup in the chroot, creates the user, and runs `omarchy-setup-user` for that user.
+Builds the full-OS payload the Omarchy Mac installer installs, from a signed candidate set, and inspects it before packaging. [One image producer](../docs/image-producer.md) records why this producer and where its parts come from.
 
-## Downloading the latest ISO
+## Build an image
 
-See the ISO link on [omarchy.org](https://omarchy.org).
-
-Every published ISO has a `.sha256` beside it at the same URL. Download both into the same directory and check the ISO before writing it to a USB stick:
+An aarch64 Linux host with Docker, loop devices and passwordless sudo for Docker, plus `curl`, `gpg`, `python3` (3.11 or newer), `bsdtar`, `jq` and `gh`:
 
 ```bash
-sha256sum -c omarchy-3.0.iso.sha256
+image-builder/bin/mac-image-inputs candidates MANIFEST set/
+image-builder/bin/mac-image-inputs resolve inputs --candidates set/ --cache cache/
+image-builder/bin/build-mac-image --inputs inputs --candidates set/ --cache cache/ out/
 ```
 
-Corruption anywhere in the ISO is worth catching before the write, and corruption in the bundled package mirror is worth catching most: the mirror lives inside the ISO and the installer reads it straight off the medium, so those bytes surface minutes into the install as a pacman "invalid or corrupted package" error rather than as anything that names the download. Corruption elsewhere is louder and earlier — it stops the medium booting or mounting. There is a `.sig` beside the ISO too for anyone who wants to verify it against the Omarchy signing key.
+- `candidates` downloads the release a candidate `manifest.json` names (the set's packages, their signatures and `signing.json`). Nothing in it is trusted yet.
+- `resolve` verifies the set against the key pinned in `builder/candidate-trust/` and writes the inputs record: the set's receipt, manifest and source commit, the Omarchy channel's database (`--channel`, default edge), the asahi-alarm and Arch Linux ARM databases and the Arch Linux ARM root filesystem, each by sha256, with the servers they come from. `--cache` keeps the databases and root filesystem.
+- `build-mac-image` imports the set again (exclusively, read-only), then builds in a privileged Arch Linux ARM container. It writes the zip, `installer_data.json`, `INSPECTION`, `PROVENANCE`, `IMAGE`, the inputs record and the build logs to `out/`. With `--cache`, the package archives it downloads stay in `cache/pkg`, so a later build from the same record installs the same bytes even after the servers move on.
 
-## Creating the ISO
+A build takes about 30 minutes and 25 GB of disk.
 
-Run `./bin/omarchy-iso-make`; output goes into `./release`. By default the ISO uses the Omarchy packages and tracks the `quattro` branch, from the stable mirror. Pass `--edge` to use `omarchy-dev` and `omarchy-settings-dev` from the edge mirror.
+## What a build does
 
-The build defaults to `x86_64`. Pass `--arch aarch64` to select the generic
-UEFI ARM64 build path. Architecture selection alone does not make an Apple
-Silicon image; Apple boot policy and Asahi platform integration are outside the
-generic media target.
+1. Installs a base system and `omarchy-settings` first, so its pacman platform guard is resident, then writes the root-owned image-target manifest (`/var/lib/omarchy/image/target`: `format=1`, `platform=apple-silicon`, read by deferred hardware setup and the platform guard), then installs the runtime with `omarchy-base.packages` and, last, the Apple set: `omarchy-apple.packages`, the Aurora kernel, m1n1, U-Boot and the Limine hook. Set packages are installed by their `omarchy-candidates/` name, so no other repository can supply them. Base names the pinned repositories lack are recorded as `unavailable=` in `PROVENANCE`.
+2. Runs the runtime's own `omarchy-apply-system --defer-provisioning --first-install` in an isolated chroot. The chroot never sees the build host's hardware: its device tree names the image's platform, it has UEFI (as U-Boot provides) without EFI variables, and no PCI or DMI devices, so hardware setup installs the same packages on any aarch64 host. A runtime with deferred hardware setup (omacom/omarchy-mac#528) queues its hardware steps from the manifest; an older one runs them here for the image's platform.
+3. Applies the Apple presets (`80-omarchy-mac*.preset`, including omarchy-mac's audio preset), stages owner provisioning with the pinned Node.js, rebuilds the initramfs and GRUB, runs `update-m1n1` with `LC_ALL=C` so the device trees go into m1n1's stage 2 in one order, activates Limine with the runtime's GRUB compatibility and Limine leaves, and arms first boot with the boot package's own `arm` command.
+4. Seals a copy of the root into `@factory`, then inspects the images against the set's archives and packages them.
 
-For local development, build the ISO from sibling checkouts:
+## Inspection
 
-```bash
-./bin/omarchy-iso-make --local-source ../omarchy-installer ../omarchy-pkgs
-```
+`INSPECTION` (JSON) records each check. A missing or mismatched boot component fails the build:
 
-Despite the local folder name, the first argument is the Omarchy source checkout (runtime commands, configs, setup scripts, themes, shell, migrations). The installer itself lives in this ISO repo.
+- every set package installed at the set's version, `omarchy-mac-boot` and `limine-mkinitcpio-hook` at or above the minimums in `builder/candidate-trust/policy.json`, no refused package (`linux-asahi`, `m1n1`, `omarchy-apple-boot`, `omarchy-first-boot`)
+- m1n1's stage 2 on the ESP is the set's m1n1, then every device tree of the set's kernel in C order, then the set's U-Boot, then exactly the options the image's `/etc/m1n1.conf` sets; every Mac the set's U-Boot supports has an Aurora device tree there
+- every file of every set package is in the image with the set's bytes (m1n1, U-Boot, the kernel and device trees, the boot package's hooks and scripts, the Limine gate, the runtime), and Limine's loader is the bytes its pinned package installed
+- Limine at `EFI/BOOT/BOOTAA64.EFI` is the installed `limine` package's, its menu boots `omarchy_linux-aurora.efi` (with a matching BLAKE2 hash when the menu carries one), and the UKI's kernel is the set's, its release, os-release and command line match the image
+- the initramfs the UKI embeds carries the boot package's encryption and vendor firmware units and their activation links
+- the pacman hooks that rebuild the UKI and redeploy Limine come from their packages, the Apple gate included
+- the image-target manifest, first boot, owner provisioning, the Limine gate and the fresh-image `deferred-steps` contract
+- the installed pacman configuration is the runtime's aarch64 template for the channel, and the installed-system checks (`builder/verify_installed_system.py`) pass
+- `@factory` is sealed for the set without fresh-image or owner state
 
-Use `--dev` or `--rc` to build against those package channels. Both `--dev` and `--edge` select the dev packages from the edge mirror.
+`bin/mac-image-check` also holds the payload to the installer engine's contract and checks `PROVENANCE` and `IMAGE` against the bytes beside them.
 
-### Rebuilding the Apple Silicon package without a diagnostic build
+## Reproducibility
 
-A qualification build of the Apple Silicon OS package needs a verified
-builder-toolchain checkpoint in its checkpoint root, and a diagnostic build is
-what creates one. Starting a fresh `OMARCHY_ASAHI_CHECKPOINT_ROOT` for every
-release therefore costs a full diagnostic build (about 12 minutes) each time.
-Reuse the root instead and clear only the stage checkpoints:
+`IMAGE` records the inputs (the builder commit, the set's receipt, manifest and source commit, and the inputs record's digest) and `package_set_sha256`, the sha256 of every installed package's name, version and archive sha256. Two builds from the same builder commit, inputs record and candidate set give the same `package_set_sha256` and the same input lines; any changed input changes them. Filesystem images are not byte-identical between builds, and the default UKI's initramfs is autodetected as mkinitcpio does, so its module list follows the build host's devices; the Mac's boot modules come from the asahi hook either way.
 
-```bash
-./bin/omarchy-iso-asahi-checkpoint-reset ~/.cache/omarchy/asahi-checkpoints-20260902b
-```
+## Checks
 
-It keeps `builder-toolchain/`, removes `checkpoints/` and `objects/`, and runs
-under the same host lease as the build, so it refuses to run while an Apple
-build is in progress. Pass `--dry-run` first to see what it would remove.
+`bash image-builder/test/all` runs the source checks: the importer against signed fixture sets (tampering, a foreign key, a key that travels with the set, missing, extra and refused packages, versions below a minimum, a file with two owners, a runtime package from another commit), the inspection against fixture images (every boot component missing or mismatched, a set file rewritten, a wrong `@factory`), the inputs record and the builder's own decisions. They need Bash 5, Python 3.11 or newer, GnuPG, jq and bsdtar, and no container, network or root.
 
-Every build also prunes its own leftovers as it goes: inside the container
-each stage's images are deleted as soon as the next stage has consumed them,
-and at the end of the build the checkpoint store is trimmed to the newest
-three checkpoints per stage within the build lock's byte budget (set
-`OMARCHY_CHECKPOINT_RETENTION_MAX_BYTES` to a smaller budget on a small host,
-or `OMARCHY_APPLY_CHECKPOINT_RETENTION=0` to skip pruning). Objects named by
-the current run's manifests are never pruned; the result is recorded in
-`build-evidence/<run>/retention.json`.
-Qualification builds never read old stage checkpoints, so nothing is lost;
-what the reset removes is the same-identity checkpoint that would otherwise
-make the store fail closed when a rebuilt image is not byte-identical.
+## Sources
 
-## Autoinstall
-
-The shipped ISO installs itself with no keyboard when it finds its configuration on a second drive. Attach a drive labeled `cidata` alongside the ISO and the installer copies the config off it and skips the configurator; with no such drive, nothing changes and the wizard runs as usual. No rebuild, no extra boot entry.
-
-`cidata` is the cloud-init `NoCloud` label, so Proxmox, libvirt, and Packer already know how to attach one.
-
-### Configuration files
-
-These are the configurator's own output files, so the way to get a starting set is to run one interactive install and copy what it wrote into `/root`.
-
-| File | Required | Purpose |
-|------|----------|---------|
-| `user_configuration.json` | Yes | archinstall config: disk, hostname, timezone, keyboard |
-| `user_credentials.json` | Yes | Username and password hash |
-| `user_full_name.txt` | No | Git full name |
-| `user_email_address.txt` | No | Git email |
-| `user_encrypt_installation.txt` | No | `true` when `user_configuration.json` carries a `disk_encryption` block; defaults to false |
-| `authorized_keys` | No | SSH public keys in sshd's own format, one per line |
-| `tailscale_authkey` | No | Tailscale auth key; the machine joins your tailnet on first boot |
-
-Both required files must be present or the installer falls back to the configurator. Generate the password hash for `user_credentials.json` with `openssl passwd -6 "yourpassword"`.
-
-Encryption itself is configured by the `disk_encryption` block inside `user_configuration.json` — which carries the passphrase in plaintext, so treat a drive built from an encrypted install accordingly. The flag file must match it: it drives the encrypted install's SDDM autologin and the final boot validation, not the encryption.
-
-`authorized_keys` is the same file sshd reads — copy your own or write one key per line:
-
-```
-ssh-ed25519 AAAA... you@host
-```
-
-When `authorized_keys` is present, autoinstall installs it as the user's `~/.ssh/authorized_keys`, enables `sshd`, and adds a `ufw allow ssh` rule — a stock Omarchy install ships openssh with the service disabled and its firewall opens neither port 22 nor anything else beyond LocalSend. Networking needs nothing extra; NetworkManager is already enabled with DHCP. Password SSH authentication is left at the distro default. An `authorized_keys` with no usable keys fails the install rather than producing a machine nobody can reach.
-
-When `tailscale_authkey` is present (one key, blank lines and `#` comments ignored), the install adds the `tailscale` package from the ISO's bundled mirror — nothing is fetched from the network at install or boot — and stages the join for first boot: the key lands at `/etc/tailscale/authkey` (root-only), `tailscaled` is enabled, ufw allows traffic in on `tailscale0`, and a background unit runs `tailscale up` once the network is actually up, retrying until it succeeds without holding up the boot. After a successful join the key is deleted and the unit disables itself; until then both survive reboots, so a machine installed offline joins whenever it first gets connectivity. The node appears on the tailnet under the configured hostname. Use a reusable, pre-authorized (tagged) key so one drive image serves many machines — or an ephemeral key for disposable VMs.
-
-### Building the drive
-
-```bash
-mkdir cidata
-cp user_configuration.json user_credentials.json authorized_keys cidata/
-genisoimage -output cidata.iso -volid cidata -joliet -rock cidata/
-```
-
-### Proxmox example
-
-```bash
-qm create 101 --name my-omarchy \
-  --bios ovmf --machine q35 --cpu host --cores 4 --memory 8192 \
-  --ostype l26 --scsihw virtio-scsi-single \
-  --efidisk0 local-lvm:0,efitype=4m,pre-enrolled-keys=0 \
-  --scsi0 local-lvm:40,discard=on,iothread=1 \
-  --net0 virtio,bridge=vmbr0 --vga virtio --serial0 socket \
-  --ide2 local:iso/omarchy.iso,media=cdrom \
-  --ide3 local:iso/cidata.iso,media=cdrom \
-  --boot order='scsi0;ide2'
-
-qm start 101
-```
-
-Boot order is disk first: the empty disk falls through to the ISO on the first boot, and the installed system boots from disk afterwards. The machine reboots into Omarchy on its own when the install finishes.
-
-Encrypted autoinstalls are not fully unattended — the LUKS passphrase prompt still needs someone at the first boot.
-
-## Testing the ISO
-
-Run `./bin/omarchy-iso-boot [release/omarchy.iso]`.
-
-Run `./test/all` for the fast, VM-free tests under `test/unit/`, which cover cidata autoinstall loading and the orchestrator's phases without needing a built ISO.
-
-To exercise installation alongside existing Windows-style partitions, run
-`./bin/omarchy-iso-test-windows-disk [release/omarchy.iso]`. It creates a
-synthetic disk in `/tmp` with an existing ESP and data partition plus ample
-unallocated space, then offers to start an interactive installation on it. The
-fixture exercises Windows partition preservation but does not contain Windows.
-
-## Acceptance testing the ISO
-
-Run `./bin/omarchy-iso-test [release/omarchy.iso]` to install the ISO into a headless VM by driving the real interactive install flow — the harness reads each screen via QMP screendumps + OCR and answers with virtual keystrokes, so the configurator wizard, install dashboard, reboot prompt, and SDDM login are all exercised exactly as a user would. It then boots the installed system, sends real VM keyboard shortcuts for the primary shell and window-management actions, and runs the in-guest acceptance suite (`test/acceptance` in the omarchy repo). The suite checks session and service health, the complete core-package manifest, user defaults, representative applications, menus, panels, live weather, launchers, visual selectors, notifications, clipboard, and other interactive shell behavior.
-
-Visual checkpoints are saved as `success-<step>.png` or `failure-<step>.png` alongside the serial and install logs in `test-runs/<iso>/runs/<timestamp>/`. Independent test files and applications continue after a failure so one broken surface does not hide the rest of the report. The harness then stops the VM and opens the ordered screenshots in `imv` for quick visual review.
-
-The harness syncs the acceptance suite from `$OMARCHY_PATH` when it is available. The install phase produces a reusable base image, so iterating against another checkout is fast:
-
-```bash
-./bin/omarchy-iso-test release/omarchy.iso --install-only        # once per ISO
-./bin/omarchy-iso-test release/omarchy.iso --reuse-base \
-  --sync-omarchy ../omarchy                                      # fast loop against local tests
-```
-
-Pass `--encrypt` to drive the encrypted install flow (including typing the LUKS passphrase at boot) instead of the unencrypted one. Pass `--no-preview` to collect the same visual artifacts without opening them in `imv` when the run finishes.
-
-## Integration testing the ISO
-
-Scenarios under `test/integration.d/` boot a real ISO install in QEMU and assert on what the running system actually does. The runner installs the ISO once — unattended, from a generated cidata drive — and saves the result as a reusable base image; every scenario then boots a throwaway overlay of that base with its own copy of the firmware vars, so neither disk nor NVRAM state leaks between runs. Shared machinery (VM lifecycle, QMP screendump + OCR console driving, virtual keystrokes, guest SSH, the cidata build) lives in `test/integration.d/base-test.sh`, so a new scenario is one file.
-
-```bash
-./test/integration release/omarchy.iso                   # install once, run all scenarios
-./test/integration release/omarchy.iso --reuse-base      # fast loop against the saved base
-./test/integration release/omarchy.iso factory-reset     # a single named scenario
-```
-
-The first scenario is `factory-reset`: it proves `omarchy-system-factory-reset` hands a machine on without destroying a shared ESP. The installed ESP gets a Windows entry with payload plus a second Linux cloned under a foreign machine-id with its own boot directory and UKIs; a real factory reset is then driven through a guest pty, and the harness asserts the foreign entries survive both the staged reset and first-boot provisioning, that the old Omarchy identity is fully retired, and that the machine reaches first-boot setup unattended.
-
-Artifacts — screenshots, the fixtured/staged/final `limine.conf`, the reset typescript, and the factory-reset log — land under `test-runs/<iso>-integration/runs/<timestamp>-<scenario>/`, and `--no-preview` skips the `imv` review just like the acceptance harness.
-
-## Signing the ISO
-
-Run `./bin/omarchy-iso-sign [release/omarchy.iso]`. The signing key is retrieved from the shared Omarchy vault with the 1Password CLI.
-
-## Uploading the ISO
-
-Run `./bin/omarchy-iso-upload [release/omarchy.iso]`. This requires rclone configuration (`rclone config`). The `.sig` and `.sha256` sidecars go up with the ISO when they exist beside it.
-
-## Full release of the ISO
-
-Run `./bin/omarchy-iso-release VERSION` to create, test, sign, and upload the ISO in one flow. Add `--rc` to release an RC build instead.
-
-### Shared quattro candidates
-
-The diagnostic builder can consume an exact signed `omarchy` / `omarchy-settings` / `omarchy-mac` candidate set. Start with the shorter package-installation check before building images; see [signed candidate inputs and test cycles](docs/quattro-candidate-images.md).
+`bin/` is mx-mac's image builder from maralcbr/omarchy-pkgs `asahi-quattro` at `7e2f6cfe` (`bin/build-mac-image`, `bin/mac-image-inputs`, `bin/mac-image-check`, and `mac-image-finalize` as `builder/finalize-root`), adapted to the candidate set. `builder/candidate_set.py`, `builder/apple_limine.py` and `builder/verify_installed_system.py` come from the candidate importer, Limine contract and installed-system verifier of this repository's #2.

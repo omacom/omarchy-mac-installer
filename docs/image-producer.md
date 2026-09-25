@@ -1,42 +1,36 @@
 # Apple image producer
 
-This repository has one Apple Silicon image producer. This page records how the two producers that exist today become one, and the interface the port builds to. The decision comes from the Apple Silicon convergence plan (omacom/omarchy-mac#512, "Installer and images"). The port is a separate change; until it lands, `image-builder/` still holds the builder imported by #2, and no release path uses it.
+This repository has one Apple Silicon image producer, in `image-builder/`. This page records how the two producers that existed became one, and the interface it has. The decision comes from the Apple Silicon convergence plan (omacom/omarchy-mac#512, "Installer and images"). [image-builder/README.md](../image-builder/README.md) is how to run it.
 
 ## Decision
 
-The base is mx-mac's image builder: `bin/build-mac-image`, `bin/mac-image-inputs` and `bin/mac-image-check` from maralcbr/omarchy-pkgs `asahi-quattro` at `7e2f6cfe`, with their tests. It keeps #2's authenticated candidate importer and its installed-system and ownership checks. The omarchy-iso-derived builder that #2 imported into `image-builder/` (from `dbc46807`) is removed by the port.
+The base is mx-mac's image builder: `bin/build-mac-image`, `bin/mac-image-inputs` and `bin/mac-image-check` from maralcbr/omarchy-pkgs `asahi-quattro` at `7e2f6cfe`. It keeps #2's authenticated candidate importer, its Limine contract and its installed-system checks. The omarchy-iso-derived builder that #2 imported into `image-builder/` (from `dbc46807`) is removed.
 
 Why this base:
 
-- It already builds the payload the 2.0.10 app and engine install: fixed UUIDs, ESP volume id and sizes, the zip members and `installer_data.json` that `_validate_full_os_package` checks. Since 2026-09-22 it has built mx-mac's published fresh-install payloads, including the current rc image (mx-mac `docs/apple-silicon-release-lifecycle.md`). Those images ship Limine behind m1n1 and U-Boot with the Aurora kernel. The 2026-09-23 rc image passed mx-mac's image VM acceptance (`test/vm/mac-image`) before publication.
-- It is small: three scripts of about 2,700 lines and 1,700 lines of tests. The imported builder is about 270 files and 70,000 lines. Most of that is ISO, archinstall, checkpoint and stage machinery for linux-asahi and GRUB products the plan retires.
-- One inputs record pins the package databases and the root filesystem by sha256, so each image traces back to the bytes it was built from. The one exception is the fork runtime release, pinned by tag and checked by signature at build time; the port removes it.
+- It already built the payload the 2.0.10 app and engine install: fixed UUIDs, ESP volume id and sizes, the zip members and `installer_data.json` that `_validate_full_os_package` checks. Since 2026-09-22 it has built mx-mac's published fresh-install payloads, which ship Limine behind m1n1 and U-Boot with the Aurora kernel. The 2026-09-23 rc image passed mx-mac's image VM acceptance before publication.
+- It is small: three scripts and their tests. The imported builder was about 270 files and 70,000 lines, most of it ISO, archinstall, checkpoint and stage machinery for linux-asahi and GRUB products the plan retires.
+- One inputs record pins every database and the root filesystem by sha256, so each image traces back to the bytes it was built from.
 
-Why keep #2's importer: `build-mac-image` today trusts the fork. It installs a runtime release of `install-asahi-quattro` from maralcbr/omarchy-mx-mac and a `CANDIDATE` descriptor signed with the fork's repository key. The plan replaces that with signed candidate packages pinned to one `quattro-upstream` commit. `builder/quattro-candidate.py` already verifies such a set without trusting keys that arrive with it:
-
-- a pinned signer policy: primary and signing-subkey fingerprints, plus the digest of the public key file
-- a signed receipt, the manifest digest it names, and each archive's sha256 and detached signature
-- each archive's `.PKGINFO` name, architecture, version and dependencies, and the source revision embedded in the package
-- the exact package set, one source revision for the runtime packages, and single ownership of every boot payload file
-- an output directory created exclusively, so a failed import is never reused, and frozen read-only only once every check passes
+Why keep #2's importer: `build-mac-image` trusted the fork. It installed a runtime release of `install-asahi-quattro` from maralcbr/omarchy-mx-mac and a `CANDIDATE` descriptor signed with the fork's repository key. The plan replaces that with signed candidate packages pinned to one `quattro-upstream` commit, and `candidate_set.py` verifies such a set without trusting keys that arrive with it.
 
 ## What comes from where
 
-| Part | Source | In the ported producer |
+| Part | Source | In the producer |
 | --- | --- | --- |
 | Host/container split, verified ALARM root filesystem, isolated chroot, loop and mount cleanup | `build-mac-image` | kept |
 | Payload contract: filesystems, UUIDs, subvolumes, sealed `@factory`, zip, `installer_data.json` | `build-mac-image` | kept unchanged, so the 2.0.10 app and engine take the image |
-| First boot and owner provisioning armed, Node pin staged, presets, `mac-image-finalize`, Limine activated through the runtime's own leaf, `update-m1n1` | `build-mac-image` | kept |
-| Inputs record (ALARM snapshot databases and root filesystem, asahi-alarm database) | `mac-image-inputs` | kept; fork runtime and `[omarchy]`/`[omarchy-aurora]` channel fields replaced by the candidate set |
-| Payload, image, tree, provenance and descriptor checks | `mac-image-check` | kept and extended by the inspection below |
-| Fork runtime installer: `fetch_verified_installer`, `run_installer`, `fetch_bundle_manifest` | `build-mac-image` | removed |
-| Authenticated candidate importer and its tests | #2 `builder/quattro-candidate.py`, `test/unit/test_quattro_candidate.py` | kept; schema extended for the plan's set |
-| Signer policy and public key | #2 `builder/quattro-trust/` | kept as the mechanism; the key becomes the test-lane key from the candidate set |
-| Duplicate, overlap and replacement checks between the candidate set and the platform | #2 `builder/quattro-dependencies.py` | kept as a library for the transaction check |
-| Real pacman transaction in a disposable root before image assembly | #2 `builder/quattro-package-install-check.sh` | kept as a fast pre-check |
-| Installed-system checks: pacman sections, required packages, enabled units, Limine loader, UKI sections, menu and root UUID | #2 `builder/verify-asahi-installed-system.py`, plus the Limine contract it loads through `capture-asahi-os-package-contents.py` from `configs/airootfs/usr/share/omarchy-iso/orchestrator/asahi_limine.py` | kept; the Limine contract is extracted beside it before the orchestrator goes, and the GRUB and linux-asahi branches are dropped |
-| Volume icon | #2 `builder/branding/omarchy-volume.icns` | kept; same bytes as `build-mac-image` pins (`cf26ed5d…`) |
-| ISO media, archiso gitlink, archinstall configurator, VM tooling, asahi stages, checkpoints, leases, orchestrator (after the Limine contract is extracted), products, branding manifests, publication and upload commands | #2 `image-builder/` | removed |
+| Presets, Node pin staged, owner provisioning armed, image finalization (`mac-image-finalize`), Limine activated through the runtime's own leaves, `update-m1n1` | `build-mac-image`, omarchy-pkgs `mac-image-finalize` | kept; the finalizer is `builder/finalize-root`, since no runtime package ships it now |
+| Inputs record | `mac-image-inputs` | kept; the fork's runtime, `[omarchy]` and `[omarchy-aurora]` channel fields replaced by the candidate set and the Omarchy channel's database; the hosts moved from script constants into the record |
+| Payload, image, tree, provenance and descriptor checks | `mac-image-check` | kept, extended by the inspection |
+| Fork runtime installer: `fetch_verified_installer`, `run_installer`, `fetch_bundle_manifest` | `build-mac-image` | removed; the runtime's own `omarchy-apply-system` sets the image up |
+| Authenticated candidate importer | #2 `builder/quattro-candidate.py` | `builder/candidate_set.py`, for the plan's set: `manifest.json` and `signing.json` from omacom/omarchy-mac `tools/release/candidate-set` |
+| Signer policy and public key | #2 `builder/quattro-trust/` | `builder/candidate-trust/`: the test-lane key `E11E851AF82E02AEF54C8794599A6024E3D35379`, the package set and the minimum versions |
+| Limine contract | #2 `configs/airootfs/.../orchestrator/asahi_limine.py` | `builder/apple_limine.py`, its checks only; the activation is the runtime's |
+| Installed-system checks | #2 `builder/verify-asahi-installed-system.py` | `builder/verify_installed_system.py`, the GRUB and linux-asahi branches dropped |
+| Omarchy repository key, volume icon | #2 `builder/omarchy.gpg`, `builder/branding/omarchy-volume.icns` | `builder/keys/omarchy-repository.gpg`, `builder/omarchy-volume.icns` |
+| Duplicate and overlap checks, disposable-root transaction check | #2 `builder/quattro-dependencies.py`, `builder/quattro-package-install-check.sh` | replaced: the whole package set is resolved against the pinned databases before anything installs (every set package from the set, no refused package), pacman refuses file conflicts, and every installed package is traced to a pinned database and its archive bytes |
+| ISO media, archiso gitlink, archinstall configurator, VM tooling, asahi stages, checkpoints, leases, orchestrator, products, branding manifests, publication and upload commands | #2 `image-builder/` | removed |
 | `release-mac-image.yml` publication workflow | omarchy-pkgs | not ported; building stays an owner-run step until release qualification |
 
 The private M3 pilot's image recipe (the `omarchy-mx-mac-limine-private` product and `private-limine-qualification.py`) is not ported. The plan scopes M3 out, and that recipe stays reproducible from #2's head, `5274846`. The app side of the pilot stays: the `InstallerBuildProfile` private profiles, `Packaging/private-test/` and their tests.
@@ -44,41 +38,33 @@ The private M3 pilot's image recipe (the `omarchy-mx-mac-limine-private` product
 ## Interface
 
 ```
+image-builder/bin/mac-image-inputs resolve FILE --candidates DIR [--channel edge|rc|stable] [--cache DIR]
 image-builder/bin/build-mac-image --inputs FILE --candidates DIR [--cache DIR] [--dry-run] OUT
 ```
 
-- `--inputs` is the record `mac-image-inputs resolve` writes. It pins the ALARM snapshot databases and root filesystem, the asahi-alarm database, the package and mirror hosts, and the candidate set: its receipt sha256 and its `quattro-upstream` source commit. The hosts move out of script constants into this record. That also retires the `image-builder/` package-host exemption in `test/shell.d/apple-installer-identity-test.sh`.
-- `--candidates` is the signed candidate set directory: `signing.json` and its signature, `manifest.json`, `omarchy-base.packages`, `omarchy-apple.packages`, and each archive with its `.sig`. The importer checks it against the inputs record's receipt and source commit before any network access or chroot.
-- The candidate set replaces the lane argument. The kernel, m1n1, U-Boot and Limine hook come from the set, not from a channel.
-- Trust comes only from files in this repository. No flag or environment variable supplies a key or a policy.
-- `OUT` receives the zip, `installer_data.json`, `PROVENANCE` and `IMAGE`, as today.
+- The inputs record (format 2) pins the candidate set (its receipt and manifest sha256, source commit and signer), the Omarchy channel's `omarchy.db`, `asahi-alarm.db`, the Arch Linux ARM databases and root filesystem, and names each server. Trust comes only from files in this repository; no flag or environment variable supplies a key or a policy.
+- The candidate set is imported (verified and frozen read-only) on the host before any network access or container. The build never refreshes a database: the pinned bytes are put in place. With `--cache`, package archives are kept, so a later build from the same record installs the same bytes after the servers have moved on.
+- `OUT` receives the zip, `installer_data.json`, `INSPECTION`, `PROVENANCE`, `IMAGE`, the inputs record and the logs.
 
-Candidate set, as the importer will accept it:
+Candidate set, as the importer accepts it:
 
-- **Runtime group** (source revision = the pinned `quattro-upstream` commit): `omarchy`, `omarchy-settings`, `omarchy-mac`, `omarchy-mac-boot`
-- **Boot group** (source revision = the pinned omarchy-pkgs recipe commit): `linux-aurora`, `linux-aurora-headers`, `m1n1-aurora`, `uboot-asahi`, `limine-mkinitcpio-hook`, `limine-snapper-sync`
-- **Minimum versions:** the manifest records one for `omarchy-mac-boot` and one for `limine-mkinitcpio-hook`, the versions the Limine enablement needs. The importer refuses a set below either.
+- **Runtime group** (built from the pinned `quattro-upstream` commit, which each archive also records): `omarchy`, `omarchy-settings`, `omarchy-mac`, `omarchy-mac-boot`
+- **Boot group** (built from omacom/omarchy-pkgs): `linux-aurora`, `linux-aurora-headers`, `m1n1-aurora`, `uboot-asahi`, `limine-mkinitcpio-hook`
+- **Minimum versions**, in the policy since the manifest records none: `omarchy-mac-boot` 20260921-10, `limine-mkinitcpio-hook` 1.39.0-2.
 - **Refused outright:** `omarchy-apple-boot`, `omarchy-first-boot`, `linux-asahi` and the Asahi `m1n1`.
-- **Not in the set:** the `limine` loader package. It comes from the ALARM snapshot the inputs record pins, as #2 pinned it (`builder/quattro-limine.json`, by sha256 and the ALARM signature).
+- **Not in the set:** `limine` and `limine-snapper-sync`, from the pinned Arch Linux ARM and Omarchy databases.
 
-Build steps inside the container:
+Build order inside the container:
 
-1. Import and freeze the candidate set with the importer.
-2. Publish the frozen archives as a local file repository, `[omarchy-candidates]`, ordered first. Install every candidate by its repository-qualified name (`omarchy-candidates/uboot-asahi`, `omarchy-candidates/m1n1-aurora`, …): on `quattro-upstream`, `[asahi-alarm]` is ordered before `[omarchy]`, so a plain `uboot-asahi` or `m1n1` request resolves to asahi-alarm.
-3. Resolve the whole transaction in a disposable root first. Every candidate name must come from `[omarchy-candidates]`, and no file may have two owners.
-4. Assemble the image with the `build-mac-image` flow. `run_installer` becomes the candidate's packaged installer, run in the chroot with the owner deferred. The platform stays declared by `OMARCHY_MAC_TARGET` for now; the root-owned image-target manifest replaces it later.
-5. Inspect, then package. The build fails on a missing or mismatched boot component:
-   - the Limine UKI embeds an initramfs, and that initramfs carries `omarchy-mac-boot`'s encryption hook
-   - the ESP's m1n1 stage 1 and `m1n1/boot.bin` come from the candidate `m1n1-aurora`, with the Aurora DTBs of every supported model and the candidate U-Boot
-   - `EFI/BOOT/BOOTAA64.EFI` is the loader the installed `limine` package owns, from the pinned snapshot
-   - installed versions equal the manifest's and meet the minimums
-6. `PROVENANCE` and `IMAGE` record the receipt and manifest sha256, the source commit, the signer fingerprint and each archive's sha256. They drop the `installer=install-asahi-quattro` and runtime release lines.
+1. A base system and `omarchy-settings`, alone, so its pacman platform guard (omacom/omarchy-mac#539) is resident before any platform package.
+2. The root-owned image-target manifest `/var/lib/omarchy/image/target` (`format=1`, `platform=apple-silicon`), which deferred hardware setup (omacom/omarchy-mac#528) and the pacman platform guard (#539) both read.
+3. The runtime with `omarchy-base.packages`, then the Apple set: `omarchy-apple.packages`, the kernel, m1n1, U-Boot and the Limine hook. Every set package is installed by its `omarchy-candidates/` name, so `[asahi-alarm]`, ordered before `[omarchy]` in the Apple profile, cannot supply `uboot-asahi` or `m1n1`.
+4. The runtime's `omarchy-apply-system --defer-provisioning --first-install`. The build chroot never sees the build host's hardware: a device tree naming the image's platform, UEFI without EFI variables, no PCI or DMI devices. A runtime with #528 queues its hardware steps for first boot from the manifest; the first candidate set's runtime (`073e489b5`) predates it and runs them here, and its first boot runs only the Limine leaf (`mac-first-boot/deferred-steps`).
+5. Presets (`80-omarchy-mac*.preset`, so omarchy-mac's audio preset too), Node.js for owner provisioning, `mkinitcpio -P`, GRUB, `update-m1n1` under `LC_ALL=C`, the runtime's GRUB compatibility and Limine leaves, and first boot armed by the boot package's own `arm` command.
+6. Seal, inspect, package. `PROVENANCE` and `IMAGE` record the builder commit, the set's receipt, manifest, source commit and signer, each installed package's repository and archive sha256, and `package_set_sha256`.
 
-**Reproducible** means: the same inputs record and candidate set give the same installed package set (name, version and archive sha256) and the same `IMAGE` input lines. Any changed input changes them. Byte-identical filesystem images are not required.
+**Reproducible** means: the same builder commit, inputs record and candidate set give the same installed package set (name, version and archive sha256, `package_set_sha256`) and the same `IMAGE` input lines. Any changed input changes them. Byte-identical filesystem images are not required, and the default UKI's autodetected initramfs follows the build host's devices.
 
 ## Tests
 
-- `test/mac-image` moves over with the builder and gains importer and inspection cases: a tampered archive, a wrong signer, a missing or extra package, a version below a minimum, a boot file with two owners, and an ESP whose m1n1, DTB, U-Boot or Limine differs from the candidate.
-- #2's importer unit tests run in the portable suite.
-- The imported builder's own suite and its CI job go with it.
-- None of these need Mac hardware. The M2 Max install of the first image is the separate hardware gate.
+`image-builder/test/all` runs in CI's image-builder job: the importer against signed fixture sets (a tampered archive, a wrong signer, a key that travels with the set, a missing, extra or refused package, a version below a minimum, a file with two owners, a runtime package from another commit), the inspection against fixture images whose m1n1 stage 2, device trees, U-Boot, set files, Limine loader, menu, UKI, embedded initramfs, maintenance hooks, versions, first-boot markers or `@factory` are missing or wrong, `PROVENANCE` and `IMAGE` against their build directory, the inputs record, and the builder's own decisions. None of them need Mac hardware, a container or root. The M2 Max install of the first image is the separate hardware gate (tickets 25 and 26).
