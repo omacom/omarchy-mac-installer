@@ -29,3 +29,5 @@ For a private or offline build the directory may also contain a signed
 `catalog.json` and `catalog.json.sig` pair. The app then verifies that sealed
 catalog with the same trust root instead of fetching a channel. Production
 builds omit the pair so the app reads its channel at run time.
+
+The helper identity, team and catalog host in `release.json` come from `Packaging/identity.conf`; `test/all` fails when the descriptor no longer matches it.

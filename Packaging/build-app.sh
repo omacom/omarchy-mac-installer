@@ -18,6 +18,8 @@ script_directory="$({ cd "$(dirname "$0")" && pwd -P; })"
 package_directory="$({ cd "$script_directory/.." && pwd -P; })"
 release_directory="$({ cd "$1" && pwd -P; })"
 output_directory="$2"
+# shellcheck source=identity.conf
+source "$script_directory/identity.conf"
 
 [[ -d $release_directory && ! -L $release_directory ]] \
   || fail "release directory must be a real directory"
@@ -39,9 +41,9 @@ team_identifier="${OMARCHY_TEAM_ID:-}"
 [[ $build_number =~ ^[1-9][0-9]*$ ]] \
   || fail "OMARCHY_APP_BUILD_NUMBER must be a positive integer"
 
-app_identifier="com.omarchy.mx.installer"
-helper_identifier="com.omarchy.mx.installer.helper"
-app_name="Omarchy MX Mac Installer.app"
+app_identifier="$INSTALLER_APP_IDENTIFIER"
+helper_identifier="$INSTALLER_HELPER_IDENTIFIER"
+app_name="$INSTALLER_APP_NAME.app"
 app_executable_name="OmarchyAppleInstallerApp"
 helper_executable_name="omarchy-apple-installer-helper"
 daemon_plist_name="$helper_identifier.plist"
@@ -229,7 +231,7 @@ install -m 0444 \
   "$resources/OmarchyInstaller.icns"
 install -m 0444 "$script_directory/Info.plist" "$contents/Info.plist"
 install -m 0444 \
-  "$script_directory/$daemon_plist_name" \
+  "$script_directory/helper-daemon.plist" \
   "$contents/Library/LaunchDaemons/$daemon_plist_name"
 
 chmod 0644 "$contents/Info.plist"
@@ -238,6 +240,18 @@ plutil -replace CFBundleShortVersionString \
   -string "$marketing_version" "$contents/Info.plist"
 plutil -replace CFBundleVersion \
   -string "$build_number" "$contents/Info.plist"
+plutil -replace CFBundleIdentifier \
+  -string "$app_identifier" "$contents/Info.plist"
+plutil -replace CFBundleName \
+  -string "$INSTALLER_APP_NAME" "$contents/Info.plist"
+plutil -replace CFBundleDisplayName \
+  -string "$INSTALLER_APP_NAME" "$contents/Info.plist"
+plutil -replace Label \
+  -string "$helper_identifier" \
+  "$contents/Library/LaunchDaemons/$daemon_plist_name"
+plutil -replace MachServices \
+  -json "{\"$helper_identifier\":true}" \
+  "$contents/Library/LaunchDaemons/$daemon_plist_name"
 plutil -replace \
   EnvironmentVariables.OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT \
   -string "$client_requirement" \
@@ -245,6 +259,11 @@ plutil -replace \
 plutil -lint \
   "$contents/Info.plist" \
   "$contents/Library/LaunchDaemons/$daemon_plist_name" >/dev/null
+if grep -q REPLACED_DURING_PACKAGING \
+  "$contents/Info.plist" \
+  "$contents/Library/LaunchDaemons/$daemon_plist_name"; then
+  fail "a packaging placeholder was left in the app"
+fi
 
 codesign --force --sign "$signing_identity" \
   "${timestamp_arguments[@]}" \

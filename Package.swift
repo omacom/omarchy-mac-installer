@@ -39,10 +39,20 @@ let package = Package(
       path: "Sources/OmarchyInstallerSystem",
       publicHeadersPath: "include"
     ),
+    .executableTarget(
+      name: "OmarchyInstallerIdentityGenerator",
+      path: "Sources/OmarchyInstallerIdentityGenerator"
+    ),
+    .plugin(
+      name: "OmarchyInstallerIdentityPlugin",
+      capability: .buildTool(),
+      dependencies: ["OmarchyInstallerIdentityGenerator"]
+    ),
     .target(
       name: "OmarchyAppleInstallerTrustCore",
       dependencies: ["OmarchyInstallerSystem"],
-      path: "Sources/OmarchyAppleInstaller"
+      path: "Sources/OmarchyAppleInstaller",
+      plugins: ["OmarchyInstallerIdentityPlugin"]
     ),
     .target(
       name: "OmarchyInstallerUXCore",

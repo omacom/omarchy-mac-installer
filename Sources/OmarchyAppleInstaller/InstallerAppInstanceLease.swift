@@ -33,7 +33,7 @@ public final class InstallerAppInstanceLease {
     }
     return
       caches
-      .appendingPathComponent("com.omarchy.mx.installer", isDirectory: true)
+      .appendingPathComponent(InstallerProductIdentity.appIdentifier, isDirectory: true)
       .appendingPathComponent("instance.lock", isDirectory: false)
   }
 

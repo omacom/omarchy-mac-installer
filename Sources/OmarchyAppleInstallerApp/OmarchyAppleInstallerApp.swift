@@ -29,7 +29,9 @@ private final class InstallerApplicationDelegate: NSObject, NSApplicationDelegat
       let lockFile = try InstallerAppInstanceLease.defaultLockFileURL()
       instanceLease = try InstallerAppInstanceLease.acquire(at: lockFile)
     } catch {
-      fputs("Omarchy MX Mac Installer refused a duplicate or unsafe launch: \(error)\n", stderr)
+      fputs(
+        "\(InstallerProductIdentity.appName) refused a duplicate or unsafe launch: \(error)\n",
+        stderr)
       NSApplication.shared.terminate(nil)
     }
   }

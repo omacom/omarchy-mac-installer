@@ -3,8 +3,10 @@
 # as a system LaunchDaemon so the app can reach it immediately — no Login Items,
 # no reboot, no per-user approval.
 set -u
-PLIST=/Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist
-LABEL=com.omarchy.mx.installer.helper
+# build-pkg.sh ships Packaging/identity.conf beside this script.
+source "$(dirname "$0")/identity.conf" || exit 1
+PLIST="/Library/LaunchDaemons/$INSTALLER_HELPER_IDENTIFIER.plist"
+LABEL="$INSTALLER_HELPER_IDENTIFIER"
 
 if [[ -f "$PLIST" ]]; then
   /usr/sbin/chown root:wheel "$PLIST"
@@ -28,7 +30,7 @@ else
   exit 1
 fi
 
-APP="/Applications/Omarchy MX Mac Installer.app"
+APP="/Applications/$INSTALLER_APP_NAME.app"
 
 # Pre-run Gatekeeper's one-time inspection of the new app now, while the
 # installer's own progress UI is still on screen. Without this, the first

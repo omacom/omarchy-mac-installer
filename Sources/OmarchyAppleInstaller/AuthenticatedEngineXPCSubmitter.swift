@@ -371,13 +371,13 @@
 
   enum EngineXPCErrorBridge {
     private static let recoveryAuthorizationDomain =
-      "com.omarchy.mx.installer.recovery-authorization"
+      InstallerProductIdentity.appIdentifier + ".recovery-authorization"
     private static let recoveryAuthorizationCode = 1
     // Dedicated domain so the app can tell "wrong password" from every other
     // helper rejection. Skew-safe: an older app maps this unknown domain to the
     // generic helperRejected case exactly as it does today.
     static let machineOwnerAuthorizationDomain =
-      "com.omarchy.mx.installer.machine-owner-authorization"
+      InstallerProductIdentity.appIdentifier + ".machine-owner-authorization"
     static let machineOwnerAuthorizationCode = 1
 
     static func serviceError(for error: any Error) -> NSError {

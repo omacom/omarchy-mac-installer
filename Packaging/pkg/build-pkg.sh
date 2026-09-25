@@ -15,11 +15,14 @@
 # same way.
 set -euo pipefail
 
-APP="" PLIST="" VERSION="" OUT=""
-INSTALLER_ID="Developer ID Installer: MARCELO DE BARROS ALCANTARA (T2C384FJBD)"
-PKG_IDENTIFIER="com.omarchy.mx.installer.pkg"
 PKG_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=../identity.conf
+source "$PKG_DIR/../identity.conf"
+APP="" PLIST="" VERSION="" OUT=""
+INSTALLER_ID="$INSTALLER_PKG_SIGNING_IDENTITY"
+PKG_IDENTIFIER="$INSTALLER_PKG_IDENTIFIER"
 SCRIPTS="$PKG_DIR/scripts"
+DAEMON_PLIST_NAME="$INSTALLER_HELPER_IDENTIFIER.plist"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,7 +52,7 @@ mkdir -p "$root/Applications" "$root/Library/LaunchDaemons"
 # /Applications), or validate a supplied one the same way. A daemon whose
 # Program is missing, relative, or points at nothing inside the staged app
 # cannot be loaded by launchd, so that is a build failure, not a warning.
-daemon_plist="$work/com.omarchy.mx.installer.helper.plist"
+daemon_plist="$work/$DAEMON_PLIST_NAME"
 if [[ -n "$PLIST" ]]; then
   /bin/cp "$PLIST" "$daemon_plist"
 else
@@ -76,7 +79,7 @@ case "$requirement" in
     exit 65
     ;;
 esac
-/usr/bin/install -m 0644 "$daemon_plist" "$root/Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist"
+/usr/bin/install -m 0644 "$daemon_plist" "$root/Library/LaunchDaemons/$DAEMON_PLIST_NAME"
 echo "daemon client requirement: $requirement"
 echo "daemon Program: $prog"
 
@@ -88,12 +91,17 @@ component_plist="$work/component.plist"
 /usr/bin/pkgbuild --analyze --root "$root" "$component_plist"
 /usr/bin/plutil -replace 0.BundleIsRelocatable -bool false "$component_plist"
 
+# postinstall reads the helper label and app name from the identity it ships with.
+scripts="$work/scripts"
+/usr/bin/ditto "$SCRIPTS" "$scripts"
+/usr/bin/install -m 0644 "$PKG_DIR/../identity.conf" "$scripts/identity.conf"
+
 echo "=== pkgbuild (component) ==="
 comp="$work/component.pkg"
 /usr/bin/pkgbuild \
   --root "$root" \
   --component-plist "$component_plist" \
-  --scripts "$SCRIPTS" \
+  --scripts "$scripts" \
   --identifier "$PKG_IDENTIFIER" \
   --version "$VERSION" \
   --install-location / \

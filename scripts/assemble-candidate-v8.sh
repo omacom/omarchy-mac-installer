@@ -16,8 +16,10 @@ readonly REFERENCE_SIGNING_TOOL_DIGEST="af52a6f38d110ef2684a0114abe13928b7e94148
 readonly DEFAULT_APP_VERSION="0.8.0"
 readonly DEFAULT_BUILD_NUMBER="9"
 readonly DEFAULT_TAG="v0.8.0-m1"
-readonly DEFAULT_RELEASE_REPO="maralcbr/omarchy-mx-mac"
-readonly DEFAULT_TEAM_ID="T2C384FJBD"
+# shellcheck source=../Packaging/identity.conf
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../Packaging" && pwd)/identity.conf"
+readonly DEFAULT_RELEASE_REPO="$INSTALLER_GITHUB_RELEASE_REPO"
+readonly DEFAULT_TEAM_ID="$INSTALLER_TEAM_ID"
 
 clone_copies=0
 plain_copies=0
@@ -557,7 +559,7 @@ holds duplicate same-name certificates and a name is ambiguous.
 \`\`\`bash
 OMARCHY_NOTARY_PROFILE=omarchy-notary \\
   "\$APP/Packaging/notarize-app.sh" \\
-  "\$CANDIDATE/app/build/Omarchy MX Mac Installer.app"
+  "\$CANDIDATE/app/build/$INSTALLER_APP_NAME.app"
 \`\`\`
 
 One-time owner setup this needs: a "Developer ID Application" certificate in
@@ -568,8 +570,8 @@ the keychain, and
 
 \`\`\`bash
 ditto -c -k --keepParent \\
-  "\$CANDIDATE/app/build/Omarchy MX Mac Installer.app" \\
-  "\$CANDIDATE/app/transfer/Omarchy-MX-Mac-Installer-$app_version.zip"
+  "\$CANDIDATE/app/build/$INSTALLER_APP_NAME.app" \\
+  "\$CANDIDATE/app/transfer/$INSTALLER_FILE_STEM-$app_version.zip"
 \`\`\`
 
 ## 7. Publish (owner confirms at the prompt)
@@ -578,7 +580,7 @@ ditto -c -k --keepParent \\
 git push origin "\$TAG"   # the tag must already exist on origin
 "\$APP/scripts/publish-m1-release" publish \\
   --dir "\$DIST" \\
-  --app "\$CANDIDATE/app/transfer/Omarchy-MX-Mac-Installer-$app_version.zip" \\
+  --app "\$CANDIDATE/app/transfer/$INSTALLER_FILE_STEM-$app_version.zip" \\
   --tag "\$TAG" \\
   --repo "\$RELEASE_REPO" \\
   --notes-file /Users/maralc/dev/omarchy/iteration2/release-notes-v8.md
@@ -631,7 +633,7 @@ NEXTSTEPS
   echo "       OMARCHY_TEAM_ID=$team_id OMARCHY_APP_SIGNING_IDENTITY=<Developer ID SHA-1> \\"
   echo "       $build_app $out/catalog/release $out/app/build"
   echo "  6. notarize: OMARCHY_NOTARY_PROFILE=omarchy-notary $notarize_app \\"
-  echo "       \"$out/app/build/Omarchy MX Mac Installer.app\""
+  echo "       \"$out/app/build/$INSTALLER_APP_NAME.app\""
   echo "  7. ditto -c -k --keepParent the app, then publish-m1-release publish."
   if (( warnings > 0 )); then
     echo

@@ -7,7 +7,7 @@
 #
 #   channels/<channel>/catalog.signed.json
 #   channels/<channel>/channel.json
-#   installer/<channel>/Omarchy-MX-Mac-Installer.pkg
+#   installer/<channel>/<INSTALLER_FILE_STEM>.pkg
 #   installer/<channel>/installer.json
 #
 # The catalog and its signature travel as one envelope so a channel update is a
@@ -18,14 +18,16 @@ set -euo pipefail
 script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=/dev/null
 . "$script_directory/publish-m1-release"
+# shellcheck source=../Packaging/identity.conf
+. "$script_directory/../Packaging/identity.conf"
 
-R2_BUCKET="${OMARCHY_R2_BUCKET:-omarchy-releases}"
-R2_ENDPOINT="${OMARCHY_R2_ENDPOINT:-https://ab85a8b9d88f084e66bf9d4a8ee5cf66.r2.cloudflarestorage.com}"
-PUBLIC_BASE="${OMARCHY_PUBLIC_BASE:-https://downloads.aicodelabs.com.au}"
-TRUST_ROOT="${OMARCHY_TRUST_ROOT:-$script_directory/../Release/trust-root.ed25519.pub}"
+R2_BUCKET="${OMARCHY_R2_BUCKET:-$INSTALLER_R2_BUCKET}"
+R2_ENDPOINT="${OMARCHY_R2_ENDPOINT:-$INSTALLER_R2_ENDPOINT}"
+PUBLIC_BASE="${OMARCHY_PUBLIC_BASE:-$INSTALLER_PUBLIC_BASE}"
+TRUST_ROOT="${OMARCHY_TRUST_ROOT:-$script_directory/../$INSTALLER_TRUST_ROOT}"
 SIGNING_TOOL="${OMARCHY_CATALOG_SIGNING_TOOL:-xcrun swift $script_directory/catalog-signing.swift}"
-PKG_FILE_NAME="Omarchy-MX-Mac-Installer.pkg"
-PKG_DOWNLOAD_NAME="Omarchy MX Mac Installer.pkg"
+PKG_FILE_NAME="$INSTALLER_FILE_STEM.pkg"
+PKG_DOWNLOAD_NAME="$INSTALLER_APP_NAME.pkg"
 NO_CACHE="no-cache, max-age=0, must-revalidate"
 
 scratch_root=""
@@ -355,8 +357,8 @@ app_publish() {
   local work digest immutable_key
   work=$(make_scratch)
   digest=$(file_digest "$pkg")
-  printf '%s  %s\n' "$digest" "Omarchy-MX-Mac-Installer-$version.pkg" >"$work/pkg.sha256"
-  immutable_key="installer/$version/Omarchy-MX-Mac-Installer-$version.pkg"
+  printf '%s  %s\n' "$digest" "$INSTALLER_FILE_STEM-$version.pkg" >"$work/pkg.sha256"
+  immutable_key="installer/$version/$INSTALLER_FILE_STEM-$version.pkg"
 
   python3 - "$work/installer.json" "$version" "$digest" "$(file_size "$pkg")" \
     "$PUBLIC_BASE/$immutable_key" <<'PY'
@@ -574,7 +576,7 @@ prune() {
     [[ $lock_configuration == *ObjectLockEnabled* ]]; then
     echo "publish-channels: the sets to prune are protected by the bucket's lock rule. Pruning needs that rule to \
 expire objects by age (for example 7 days) instead of holding them indefinitely; change it in \
-Cloudflare R2 > omarchy-releases > Settings > Bucket lock, then re-run." >&2
+Cloudflare R2 > $R2_BUCKET > Settings > Bucket lock, then re-run." >&2
     return 1
   fi
 
@@ -592,7 +594,7 @@ Cloudflare R2 > omarchy-releases > Settings > Bucket lock, then re-run." >&2
       if [[ $output == *ObjectLockedByBucketPolicy* ]]; then
         echo "publish-channels: $prefix is protected by the bucket's lock rule. Pruning needs that rule to \
 expire objects by age (for example 7 days) instead of holding them indefinitely; change it in \
-Cloudflare R2 > omarchy-releases > Settings > Bucket lock, then re-run." >&2
+Cloudflare R2 > $R2_BUCKET > Settings > Bucket lock, then re-run." >&2
         return 1
       fi
       echo "publish-channels: could not remove $prefix: $output" >&2

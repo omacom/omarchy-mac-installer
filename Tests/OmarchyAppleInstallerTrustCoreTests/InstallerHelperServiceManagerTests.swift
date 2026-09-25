@@ -23,7 +23,7 @@
     func testReachabilityChecksTheCanonicalSystemLaunchDaemonPath() {
       XCTAssertEqual(
         InstallerProductIdentity.systemLaunchDaemonPath,
-        "/Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist"
+        "/Library/LaunchDaemons/\(InstallerProductIdentity.helperIdentifier).plist"
       )
     }
   }

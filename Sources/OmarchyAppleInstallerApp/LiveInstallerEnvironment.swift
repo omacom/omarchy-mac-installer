@@ -586,7 +586,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       throw InstallerAppError.workspaceUnavailable
     }
     let base = applicationSupport.appendingPathComponent(
-      "com.omarchy.mx.installer",
+      InstallerProductIdentity.appIdentifier,
       isDirectory: true
     )
     let staging = base.appendingPathComponent("staging", isDirectory: true)

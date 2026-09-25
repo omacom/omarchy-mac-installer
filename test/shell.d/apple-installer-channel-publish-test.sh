@@ -1,6 +1,7 @@
 #!/bin/bash
 
 source "$(dirname -- "${BASH_SOURCE[0]}")/base-test.sh"
+source "$ROOT/Packaging/identity.conf"
 
 require_command python3
 
@@ -354,15 +355,15 @@ head -c 4096 /dev/zero >"$PKG"
 OMARCHY_PUBLISH_ASSUME_YES=installer-v2.0.0 "$PUBLISHER" app-publish \
   --pkg "$PKG" --version 2.0.0 >"$WORK/app.log" 2>&1 ||
   fail "app-publish succeeds" "$(cat "$WORK/app.log")"
-[[ -f $BUCKET_DIR/installer/2.0.0/Omarchy-MX-Mac-Installer-2.0.0.pkg ]] ||
+[[ -f $BUCKET_DIR/installer/2.0.0/$INSTALLER_FILE_STEM-2.0.0.pkg ]] ||
   fail "the immutable package is published"
-[[ -f $BUCKET_DIR/installer/stable/Omarchy-MX-Mac-Installer.pkg ]] ||
+[[ -f $BUCKET_DIR/installer/stable/$INSTALLER_FILE_STEM.pkg ]] ||
   fail "the stable package is published"
 [[ -f $BUCKET_DIR/installer/stable/installer.json ]] ||
   fail "the installer pointer is published"
 pass "the installer publishes to both an immutable key and the channel"
 
-grep -q -- '--content-disposition attachment; filename="Omarchy MX Mac Installer.pkg"' "$CALLS" ||
+grep -qF -- "--content-disposition attachment; filename=\"$INSTALLER_APP_NAME.pkg\"" "$CALLS" ||
   fail "the download keeps its name" "$(grep 'content-disposition' "$CALLS")"
 pass "the stable download is served under its readable name"
 
@@ -447,7 +448,7 @@ pass "a bucket lock is reported after promotion, never as a failed release"
 # installer/stable -> 2.0.0. Everything else under releases/ and installer/<v>/
 # is unreferenced.
 head -c 64 /dev/zero >"$WORK/old.pkg"
-mkdir -p "$BUCKET_DIR/installer/1.9.0" && cp "$WORK/old.pkg" "$BUCKET_DIR/installer/1.9.0/Omarchy-MX-Mac-Installer-1.9.0.pkg"
+mkdir -p "$BUCKET_DIR/installer/1.9.0" && cp "$WORK/old.pkg" "$BUCKET_DIR/installer/1.9.0/$INSTALLER_FILE_STEM-1.9.0.pkg"
 mkdir -p "$BUCKET_DIR/releases/4.0.1.m.1" && cp "$WORK/old.pkg" "$BUCKET_DIR/releases/4.0.1.m.1/other-lane.iso"
 "$PUBLISHER" prune >"$WORK/prune-dry.log" 2>&1 || fail "prune dry run succeeds" "$(cat "$WORK/prune-dry.log")"
 grep -q "Dry run" "$WORK/prune-dry.log" || fail "prune is a dry run by default" "$(cat "$WORK/prune-dry.log")"
@@ -467,7 +468,7 @@ if OMARCHY_PUBLISH_ASSUME_YES=prune "$PUBLISHER" prune --confirm >"$WORK/locked.
 fi
 grep -q "protected by the bucket's lock rule" "$WORK/locked.log" || fail "prune explains the lock" "$(cat "$WORK/locked.log")"
 (( $(grep -c "ObjectLockedByBucketPolicy" "$WORK/locked.log") <= 1 )) || fail "prune does not repeat the refusal per object"
-[[ -f $BUCKET_DIR/installer/1.9.0/Omarchy-MX-Mac-Installer-1.9.0.pkg ]] || fail "a locked run deletes nothing else either"
+[[ -f $BUCKET_DIR/installer/1.9.0/$INSTALLER_FILE_STEM-1.9.0.pkg ]] || fail "a locked run deletes nothing else either"
 rm -f "$BUCKET_LOCKED"
 rm -rf "$BUCKET_DIR/releases/v4.0.2-mac.1.10.090226"
 pass "prune stops at a bucket lock with one message and no partial deletion"
@@ -490,10 +491,10 @@ while read -r key; do
   case $key in
     channels/stable/catalog.signed.json | channels/rc/catalog.signed.json) ;;
     channels/stable/channel.json | channels/rc/channel.json) ;;
-    installer/stable/Omarchy-MX-Mac-Installer.pkg) ;;
-    installer/rc/Omarchy-MX-Mac-Installer.pkg) ;;
+    installer/stable/"$INSTALLER_FILE_STEM.pkg") ;;
+    installer/rc/"$INSTALLER_FILE_STEM.pkg") ;;
     installer/stable/installer.json | installer/rc/installer.json) ;;
-    installer/*/Omarchy-MX-Mac-Installer-*.pkg | installer/*/*.pkg.sha256) ;;
+    installer/*/"$INSTALLER_FILE_STEM"-*.pkg | installer/*/*.pkg.sha256) ;;
     *) fail "an unexpected key was written" "$key" ;;
   esac
 done < <(grep -E "^aws s3 cp " "$CALLS" | grep -oE "s3://test-bucket/[^ ]+" | sed 's|s3://test-bucket/||' | sort -u)

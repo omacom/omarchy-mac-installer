@@ -3,6 +3,8 @@
 set -euo pipefail
 
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
+source "$ROOT/Packaging/identity.conf"
+helper_id=$INSTALLER_HELPER_IDENTIFIER
 
 test_tmp=$(mktemp -d)
 trap 'rm -rf "$test_tmp"' EXIT
@@ -14,12 +16,12 @@ make_app() {
   local app=$1 bundle_program=$2 helper=${3:-Contents/Resources/omarchy-apple-installer-helper}
   mkdir -p "$app/Contents/Library/LaunchDaemons" "$app/$(dirname "$helper")"
   printf '#!/bin/sh\n' >"$app/$helper"
-  python3 - "$app/Contents/Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist" "$bundle_program" <<'PY'
+  python3 - "$app/Contents/Library/LaunchDaemons/$helper_id.plist" "$bundle_program" "$helper_id" <<'PY'
 import plistlib, sys
 plistlib.dump({
-    "Label": "com.omarchy.mx.installer.helper",
+    "Label": sys.argv[3],
     "BundleProgram": sys.argv[2],
-    "MachServices": {"com.omarchy.mx.installer.helper": True},
+    "MachServices": {sys.argv[3]: True},
     "UserName": "root",
     "KeepAlive": False,
     "EnvironmentVariables": {"OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT": "anchor apple generic"},
@@ -31,18 +33,18 @@ read_plist() {
   python3 -c 'import plistlib, sys, json; print(json.dumps(plistlib.load(open(sys.argv[1], "rb")), sort_keys=True))' "$1"
 }
 
-app="$test_tmp/Omarchy MX Mac Installer.app"
+app="$test_tmp/$INSTALLER_APP_NAME.app"
 make_app "$app" Contents/Resources/omarchy-apple-installer-helper
 out=$test_tmp/daemon.plist
 program=$("$derive" "$app" "$out" /Applications)
-[[ $program == "/Applications/Omarchy MX Mac Installer.app/Contents/Resources/omarchy-apple-installer-helper" ]] ||
+[[ $program == "/Applications/$INSTALLER_APP_NAME.app/Contents/Resources/omarchy-apple-installer-helper" ]] ||
   fail "the derived daemon Program is the helper's absolute path under /Applications"
 derived=$(read_plist "$out")
-grep -Fq '"Program": "/Applications/Omarchy MX Mac Installer.app/Contents/Resources/omarchy-apple-installer-helper"' <<<"$derived" ||
+grep -Fq "\"Program\": \"/Applications/$INSTALLER_APP_NAME.app/Contents/Resources/omarchy-apple-installer-helper\"" <<<"$derived" ||
   fail "the derived plist records the absolute Program"
 ! grep -Fq '"BundleProgram"' <<<"$derived" || fail "the derived plist drops the bundle-relative BundleProgram"
-grep -Fq '"Label": "com.omarchy.mx.installer.helper"' <<<"$derived" || fail "the derived plist keeps the Label"
-grep -Fq '"com.omarchy.mx.installer.helper": true' <<<"$derived" || fail "the derived plist keeps the Mach service"
+grep -Fq "\"Label\": \"$helper_id\"" <<<"$derived" || fail "the derived plist keeps the Label"
+grep -Fq "\"$helper_id\": true" <<<"$derived" || fail "the derived plist keeps the Mach service"
 grep -Fq '"UserName": "root"' <<<"$derived" || fail "the derived plist keeps the root UserName"
 grep -Fq 'OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT' <<<"$derived" || fail "the derived plist keeps the client requirement"
 pass "the system daemon plist is derived with an absolute Program inside the installed app"

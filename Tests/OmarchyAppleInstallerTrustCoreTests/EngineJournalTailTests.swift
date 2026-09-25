@@ -8,7 +8,7 @@
   final class EngineJournalTailTests: XCTestCase {
     func testLocatorMirrorsExecutorJournalPath() {
       let workingDirectory = URL(
-        fileURLWithPath: "/var/db/com.omarchy.mx.installer",
+        fileURLWithPath: InstallerProductIdentity.helperWorkingDirectory,
         isDirectory: true
       )
       let hex = String(repeating: "a", count: 64)
@@ -20,7 +20,7 @@
 
       XCTAssertEqual(
         url?.path,
-        "/var/db/com.omarchy.mx.installer/execution-journals/\(hex).jsonl"
+        "\(InstallerProductIdentity.helperWorkingDirectory)/execution-journals/\(hex).jsonl"
       )
     }
 

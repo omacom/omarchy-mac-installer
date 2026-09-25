@@ -3,12 +3,12 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.omarchy.mx.installer.helper</string>
+  <string>REPLACED_DURING_PACKAGING</string>
   <key>BundleProgram</key>
   <string>Contents/Resources/omarchy-apple-installer-helper</string>
   <key>MachServices</key>
   <dict>
-    <key>com.omarchy.mx.installer.helper</key>
+    <key>REPLACED_DURING_PACKAGING</key>
     <true/>
   </dict>
   <key>EnvironmentVariables</key>
