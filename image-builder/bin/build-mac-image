@@ -108,15 +108,20 @@ stop_build() {
 # transient udev rule hides every loop device from udisks. It needs root, or
 # passwordless sudo; without either, a running automounter stops the build.
 hide_loop_devices() {
-  local as_root=()
-  ((EUID == 0)) || as_root=(sudo -n)
+  local as_root=() automounter
+  # -k: a cached password could expire before the rule is removed.
+  ((EUID == 0)) || as_root=(sudo -k -n)
   if [[ -d /run/udev ]] && "${as_root[@]}" true 2>/dev/null; then
+    ((EUID == 0)) || as_root=(sudo -n)
     loop_rule=/run/udev/rules.d/60-omarchy-image-build-$$.rules
     printf 'SUBSYSTEM=="block", KERNEL=="loop*", ENV{UDISKS_IGNORE}="1"\n' |
       "${as_root[@]}" install -D -m 0644 /dev/stdin "$loop_rule" &&
       "${as_root[@]}" udevadm control --reload || fail "could not hide the build's loop devices from udisks"
-  elif pgrep -x udiskie >/dev/null 2>&1 || pgrep -f gvfs-udisks2-volume-monitor >/dev/null 2>&1; then
-    fail "a desktop automounter would mount the build's loop devices; stop it, or build as root or with passwordless sudo"
+  else
+    for automounter in udiskie gvfs-udisks2-volume-monitor devmon udevil thunar-volman; do
+      ! pgrep -f "(^|/)$automounter( |\$)" >/dev/null 2>&1 ||
+        fail "$automounter would mount the build's loop devices; stop it, or build as root or with passwordless sudo"
+    done
   fi
 }
 
@@ -124,7 +129,8 @@ show_loop_devices() {
   local as_root=()
   [[ -n $loop_rule ]] || return 0
   ((EUID == 0)) || as_root=(sudo -n)
-  "${as_root[@]}" rm -f "$loop_rule" && "${as_root[@]}" udevadm control --reload || true
+  "${as_root[@]}" rm -f "$loop_rule" && "${as_root[@]}" udevadm control --reload ||
+    echo "build-mac-image: could not remove $loop_rule; loop devices stay hidden from udisks until it goes" >&2
   loop_rule=""
 }
 
@@ -542,17 +548,19 @@ prepare_isolated_api() {
   fi
 }
 
-# Hardware setup probes PCI (lspci) and DMI (omarchy-hw-match): the build
-# host's devices must not decide what the image installs. An Apple Silicon Mac
-# has no DMI, and its PCI devices are the Mac's own, found on first boot.
+# Hardware setup probes PCI (lspci), USB, input devices and DMI
+# (omarchy-hw-match): the build host's devices must not decide what the image
+# installs. An Apple Silicon Mac has no DMI, and its own devices are found on
+# its first boot.
 mask_host_hardware() {
   local root=$1 record=${2:-0} point
-  for point in "$root/sys/class/dmi" "$root/sys/bus/pci" "$root/proc/bus/pci"; do
+  for point in "$root/sys/class/dmi" "$root/sys/devices/virtual/dmi" "$root/sys/bus/pci" "$root/sys/bus/usb" \
+    "$root/sys/class/input" "$root/proc/bus/pci" "$root/proc/bus/input"; do
     [[ -d $point ]] || continue
     findmnt -n "$point" >/dev/null 2>&1 && continue
     mount -t tmpfs -o mode=0755,nosuid,noexec,nodev,size=64k tmpfs "$point" || fail "could not hide ${point#"$root"}"
     if ((record)); then api_mounts=("$point" "${api_mounts[@]}"); fi
-    if [[ $point == */sys/bus/pci ]]; then
+    if [[ $point == */sys/bus/* ]]; then
       mkdir -p "$point/devices" "$point/drivers"
     fi
     mount -o remount,ro "$point" 2>/dev/null || true
@@ -611,17 +619,20 @@ qualified() {
 }
 
 # Names of the base list the pinned repositories carry. Those they lack (an
-# x86-only application) are recorded, in PROVENANCE and the inspection, and
-# not installed.
+# x86-only application) are recorded in PROVENANCE and not installed; a name
+# they carry that does not resolve stops the build.
 available_base() {
   local name
   base_names=()
   unavailable=()
+  local output
   while read -r name; do
-    if target_pacman -Sp --print-format x "$name" >/dev/null 2>&1; then
+    if output=$(target_pacman -Sp --print-format x "$name" 2>&1); then
       base_names+=("$name")
-    else
+    elif grep -Fq "target not found: $name" <<<"$output"; then
       unavailable+=("$name")
+    else
+      fail "$name from omarchy-base.packages does not resolve: $(tail -n 1 <<<"$output")"
     fi
   done < <(runtime_list base)
   printf '%s\n' "${unavailable[@]}" >"$work/unavailable"
@@ -1150,7 +1161,8 @@ write_provenance() {
 write_image() {
   local zip=$1 key
   {
-    printf 'format=2\nlane=%s\nplatform=%s\nbuilder_commit=%s\n' "$lane" "$PLATFORM" "$MAC_IMAGE_BUILDER_COMMIT"
+    printf 'format=2\nlane=%s\nplatform=%s\nbuilder_commit=%s\nbuilder_tree_clean=%s\n' \
+      "$lane" "$PLATFORM" "$MAC_IMAGE_BUILDER_COMMIT" "$MAC_IMAGE_BUILDER_CLEAN"
     for key in candidate_set candidate_source_commit candidate_signer candidate_receipt_sha256 \
       candidate_manifest_sha256 omarchy_channel; do
       printf '%s=%s\n' "$key" "$(field "$key")"

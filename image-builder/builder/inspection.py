@@ -160,18 +160,26 @@ def m1n1_stage2(root: Path, candidates: Candidates, report: dict) -> str:
 
 
 def m1n1_options(root: Path) -> bytes:
-    """What update-m1n1 appends from the image's /etc/m1n1.conf."""
+    """What update-m1n1 appends from the image's /etc/m1n1.conf: sh's `read line`
+    drops an unterminated last line, strips blanks and removes backslashes."""
     config = root / "etc/m1n1.conf"
     if not config.exists() and not config.is_symlink():
         return b""
-    lines = [line.strip() for line in limine.regular(config).decode().splitlines()]
-    return "".join(line + "\n" for line in lines if M1N1_OPTION.fullmatch(line)).encode()
+    text = limine.regular(config).decode()
+    text = re.sub(r"\\\n", "", text)
+    lines = text.split("\n")[:-1]
+    kept = []
+    for line in lines:
+        line = re.sub(r"\\(.)", r"\1", line).strip(" \t")
+        if M1N1_OPTION.fullmatch(line):
+            kept.append(line + "\n")
+    return "".join(kept).encode()
 
 
 def extract(candidates: Candidates, name: str, into: Path) -> Path:
     destination = into / name
     destination.mkdir()
-    subprocess.run(["bsdtar", "-xf", str(candidates.archive(name)), "-C", str(destination),
+    subprocess.run(["bsdtar", "-xpf", str(candidates.archive(name)), "-C", str(destination),
                     "--exclude", ".PKGINFO", "--exclude", ".BUILDINFO", "--exclude", ".MTREE",
                     "--exclude", ".INSTALL", "--exclude", ".CHANGELOG"], check=True)
     return destination
@@ -186,19 +194,22 @@ def check_candidate_files(root: Path, candidates: Candidates, report: dict) -> s
             for directory, _, files in os.walk(unpacked):
                 for file in files:
                     source = Path(directory, file)
-                    if source.is_symlink():
-                        continue
                     relative = source.relative_to(unpacked)
                     installed = root / relative
                     counts += 1
-                    if (installed.is_symlink() or not installed.is_file()
+                    if source.is_symlink():
+                        if not installed.is_symlink() or os.readlink(installed) != os.readlink(source):
+                            changed.append(f"/{relative} ({name}, link)")
+                    elif (installed.is_symlink() or not installed.is_file()
                             or installed.stat().st_size != source.stat().st_size
                             or installed.read_bytes() != source.read_bytes()):
                         changed.append(f"/{relative} ({name})")
+                    elif stat.S_IMODE(installed.stat().st_mode) & 0o7555 != stat.S_IMODE(source.stat().st_mode) & 0o7555:
+                        changed.append(f"/{relative} ({name}, mode)")
             subprocess.run(["rm", "-rf", str(unpacked)], check=True)
     report["candidate_files"] = counts
     require(not changed, f"{len(changed)} files differ from the set: " + ", ".join(sorted(changed)[:12]))
-    return f"all {counts} files of the {len(candidates.packages)} set packages carry the set's bytes"
+    return f"all {counts} files and links of the {len(candidates.packages)} set packages carry the set's bytes and modes"
 
 
 def mtree_digests(root: Path, package: str) -> dict[str, str]:

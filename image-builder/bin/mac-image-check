@@ -603,7 +603,8 @@ def check_descriptor(lane: str, directory: Path) -> None:
     require(fields.get("format") == ["2"], "IMAGE is not format=2")
     require(fields.get("lane") == [lane], f"IMAGE does not describe a {lane} image")
     require(fields.get("platform") == [PLATFORM], f"IMAGE does not describe an {PLATFORM} image")
-    for key in (*IMAGE_INPUTS, "input_digest", "package_set_sha256", "hardware_setup", "builder_commit"):
+    for key in (*IMAGE_INPUTS, "input_digest", "package_set_sha256", "hardware_setup", "builder_commit",
+                "builder_tree_clean"):
         once(fields, key, "IMAGE")
     inputs = directory / "inputs"
     provenance = directory / "PROVENANCE"
@@ -617,7 +618,7 @@ def check_descriptor(lane: str, directory: Path) -> None:
     digest = file_sha256(inputs)
     require(fields["input_digest"] == [digest], "IMAGE input_digest does not match the inputs record")
     require(provenance_fields.get("inputs_sha256") == [digest], "IMAGE input_digest does not match PROVENANCE")
-    for key in ("package_set_sha256", "hardware_setup", "builder_commit"):
+    for key in ("package_set_sha256", "hardware_setup", "builder_commit", "builder_tree_clean"):
         require(provenance_fields.get(key) == fields[key], f"IMAGE {key} does not match PROVENANCE")
     payload = payload_in(directory, lane)
     installer_data = directory / "installer_data.json"

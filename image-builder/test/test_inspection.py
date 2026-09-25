@@ -110,6 +110,14 @@ class InspectionTest(unittest.TestCase):
                 (self.root / rel).write_bytes(b"#!/bin/bash\nexit 0\n")
                 self.assertFails("candidate-files", re.escape(rel))
 
+    def test_a_set_file_with_another_mode_or_link(self):
+        (self.root / "usr/lib/omarchy/initcpio/omarchy-mac-encrypt").chmod(0o644)
+        self.assertFails("candidate-files", "omarchy-mac-encrypt.*mode")
+
+    def test_m1n1_options_as_update_m1n1_reads_them(self):
+        (self.root / "etc/m1n1.conf").write_text("chosen.asahi,efi-system-partition=EFI\ndisplay=1920x1080")
+        self.assertEqual(self.inspect()["checks"]["m1n1-stage2"]["result"], "passed")
+
     def test_a_set_file_missing(self):
         (self.root / "usr/share/omarchy-mac/source-revision").unlink()
         self.assertFails("candidate-files", "source-revision")

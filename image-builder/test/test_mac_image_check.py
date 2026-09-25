@@ -79,7 +79,7 @@ def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="pas
     (out / "INSPECTION").write_text(json.dumps({"result": inspection}))
     (out / "inputs").write_text("format=2\n" + "".join(f"{k}={v}\n" for k, v in INPUTS.items()))
     lines = ["format=2", "kind=mac-image", "lane=edge", "kernel=linux-aurora", "platform=apple-silicon",
-             "builder_commit=" + "c" * 40, f"inputs_sha256={sha(out / 'inputs')}"]
+             "builder_commit=" + "c" * 40, "builder_tree_clean=true", f"inputs_sha256={sha(out / 'inputs')}"]
     lines += [f"input.{k}={v}" for k, v in INPUTS.items()]
     lines += [f"candidate={n}|{v}|{f}|{s}" for n, v, _, f, s in candidates]
     lines += ["hardware_setup=build", f"package_set_sha256={package_set(packages)}", f"package_count={len(packages)}"]
@@ -88,7 +88,7 @@ def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="pas
               f"payload={NAME}|{zip_path.stat().st_size}|{sha(zip_path)}"]
     (out / "PROVENANCE").write_text("\n".join(lines) + "\n")
     digests = check.check_payload("edge", zip_path, out / "installer_data.json")
-    image = ["format=2", "lane=edge", "platform=apple-silicon", "builder_commit=" + "c" * 40,
+    image = ["format=2", "lane=edge", "platform=apple-silicon", "builder_commit=" + "c" * 40, "builder_tree_clean=true",
              *[f"{k}={v}" for k, v in INPUTS.items()],
              "hardware_setup=build", f"package_set_sha256={package_set(packages)}",
              *[f"image_sha256={m}|{d}" for m, d in sorted(digests.items())], f"input_digest={sha(out / 'inputs')}"]
@@ -132,6 +132,12 @@ class BuildDirectoryTest(unittest.TestCase):
         build(self.out, image_edit=lambda lines: [("builder_commit=" + "d" * 40) if l.startswith("builder_commit")
                                                   else l for l in lines])
         with self.assertRaisesRegex(check.CheckError, "builder_commit"):
+            check.check_descriptor("edge", self.out)
+
+    def test_image_from_an_uncommitted_tree_says_so(self):
+        build(self.out, image_edit=lambda lines: [l.replace("builder_tree_clean=true", "builder_tree_clean=false")
+                                                  for l in lines])
+        with self.assertRaisesRegex(check.CheckError, "builder_tree_clean"):
             check.check_descriptor("edge", self.out)
 
     def test_image_names_another_package_set(self):

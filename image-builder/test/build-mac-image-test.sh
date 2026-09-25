@@ -88,7 +88,10 @@ resolution=good
 target_pacman() {
   local name
   if [[ $1 == -Sp && $3 == x ]]; then
-    [[ $4 != obs-studio ]]
+    case $4 in
+      obs-studio) echo "error: target not found: obs-studio"; return 1 ;;
+      broken) echo "error: failed to prepare transaction (could not satisfy dependencies)"; return 1 ;;
+    esac
     return
   fi
   printf '%s\n' "$@" >"$scratch/requested"
@@ -115,12 +118,27 @@ done
 grep -Fxq hyprland "$scratch/requested" && ! grep -Fxq obs-studio "$scratch/requested" ||
   fail "the pre-check resolves the base names the repositories carry, and only those"
 pass "the pre-check passes a set that resolves from itself and records base names the repositories lack"
+runtime_list() {
+  case $1 in
+    base) printf 'hyprland\nbroken\n' ;;
+    apple) printf 'omarchy-mac\nomarchy-mac-boot\n' ;;
+  esac
+}
+if (fail() { builder_fail "$@"; }; precheck_transaction) >/dev/null 2>&1; then
+  fail "the pre-check drops a base name that exists but does not resolve"
+fi
+runtime_list() {
+  case $1 in
+    base) printf 'hyprland\nobs-studio\n' ;;
+    apple) printf 'omarchy-mac\nomarchy-mac-boot\n' ;;
+  esac
+}
 for resolution in stolen refused; do
   if (fail() { builder_fail "$@"; }; precheck_transaction) >/dev/null 2>&1; then
     fail "the pre-check accepts a $resolution resolution"
   fi
 done
-pass "the pre-check refuses a set package resolved elsewhere, and a refused package"
+pass "the pre-check refuses a set package resolved elsewhere, a refused package, and a base name that does not resolve"
 
 # ── install order ──────────────────────────────────────────────────────────
 target=$scratch/target
@@ -181,7 +199,7 @@ pass "first boot is armed by the boot package, with deferred-steps only for the 
 # ── desktop automounters ───────────────────────────────────────────────────
 if ((EUID != 0)); then
   sudo() { return 1; }
-  pgrep() { [[ $* == "-x udiskie" ]]; }
+  pgrep() { [[ $2 == *udiskie* ]]; }
   if (fail() { builder_fail "$@"; }; hide_loop_devices) >/dev/null 2>&1; then
     fail "a build without root or passwordless sudo runs beside a desktop automounter"
   fi
