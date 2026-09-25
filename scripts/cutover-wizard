@@ -191,10 +191,12 @@ REPO_DIR="$APP_DIR"
 WORK_DIR="${OMARCHY_CUTOVER_WORK:-$HOME/omarchy-cutover}"
 ENV_FILE="$WORK_DIR/cutover-state.env"
 
-KEY_SERVICE="omarchy-channel-signing-key"
-PUBLIC_BASE="https://downloads.aicodelabs.com.au"
-R2_BUCKET="omarchy-releases"
-R2_ENDPOINT="https://ab85a8b9d88f084e66bf9d4a8ee5cf66.r2.cloudflarestorage.com"
+# shellcheck source=../Packaging/identity.conf
+source "$APP_DIR/Packaging/identity.conf"
+KEY_SERVICE="$INSTALLER_CATALOG_KEY_SERVICE"
+PUBLIC_BASE="$INSTALLER_PUBLIC_BASE"
+R2_BUCKET="$INSTALLER_R2_BUCKET"
+R2_ENDPOINT="$INSTALLER_R2_ENDPOINT"
 SOURCE_TAG="v4.0.2-mac.1.19.090426"
 OS_TAG="os-v4.0.2-mac.1.20260902"
 APP_VERSION="2.0.1"
@@ -203,8 +205,8 @@ PAYLOAD="omarchy-2026.09.02-aarch64-apple-silicon-asahi-os-package.zip"
 ENGINE="installer-v0.9.0-omarchy.14.tar.gz"
 METADATA="installer_data.json"
 PAYLOAD_SOURCE="${OMARCHY_OS_PAYLOAD:-$REPO_DIR/../omarchy-iso/release/$PAYLOAD}"
-SIGN_ID="Developer ID Application: MARCELO DE BARROS ALCANTARA (T2C384FJBD)"
-TEAM_ID="T2C384FJBD"
+SIGN_ID="$INSTALLER_APP_SIGNING_IDENTITY"
+TEAM_ID="$INSTALLER_TEAM_ID"
 NOTARY_PROFILE="omarchy-notary"
 
 mkdir -p "$WORK_DIR"
@@ -455,7 +457,7 @@ pause
 
 # ── 6 ─────────────────────────────────────────────────────────────────────
 stage "Build and notarize the app"
-BUILT_APP="$WORK_DIR/app/Omarchy MX Mac Installer.app"
+BUILT_APP="$WORK_DIR/app/$INSTALLER_APP_NAME.app"
 
 # Notarization is slow and costs an Apple round trip, so an app that is already
 # built, stapled and at the right version is reused rather than made again.
@@ -486,7 +488,7 @@ pause
 
 # ── 7 ─────────────────────────────────────────────────────────────────────
 stage "Build, notarize and staple the package"
-PKG="$WORK_DIR/Omarchy-MX-Mac-Installer-$APP_VERSION.pkg"
+PKG="$WORK_DIR/$INSTALLER_FILE_STEM-$APP_VERSION.pkg"
 rm -f "$PKG"
 # No --plist: the builder derives the daemon plist from the one the app embeds,
 # rewriting its bundle-relative program into an absolute path under
@@ -527,13 +529,13 @@ step "On the M1, run the preclean if Omarchy is still installed:"
 note "  bash $APP_DIR/scripts/preclean-m1.sh        (dry run first)"
 note "  bash $APP_DIR/scripts/preclean-m1.sh --confirm"
 step "Download the BETA package on the M1:"
-note "  $PUBLIC_BASE/installer/rc/Omarchy-MX-Mac-Installer.pkg"
-step "Confirm the saved file is named \"Omarchy MX Mac Installer.pkg\"."
+note "  $PUBLIC_BASE/installer/rc/$INSTALLER_FILE_STEM.pkg"
+step "Confirm the saved file is named \"$INSTALLER_APP_NAME.pkg\"."
 step "Check it before opening:"
-note "  spctl -a -vv -t install ~/Downloads/\"Omarchy MX Mac Installer.pkg\""
+note "  spctl -a -vv -t install ~/Downloads/\"$INSTALLER_APP_NAME.pkg\""
 step "Install it, then confirm the receipt and the helper:"
-note "  pkgutil --pkg-info com.omarchy.mx.installer.pkg     (expect $APP_VERSION)"
-note "  sudo launchctl print system/com.omarchy.mx.installer.helper | head"
+note "  pkgutil --pkg-info $INSTALLER_PKG_IDENTIFIER     (expect $APP_VERSION)"
+note "  sudo launchctl print system/$INSTALLER_HELPER_IDENTIFIER | head"
 step "Switch the app to rc: menu bar > Release Channel > RC."
 step "Confirm the BETA banner and badge appear, and the catalog verifies."
 step "Complete an install, boot Omarchy, then run: omarchy debug apple"
@@ -567,7 +569,7 @@ if confirm "Promote the installer and the catalog to stable?"; then
   say "The public download now serves $APP_VERSION:"
   run curl -fsSLI -o /dev/null \
     -w '  HTTP %{http_code}  %{size_download} bytes\n' \
-    "$PUBLIC_BASE/installer/stable/Omarchy-MX-Mac-Installer.pkg"
+    "$PUBLIC_BASE/installer/stable/$INSTALLER_FILE_STEM.pkg"
 fi
 
 finish

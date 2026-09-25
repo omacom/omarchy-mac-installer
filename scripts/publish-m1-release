@@ -2,9 +2,12 @@
 
 set -euo pipefail
 
+# shellcheck source=../Packaging/identity.conf
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../Packaging" && pwd)/identity.conf"
+
 DEFAULT_SPLIT_BYTES=1992294400
 MAXIMUM_PART_COUNT=16
-RELEASE_LOGIN="maralcbr"
+RELEASE_LOGIN="$INSTALLER_GITHUB_RELEASE_LOGIN"
 
 usage() {
   cat >&2 <<'EOF'

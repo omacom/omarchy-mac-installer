@@ -7,8 +7,10 @@ fail() {
   exit 1
 }
 
+source "$(cd "$(dirname "$0")" && pwd -P)/identity.conf"
+
 (( $# == 1 )) \
-  || fail "usage: notarize-app.sh '/absolute/path/Omarchy MX Mac Installer.app'"
+  || fail "usage: notarize-app.sh '/absolute/path/$INSTALLER_APP_NAME.app'"
 
 app_path="$1"
 notary_profile="${OMARCHY_NOTARY_PROFILE:-}"
@@ -29,7 +31,7 @@ signing_details="$(codesign -d --verbose=4 "$app_path" 2>&1)"
 
 archive_root="$(mktemp -d /private/tmp/omarchy-notary.XXXXXX)"
 trap 'rm -rf "$archive_root"' EXIT
-archive_path="$archive_root/Omarchy-MX-Mac-Installer.zip"
+archive_path="$archive_root/$INSTALLER_FILE_STEM.zip"
 
 ditto -c -k --keepParent "$app_path" "$archive_path"
 xcrun notarytool submit "$archive_path" \

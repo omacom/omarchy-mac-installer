@@ -5,6 +5,8 @@
 
   @testable import OmarchyAppleInstallerTrustCore
 
+  private let helper = InstallerProductIdentity.helperIdentifier
+
   final class InstallerReleaseConfigurationTests: XCTestCase {
     func testStrictDescriptorLoadsAppOwnedTrustAndHelperIdentity() throws {
       let key = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
@@ -58,7 +60,7 @@
       let key = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
       let twoChannel = Data(
         """
-        {"schema_version":2,"default_channel":"stable","channels":{"stable":{"catalog_url":"https://releases.omarchy.example/channels/stable/catalog.signed.json"},"rc":{"catalog_url":"https://releases.omarchy.example/channels/rc/catalog.signed.json"}},"trust_root_fingerprint":"\(digest(key))","helper_mach_service_name":"com.omarchy.mx.installer.helper","helper_code_signing_requirement":"identifier \\"com.omarchy.mx.installer.helper\\""}
+        {"schema_version":2,"default_channel":"stable","channels":{"stable":{"catalog_url":"https://releases.omarchy.example/channels/stable/catalog.signed.json"},"rc":{"catalog_url":"https://releases.omarchy.example/channels/rc/catalog.signed.json"}},"trust_root_fingerprint":"\(digest(key))","helper_mach_service_name":"\(helper)","helper_code_signing_requirement":"identifier \\"\(helper)\\""}
         """.utf8
       )
 
@@ -79,7 +81,7 @@
       let key = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
       let legacy = Data(
         """
-        {"schema_version":1,"catalog_url":"https://releases.omarchy.example/apple/catalog.json","catalog_signature_url":"https://releases.omarchy.example/apple/catalog.json.sig","trust_root_fingerprint":"\(digest(key))","helper_mach_service_name":"com.omarchy.mx.installer.helper","helper_code_signing_requirement":"identifier \\"com.omarchy.mx.installer.helper\\""}
+        {"schema_version":1,"catalog_url":"https://releases.omarchy.example/apple/catalog.json","catalog_signature_url":"https://releases.omarchy.example/apple/catalog.json.sig","trust_root_fingerprint":"\(digest(key))","helper_mach_service_name":"\(helper)","helper_code_signing_requirement":"identifier \\"\(helper)\\""}
         """.utf8
       )
 
@@ -503,7 +505,7 @@
     private func descriptor(fingerprint: String) -> Data {
       Data(
         """
-        {"schema_version":3,"default_channel":"stable","channels":{"stable":{"catalog_url":"https://releases.omarchy.example/channels/stable/catalog.signed.json"},"rc":{"catalog_url":"https://releases.omarchy.example/channels/rc/catalog.signed.json"},"rc-aurora":{"catalog_url":"https://releases.omarchy.example/channels/rc-aurora/catalog.signed.json"}},"trust_root_fingerprint":"\(fingerprint)","helper_mach_service_name":"com.omarchy.mx.installer.helper","helper_code_signing_requirement":"identifier \\"com.omarchy.mx.installer.helper\\""}
+        {"schema_version":3,"default_channel":"stable","channels":{"stable":{"catalog_url":"https://releases.omarchy.example/channels/stable/catalog.signed.json"},"rc":{"catalog_url":"https://releases.omarchy.example/channels/rc/catalog.signed.json"},"rc-aurora":{"catalog_url":"https://releases.omarchy.example/channels/rc-aurora/catalog.signed.json"}},"trust_root_fingerprint":"\(fingerprint)","helper_mach_service_name":"\(helper)","helper_code_signing_requirement":"identifier \\"\(helper)\\""}
         """.utf8
       )
     }

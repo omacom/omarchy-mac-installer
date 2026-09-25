@@ -22,7 +22,9 @@ install_location=${3:-/Applications}
   exit 65
 }
 
-embedded="$app/Contents/Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist"
+# shellcheck source=../identity.conf
+source "$(cd "$(dirname "$0")/.." && pwd)/identity.conf"
+embedded="$app/Contents/Library/LaunchDaemons/$INSTALLER_HELPER_IDENTIFIER.plist"
 [[ -f $embedded ]] || {
   echo "derive-daemon-plist: embedded daemon plist is missing: $embedded" >&2
   exit 66

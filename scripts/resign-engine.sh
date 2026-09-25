@@ -17,7 +17,9 @@ set -euo pipefail
 SRC=$(cd -- "$(dirname -- "$1")" && pwd -P)/$(basename -- "$1")
 NEW_NAME=$2
 OUT_DIR=$3
-IDENTITY=${OMARCHY_APP_SIGNING_IDENTITY:-"Developer ID Application: MARCELO DE BARROS ALCANTARA (T2C384FJBD)"}
+# shellcheck source=../Packaging/identity.conf
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../Packaging" && pwd -P)/identity.conf"
+IDENTITY=${OMARCHY_APP_SIGNING_IDENTITY:-"$INSTALLER_APP_SIGNING_IDENTITY"}
 # Resolved before any cd: the entitlements the interpreter and its helper
 # executables must keep (see the signing loop below).
 ENTITLEMENTS=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../Engine" && pwd -P)/python-executable.entitlements.plist

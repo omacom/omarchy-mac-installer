@@ -10,6 +10,8 @@ set -uo pipefail
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
 readonly PRECLEAN="$script_dir/../preclean-m1.sh"
+source "$script_dir/../../Packaging/identity.conf"
+export INSTALLER_APP_IDENTIFIER INSTALLER_APP_NAME
 [[ -x $PRECLEAN || -f $PRECLEAN ]] || { echo "cannot find preclean-m1.sh" >&2; exit 1; }
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/preclean-test.XXXXXX")
@@ -54,8 +56,8 @@ case $op in
   identity) printf 'mina\nMacBookPro18,3\n' ;;
   partitions) cat "$SHIM_DATA_DIR/partitions.tsv" ;;
   containers) cat "$SHIM_DATA_DIR/containers.tsv" ;;
-  app-support) printf 'present\t2048\t/Users/mina/Library/Application Support/com.omarchy.mx.installer\n' ;;
-  old-apps) printf '/Applications/Omarchy MX Mac Installer.app\n' ;;
+  app-support) printf 'present\t2048\t/Users/mina/Library/Application Support/%s\n' "$INSTALLER_APP_IDENTIFIER" ;;
+  old-apps) printf '/Applications/%s.app\n' "$INSTALLER_APP_NAME" ;;
   recheck) printf '%s\n' "${SHIM_RECHECK_NAME:-}" ;;
   exists)
     for absent in ${SHIM_ABSENT_UUIDS:-}; do

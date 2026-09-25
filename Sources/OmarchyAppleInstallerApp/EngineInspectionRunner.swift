@@ -31,7 +31,7 @@ struct EngineInspectionRunner: Sendable {
 
   private func scratchDirectory() throws -> URL {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "com.omarchy.mx.installer-engine",
+      InstallerProductIdentity.appIdentifier + "-engine",
       isDirectory: true
     )
     if !FileManager.default.fileExists(atPath: directory.path) {

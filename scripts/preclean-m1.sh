@@ -29,6 +29,9 @@
 
 set -uo pipefail
 
+# shellcheck source=../Packaging/identity.conf
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../Packaging" && pwd)/identity.conf" || exit 1
+
 readonly DEFAULT_HOST="omarchy-m1-thunderbolt"
 readonly EXPECTED_USER="mina"
 readonly EXPECTED_MODEL="MacBookPro18,3"
@@ -37,8 +40,9 @@ readonly EXPECTED_INTERFACE="bridge0"
 readonly OMARCHY_EFI_NAME="EFI - OMARC"
 readonly OMARCHY_VOLUME_NAME="Omarchy"
 readonly MACOS_VOLUME_NAME="Macintosh HD"
-readonly APP_SUPPORT_ID="com.omarchy.mx.installer"
-readonly APP_BUNDLE_NAME="Omarchy MX Mac Installer.app"
+readonly APP_SUPPORT_ID="$INSTALLER_APP_IDENTIFIER"
+readonly APP_BUNDLE_NAME="$INSTALLER_APP_NAME.app"
+readonly APP_ARCHIVE_STEM="$INSTALLER_FILE_STEM"
 
 # Volume names and partition types that must never appear in a deletion plan.
 readonly PROTECTED_NAME_PATTERN='^(Macintosh HD|Macintosh HD - Data|Recovery|Preboot|VM|Update|xART|iSCPreboot|Hardware)$'
@@ -199,8 +203,9 @@ REMOTE
 }
 
 app_support_command() {
+  printf 'app_support_id=%q\n' "$APP_SUPPORT_ID"
   cat <<'REMOTE'
-base="$HOME/Library/Application Support/com.omarchy.mx.installer"
+base="$HOME/Library/Application Support/$app_support_id"
 if [ -d "$base" ] && [ ! -L "$base" ]; then
   /usr/bin/du -sk "$base" | /usr/bin/awk -v p="$base" '{ printf "present\t%s\t%s\n", $1, p }'
 else
@@ -210,17 +215,19 @@ REMOTE
 }
 
 old_apps_command() {
+  printf 'app_bundle_name=%q\n' "$APP_BUNDLE_NAME"
+  printf 'app_archive_stem=%q\n' "$APP_ARCHIVE_STEM"
   cat <<'REMOTE'
 for candidate in \
-  "/Applications/Omarchy MX Mac Installer.app" \
-  "$HOME/Downloads/Omarchy MX Mac Installer.app" \
+  "/Applications/$app_bundle_name" \
+  "$HOME/Downloads/$app_bundle_name" \
   "$HOME/Downloads/__MACOSX"
 do
   if [ -e "$candidate" ] && [ ! -L "$candidate" ]; then
     printf '%s\n' "$candidate"
   fi
 done
-/usr/bin/find "$HOME/Downloads" -maxdepth 1 -type f -name 'Omarchy-MX-Mac-Installer-*.zip' -print 2>/dev/null
+/usr/bin/find "$HOME/Downloads" -maxdepth 1 -type f -name "$app_archive_stem-*.zip" -print 2>/dev/null
 REMOTE
 }
 
@@ -573,7 +580,7 @@ clean_macos_state() {
     while IFS= read -r path; do
       [[ -n $path ]] || continue
       case $path in
-        */"$APP_BUNDLE_NAME"|*/Omarchy-MX-Mac-Installer-*.zip|*/__MACOSX) ;;
+        */"$APP_BUNDLE_NAME"|*/"$APP_ARCHIVE_STEM"-*.zip|*/__MACOSX) ;;
         *) die "refusing to remove an unexpected path: $path" ;;
       esac
       # The installer package installs the app root-owned in /Applications;
@@ -590,8 +597,8 @@ clean_macos_state() {
 
   echo
   echo "  NOT done here (owner step, needs sudo, changes system state):"
-  echo "    sudo launchctl bootout system/$APP_SUPPORT_ID.helper"
-  echo "    sudo rm -f /Library/LaunchDaemons/$APP_SUPPORT_ID.helper.plist"
+  echo "    sudo launchctl bootout system/$INSTALLER_HELPER_IDENTIFIER"
+  echo "    sudo rm -f /Library/LaunchDaemons/$INSTALLER_HELPER_IDENTIFIER.plist"
   echo "  A fresh notarized app re-registers its own helper on first launch;"
   echo "  only unregister by hand if a stale registration blocks the run."
 }
