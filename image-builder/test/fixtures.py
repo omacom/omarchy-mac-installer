@@ -345,8 +345,8 @@ def make_root(root: Path, candidates: Path) -> None:
     owners.setdefault("limine", []).append("usr/share/limine/BOOTAA64.EFI")
     versions = {p["name"]: p["version"] for p in summary["packages"]}
     others = {name: "1.0-1" for name in ("limine", "limine-snapper-sync", "asahi-fwextract", "speakersafetyd",
-                                         "alsa-ucm-conf-asahi", "asahi-audio", "iwd", "networkmanager", "bluez",
-                                         "wireplumber")}
+                                         "alsa-ucm-conf-asahi", "asahi-audio", "vulkan-asahi", "asahi-bless", "iwd",
+                                         "networkmanager", "bluez", "wireplumber")}
     for name, version in {**versions, **others}.items():
         local_package(root, name, version, owners.get(name, []))
     state = root / "var/lib/omarchy"

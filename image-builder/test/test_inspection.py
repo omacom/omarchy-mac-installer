@@ -271,6 +271,14 @@ class InspectionTest(unittest.TestCase):
                 report = self.assertFails("installed-system", "packages-required-present")
                 self.assertIn(name, report["installed_system"]["packages-required-present"]["detail"])
 
+    def test_first_boot_packages_missing(self):
+        for name in ("vulkan-asahi", "asahi-bless"):
+            with self.subTest(name):
+                self.setUp()
+                shutil.rmtree(next((self.root / "var/lib/pacman/local").glob(f"{name}-1.0-1")))
+                report = self.assertFails("installed-system", "packages-required-present")
+                self.assertIn(name, report["installed_system"]["packages-required-present"]["detail"])
+
     def test_bluetooth_enabled_by_a_deferred_hardware_step(self):
         (self.root / "etc/systemd/system/dbus-org.bluez.service").unlink()
         report = self.assertFails("installed-system", "unit-enabled-bluetooth")
