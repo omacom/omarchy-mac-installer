@@ -341,6 +341,35 @@ class InspectionTest(unittest.TestCase):
                 change(self.root / rel)
                 self.assertFails("first-boot", pattern)
 
+    def test_first_boot_never_adds_the_unsigned_repository(self):
+        fixtures.write(self.root, "var/lib/omarchy/image/deferred-steps",
+                       "install/hardware/vulkan.sh\ninstall/hardware/apple/pacman.sh\ninstall/hardware/apple/audio.sh\n")
+        fixtures.write(self.root, "usr/bin/omarchy-provision-hardware", "#!/bin/bash\n", 0o755)
+        (self.root / "etc/systemd/system/multi-user.target.wants/omarchy-provision-hardware.service").symlink_to(
+            "/etc/systemd/system/omarchy-provision-hardware.service")
+        self.assertFails("first-boot", "unsigned \\[omarchy-aarch64\\]")
+        fixtures.write(self.root, "var/lib/omarchy/image/deferred-steps",
+                       "install/hardware/vulkan.sh\ninstall/hardware/apple/audio.sh\n")
+        report = self.inspect()
+        self.assertEqual(report["checks"]["first-boot"]["result"], "passed", report["checks"]["first-boot"])
+
+    def test_installed_pacman_config_trusts_no_unsigned_repository(self):
+        conf = self.root / "etc/pacman.conf"
+        good = conf.read_text()
+        for name, extra, check in (
+                ("fork repository", "\n[omarchy-aarch64]\nServer = https://github.com/omarchy-mac/"
+                 "omarchy-pkgs-aarch64/releases/download/edge\n", "pacman-no-fork-or-build-repositories"),
+                ("TrustAll", "\n[extra-trust]\nSigLevel = Optional TrustAll\nServer = https://example.invalid\n",
+                 "pacman-no-trust-all")):
+            with self.subTest(name):
+                conf.write_text(good + extra)
+                report = self.assertFails("installed-system", check)
+                self.assertEqual(report["installed_system"][check]["result"], "failed")
+        conf.write_text(good + "\n# SigLevel = Optional TrustAll\n")
+        report = self.inspect()
+        self.assertEqual(report["installed_system"]["pacman-no-trust-all"]["result"], "passed",
+                         report["installed_system"]["pacman-no-trust-all"])
+
     def test_pacman_config_is_the_runtimes(self):
         (self.root / "etc/pacman.conf").write_text("[omarchy-candidates]\nServer = file:///work/repos\n")
         self.assertFails("pacman-config", "pacman.conf")

@@ -37,9 +37,9 @@ A build takes about 15 minutes and 25 GB of disk. On a host with a desktop sessi
 - the initramfs the UKI embeds carries the boot package's encryption and vendor firmware units and their activation links
 - the unlock screen is Plymouth's `omarchy` theme, in the image and in the UKI's initramfs, and the UKI's command line has `quiet splash plymouth.ignore-serial-consoles`
 - the pacman hooks that rebuild the UKI and redeploy Limine come from their packages, the Apple gate included
-- the image-target manifest, first boot, owner provisioning, the Limine gate and the fresh-image `deferred-steps` contract
+- the image-target manifest, first boot, owner provisioning, the Limine gate and the fresh-image `deferred-steps` contract; the hardware queue never runs an older runtime's `install/hardware/apple/pacman.sh`, which adds the unsigned `[omarchy-aarch64]`
 - `/.snapshots` is an empty btrfs subvolume under snapper's root configuration, or absent with a deferred hardware step queued to create it; a plain directory fails
-- the installed pacman configuration is the runtime's Apple Silicon template for the channel (`default/pacman/apple-silicon`, or `aarch64` on an older runtime) with the aarch64 mirror list, as the runtime stages it on a Mac, plus the test image's pin below, and the installed-system checks (`builder/verify_installed_system.py`) pass, `alsa-ucm-conf-asahi`, `asahi-audio`, `vulkan-asahi` and `asahi-bless` included; Bluetooth counts as enabled when its hardware step is queued for first boot
+- the installed pacman configuration is the runtime's Apple Silicon template for the channel (`default/pacman/apple-silicon`, or `aarch64` on an older runtime) with the aarch64 mirror list, as the runtime stages it on a Mac, plus the test image's pin below, and the installed-system checks (`builder/verify_installed_system.py`) pass, `alsa-ucm-conf-asahi`, `asahi-audio`, `vulkan-asahi` and `asahi-bless` included, and no `[omarchy-aarch64]` section or `TrustAll` SigLevel; Bluetooth counts as enabled when its hardware step is queued for first boot
 - `@factory` is sealed for the set without fresh-image or owner state
 
 `bin/mac-image-check` also holds the payload to the installer engine's contract and checks `PROVENANCE` and `IMAGE` against the bytes beside them.
@@ -63,7 +63,7 @@ Inspection is not boot qualification. After the owner's first login on the Mac, 
 
 ## Checks
 
-`bash image-builder/test/all` runs the source checks: the importer against signed fixture sets (tampering, a foreign key, a key that travels with the set, missing and refused packages, closure and channel packages and their sources, versions below a minimum, a file with two owners, a runtime package from another commit), the inspection against fixture images (every boot component missing or mismatched, a set file rewritten, a wrong `@factory`, a `bgrt` or missing splash, a flattened `/.snapshots`, a missing speaker stack, Vulkan driver or `asahi-bless`, a missing or different test image pin), the inputs record and the builder's own decisions. They need Bash 5, Python 3.11 or newer, GnuPG, jq and bsdtar, and no container, network or root.
+`bash image-builder/test/all` runs the source checks: the importer against signed fixture sets (tampering, a foreign key, a key that travels with the set, missing and refused packages, closure and channel packages and their sources, versions below a minimum, a file with two owners, a runtime package from another commit), the inspection against fixture images (every boot component missing or mismatched, a set file rewritten, a wrong `@factory`, a `bgrt` or missing splash, a flattened `/.snapshots`, a missing speaker stack, Vulkan driver or `asahi-bless`, an unsigned repository in `pacman.conf` or the first-boot queue, a missing or different test image pin), the inputs record and the builder's own decisions. They need Bash 5, Python 3.11 or newer, GnuPG, jq and bsdtar, and no container, network or root.
 
 ## Sources
 
