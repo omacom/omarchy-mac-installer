@@ -61,8 +61,9 @@ class PrivateLimineAssetsTests(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in staged.iterdir()), sorted(p.name for p in self.assets.iterdir()))
         for source in self.assets.iterdir():
             self.assertEqual((staged / source.name).read_bytes(), source.read_bytes())
-        self.assertFalse((home / "Library/Application Support/com.omarchy.mx.installer").exists())
-        self.assertFalse((home / "Library/Application Support/com.omarchy.mx.installer.private-m3-20260922").exists())
+        self.assertFalse((home / "Library/Application Support" / MODULE.APP_IDENTIFIER).exists())
+        self.assertFalse((home / "Library/Application Support" / MODULE.PLAIN_WORKSPACE).exists())
+        self.assertNotIn("@APP_IDENTIFIER@", (self.output / "Stage assets.command").read_text())
 
     def test_ordinary_or_stale_plain_catalog_rejected(self):
         self.document["models"][0]["evidenceRevision"] = "quattro-private-m3-family-1c595bb6030c-20260922"

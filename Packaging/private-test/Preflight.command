@@ -14,7 +14,7 @@ case "$target" in
   j433|j434|j504|j613|j615|j514s|j514c|j514m|j516s|j516c|j516m) ;;
   *) echo "Unsupported private-test hardware: $target. Stop here." >&2; exit 1 ;;
 esac
-for path in '/Applications/Omarchy MX Mac Installer.app' '/Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist' '/Library/PrivilegedHelperTools/com.omarchy.mx.installer.helper' '/var/db/com.omarchy.mx.installer'; do
+for path in "/Applications/@APP_NAME@.app" "/Library/LaunchDaemons/@HELPER_IDENTIFIER@.plist" "/Library/PrivilegedHelperTools/@HELPER_IDENTIFIER@" "/var/db/@APP_IDENTIFIER@"; do
   if [[ -e $path || -L $path ]]; then
     echo "Existing installer state needs review: $path" >&2; exit 1
   fi

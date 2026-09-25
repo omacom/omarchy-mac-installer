@@ -3,14 +3,16 @@
 set -euo pipefail
 (( $# == 2 && EUID != 0 )) || exit 64
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source "$root/Packaging/identity.conf"
+export INSTALLER_APP_NAME INSTALLER_HELPER_IDENTIFIER
 source "$root/Packaging/private-test/code-identity.sh"
 app=$1
 package=$2
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 helper="$app/Contents/Resources/omarchy-apple-installer-helper"
-app_requirement=$(private_code_requirement "$app" com.omarchy.mx.installer)
-helper_requirement=$(private_code_requirement "$helper" com.omarchy.mx.installer.helper)
+app_requirement=$(private_code_requirement "$app" "$INSTALLER_APP_IDENTIFIER")
+helper_requirement=$(private_code_requirement "$helper" "$INSTALLER_HELPER_IDENTIFIER")
 /usr/bin/codesign --verify --deep --strict -R="$app_requirement" "$app"
 /usr/bin/codesign --verify --strict -R="$helper_requirement" "$helper"
 /usr/sbin/pkgutil --expand-full "$package" "$work/expanded"
@@ -26,13 +28,15 @@ import sys
 import xml.etree.ElementTree as ET
 
 expanded, original = map(Path, sys.argv[1:])
-installed = expanded / 'Payload/Applications/Omarchy MX Mac Installer.app'
+helper_id = os.environ['INSTALLER_HELPER_IDENTIFIER']
+installed = expanded / 'Payload/Applications' / (os.environ['INSTALLER_APP_NAME'] + '.app')
+daemon = expanded / 'Payload/Library/LaunchDaemons' / (helper_id + '.plist')
 def files(path):
     return {str(p.relative_to(path)): hashlib.sha256(p.read_bytes()).hexdigest() for p in path.rglob('*') if p.is_file()}
 assert files(installed) == files(original)
-plist = plistlib.loads((expanded / 'Payload/Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist').read_bytes())
-assert plist == {'Label': 'com.omarchy.mx.installer.helper', 'Program': '/Library/PrivilegedHelperTools/com.omarchy.mx.installer.helper', 'MachServices': {'com.omarchy.mx.installer.helper': True}, 'UserName': 'root', 'EnvironmentVariables': {'OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT': os.environ['PRIVATE_TEST_APP_REQUIREMENT']}}
-helper = expanded / 'Payload/Library/PrivilegedHelperTools/com.omarchy.mx.installer.helper'
+plist = plistlib.loads(daemon.read_bytes())
+assert plist == {'Label': helper_id, 'Program': '/Library/PrivilegedHelperTools/' + helper_id, 'MachServices': {helper_id: True}, 'UserName': 'root', 'EnvironmentVariables': {'OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT': os.environ['PRIVATE_TEST_APP_REQUIREMENT']}}
+helper = expanded / 'Payload/Library/PrivilegedHelperTools' / helper_id
 assert helper.read_bytes() == (original / 'Contents/Resources/omarchy-apple-installer-helper').read_bytes()
 assert helper.stat().st_mode & 0o777 == 0o755
 assert helper.parent.stat().st_mode & 0o777 == 0o755
@@ -42,8 +46,8 @@ assert info.attrib['install-location'] == '/'
 descriptor = json.loads((installed / 'Contents/Resources/Release/release.json').read_text())
 assert descriptor['helper_code_signing_requirement'] == os.environ['PRIVATE_TEST_HELPER_REQUIREMENT']
 postinstall = (expanded / 'Scripts/postinstall').read_text()
-assert '@APP_HASH@' not in postinstall and '@HELPER_HASH@' not in postinstall
-assert hashlib.sha256((expanded / 'Payload/Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist').read_bytes()).hexdigest() in postinstall
+assert '@' not in postinstall
+assert hashlib.sha256(daemon.read_bytes()).hexdigest() in postinstall
 assert os.environ['PRIVATE_TEST_APP_REQUIREMENT'] in postinstall
 assert os.environ['PRIVATE_TEST_HELPER_REQUIREMENT'] in postinstall
 print('PASS: exact app/helper payload, daemon pins, postinstall pins and nonrelocatable layout')
@@ -53,10 +57,10 @@ printf 'int main(void) { return 0; }\n' > "$work/impostor.c"
 xcrun clang "$work/impostor.c" -o "$work/impostor"
 for kind in app helper; do
   if [[ $kind == "app" ]]; then
-    identifier=com.omarchy.mx.installer
+    identifier=$INSTALLER_APP_IDENTIFIER
     requirement=$app_requirement
   else
-    identifier=com.omarchy.mx.installer.helper
+    identifier=$INSTALLER_HELPER_IDENTIFIER
     requirement=$helper_requirement
   fi
   /usr/bin/codesign --force --sign - --identifier "$identifier" "$work/impostor"

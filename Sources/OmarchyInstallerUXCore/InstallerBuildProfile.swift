@@ -1,5 +1,6 @@
 #if os(macOS)
   import Foundation
+  import OmarchyAppleInstallerTrustCore
 
   /// Private capability and state isolation are separate from encryption choice.
   public enum InstallerBuildProfile: Equatable, Sendable {
@@ -27,9 +28,9 @@
 
     public var workspaceName: String {
       switch self {
-      case .standard: "com.omarchy.mx.installer"
-      case .privatePlain: "com.omarchy.mx.installer.private-m3-20260922"
-      case .privateLimine: "com.omarchy.mx.installer.private-limine-20260922"
+      case .standard: InstallerProductIdentity.appIdentifier
+      case .privatePlain: InstallerProductIdentity.appIdentifier + ".private-m3-20260922"
+      case .privateLimine: InstallerProductIdentity.appIdentifier + ".private-limine-20260922"
       }
     }
 

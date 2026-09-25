@@ -2,6 +2,8 @@
 # Exercise the packaged guard with fixture hardware and installation paths.
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+source "$root/Packaging/identity.conf"
+export INSTALLER_APP_NAME INSTALLER_APP_IDENTIFIER INSTALLER_HELPER_IDENTIFIER
 python3 - "$root" <<'PY'
 from pathlib import Path
 import os
@@ -9,16 +11,22 @@ import subprocess
 import sys
 import tempfile
 
-source = (Path(sys.argv[1]) / 'Packaging/private-test/scripts/preinstall').read_text()
+root = Path(sys.argv[1])
+app_name, app_id, helper_id = (os.environ[name] for name in ('INSTALLER_APP_NAME', 'INSTALLER_APP_IDENTIFIER', 'INSTALLER_HELPER_IDENTIFIER'))
 with tempfile.TemporaryDirectory() as work:
     work = Path(work)
+    subprocess.run(['bash', str(root / 'Packaging/private-test/render-identity.sh'), str(root / 'Packaging/private-test/scripts/preinstall'), str(work / 'rendered')], check=True)
+    source = (work / 'rendered').read_text()
+    assert '@APP_' not in source and '@HELPER_' not in source
     paths = [work / name for name in ('app', 'daemon', 'helper', 'state')]
-    for original, fixture in zip(('/Applications/Omarchy MX Mac Installer.app', '/Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist', '/Library/PrivilegedHelperTools/com.omarchy.mx.installer.helper', '/var/db/com.omarchy.mx.installer'), paths):
+    for original, fixture in zip((f'/Applications/{app_name}.app', f'/Library/LaunchDaemons/{helper_id}.plist', f'/Library/PrivilegedHelperTools/{helper_id}', f'/var/db/{app_id}'), paths):
+        assert original in source, original
         source = source.replace(original, str(fixture))
     source = source.replace('/Library/PrivilegedHelperTools', str(work / 'privileged'))
     source = source.replace('/usr/sbin/sysctl -n hw.targettype', 'printf "%s\\n" "$TEST_BOARD"')
     source = source.replace('/usr/bin/sw_vers -productVersion', 'printf "%s\\n" "$TEST_MACOS"')
-    source = source.replace('/bin/launchctl print system/com.omarchy.mx.installer.helper', 'test "$TEST_LOADED" = 1')
+    assert f'/bin/launchctl print "system/{helper_id}"' in source
+    source = source.replace(f'/bin/launchctl print "system/{helper_id}"', 'test "$TEST_LOADED" = 1')
     script = work / 'preinstall'
     script.write_text(source)
 

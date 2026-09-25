@@ -24,12 +24,13 @@
       let descriptor: [String: Any] = [
         "schema_version": 3, "default_channel": "rc",
         "channels": Dictionary(
-          uniqueKeysWithValues: ["stable", "rc", "rc-aurora"].map {
+          uniqueKeysWithValues: ["stable", "rc"].map {
             ($0, ["catalog_url": "https://quattro-development.invalid/\($0)/catalog.signed.json"])
           }),
         "trust_root_fingerprint": SHA256Digest(hashing: publicKey).rawValue,
-        "helper_mach_service_name": "com.omarchy.mx.installer.helper",
-        "helper_code_signing_requirement": "identifier \"com.omarchy.mx.installer.helper\"",
+        "helper_mach_service_name": InstallerProductIdentity.helperMachServiceName,
+        "helper_code_signing_requirement":
+          "identifier \"\(InstallerProductIdentity.helperIdentifier)\"",
       ]
       let files = [
         "release.json": try JSONSerialization.data(withJSONObject: descriptor),

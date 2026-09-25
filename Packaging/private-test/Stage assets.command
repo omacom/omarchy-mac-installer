@@ -56,7 +56,7 @@ stage_bundle() {
   local bundle=$1 user_home=$2 path destination name size digest
   owned_directory "$user_home" || return 1
   path=$user_home
-  for name in Library 'Application Support' com.omarchy.mx.installer.private-m3-20260922 staging quattro-private-m3-family-1c595bb6030c-20260922; do
+  for name in Library 'Application Support' @APP_IDENTIFIER@.private-m3-20260922 staging quattro-private-m3-family-1c595bb6030c-20260922; do
     path=$path/$name
     owned_directory "$path" || return 1
   done

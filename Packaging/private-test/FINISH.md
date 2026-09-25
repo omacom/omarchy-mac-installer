@@ -18,7 +18,7 @@ No actual root helper registration or downloaded-package Gatekeeper approval has
 
 The package refuses existing app/helper/state, an already registered service, macOS below 15 and hardware outside the eleven admitted M3 boards. The first Linux boot on the 16-inch M3 Pro remains unqualified. The image is unchanged from the tested 13-inch Air baseline: Asahi, GRUB, software rendering, no Linux encryption. Aurora and encryption/Limine integration are separate.
 
-Create the tester ZIP from the package, the three baseline assets, README.md, Feedback.md, Preflight.command, Stage assets.command, manifest.json and SHA256SUMS. Include no signing keys, credentials, source checkouts or old review packages. Verify the final archive and provide its checksum separately. Do not publish/upload on the user's behalf without their instruction.
+`Preflight.command` and `Stage assets.command` carry identity placeholders; write the copies that go into the tester folder with `bash Packaging/private-test/render-identity.sh SOURCE NEW_DEST`, which fills them from `Packaging/identity.conf`. Create the tester ZIP from the package, the three baseline assets, README.md, Feedback.md, Preflight.command, Stage assets.command, manifest.json and SHA256SUMS. Include no signing keys, credentials, source checkouts or old review packages. Verify the final archive and provide its checksum separately. Do not publish/upload on the user's behalf without their instruction.
 
 ## Separate Limine candidate
 

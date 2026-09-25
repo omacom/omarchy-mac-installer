@@ -2,20 +2,26 @@
 # Exercise the real postinstall with disposable paths and inert system commands.
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+source "$root/Packaging/identity.conf"
+export INSTALLER_APP_NAME INSTALLER_APP_IDENTIFIER INSTALLER_HELPER_IDENTIFIER
 python3 - "$root" <<'PY'
 from pathlib import Path
 import os
 import subprocess
 import sys
 import tempfile
-source = (Path(sys.argv[1]) / 'Packaging/private-test/scripts/postinstall').read_text()
+root = Path(sys.argv[1])
+app_name, helper_id = os.environ['INSTALLER_APP_NAME'], os.environ['INSTALLER_HELPER_IDENTIFIER']
 with tempfile.TemporaryDirectory() as work:
     work = Path(work)
+    subprocess.run(['bash', str(root / 'Packaging/private-test/render-identity.sh'), str(root / 'Packaging/private-test/scripts/postinstall'), str(work / 'rendered')], check=True)
+    source = (work / 'rendered').read_text()
+    assert '@APP_NAME@' not in source and '@APP_IDENTIFIER@' not in source and '@HELPER_IDENTIFIER@' not in source
     source = source.replace('(( EUID == 0 )) || exit 1', '# Unprivileged fixture only')
     source = source.replace('/Library', str(work / 'Library')).replace('/Applications', str(work / 'Applications'))
-    helper = work / 'Library/PrivilegedHelperTools/com.omarchy.mx.installer.helper'
-    plist = work / 'Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist'
-    app = work / 'Applications/Omarchy MX Mac Installer.app'
+    helper = work / 'Library/PrivilegedHelperTools' / helper_id
+    plist = work / 'Library/LaunchDaemons' / f'{helper_id}.plist'
+    app = work / 'Applications' / f'{app_name}.app'
     for path in (helper.parent, plist.parent, app):
         path.mkdir(parents=True, exist_ok=True)
     helper.write_text('fixture helper')
@@ -33,7 +39,7 @@ elif kind == 'shasum':
     print(('wrong' if case == 'plist-hash' else '@PLIST_SHA256@') + '  plist')
 elif kind == 'plutil':
     key = args[1]
-    values = {'Program': os.environ['TEST_HELPER'], 'EnvironmentVariables.OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT': 'identifier "com.omarchy.mx.installer" and cdhash H"@APP_HASH@"', 'Label': 'com.omarchy.mx.installer.helper', 'UserName': 'root'}
+    values = {'Program': os.environ['TEST_HELPER'], 'EnvironmentVariables.OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT': 'identifier "%s" and cdhash H"@APP_HASH@"' % os.environ['INSTALLER_APP_IDENTIFIER'], 'Label': os.environ['INSTALLER_HELPER_IDENTIFIER'], 'UserName': 'root'}
     print('wrong' if case == key else values[key])
 elif kind == 'launchctl':
     with open(os.environ['TEST_TRACE'], 'a') as out:

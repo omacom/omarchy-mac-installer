@@ -1,4 +1,5 @@
 #if os(macOS)
+  import OmarchyAppleInstallerTrustCore
   import XCTest
   @testable import OmarchyInstallerUXCore
 
@@ -8,7 +9,7 @@
       XCTAssertEqual(profile, .standard)
       XCTAssertTrue(profile.allowsEncryption)
       XCTAssertTrue(profile.showsReleaseChannels)
-      XCTAssertEqual(profile.workspaceName, "com.omarchy.mx.installer")
+      XCTAssertEqual(profile.workspaceName, InstallerProductIdentity.appIdentifier)
       XCTAssertTrue(profile.startupSequence.contains("GRUB"))
     }
 
@@ -17,7 +18,8 @@
       XCTAssertEqual(profile, .privatePlain)
       XCTAssertFalse(profile.allowsEncryption)
       XCTAssertFalse(profile.showsReleaseChannels)
-      XCTAssertEqual(profile.workspaceName, "com.omarchy.mx.installer.private-m3-20260922")
+      XCTAssertEqual(
+        profile.workspaceName, InstallerProductIdentity.appIdentifier + ".private-m3-20260922")
       XCTAssertTrue(profile.startupSequence.contains("GRUB"))
     }
 
@@ -27,7 +29,8 @@
       XCTAssertEqual(profile, .privateLimine)
       XCTAssertTrue(profile.allowsEncryption)
       XCTAssertFalse(profile.showsReleaseChannels)
-      XCTAssertEqual(profile.workspaceName, "com.omarchy.mx.installer.private-limine-20260922")
+      XCTAssertEqual(
+        profile.workspaceName, InstallerProductIdentity.appIdentifier + ".private-limine-20260922")
       XCTAssertNotEqual(profile.workspaceName, InstallerBuildProfile.standard.workspaceName)
       XCTAssertNotEqual(profile.workspaceName, InstallerBuildProfile.privatePlain.workspaceName)
       XCTAssertTrue(profile.startupSequence.contains("Limine"))

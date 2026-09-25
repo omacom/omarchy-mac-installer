@@ -2,12 +2,12 @@
 # PackageKit runs this after explicit administrator approval. No app auto-open.
 set -euo pipefail
 (( EUID == 0 )) || exit 1
-app='/Applications/Omarchy MX Mac Installer.app'
-helper='/Library/PrivilegedHelperTools/com.omarchy.mx.installer.helper'
-plist='/Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist'
-label='com.omarchy.mx.installer.helper'
-app_requirement='identifier "com.omarchy.mx.installer" and cdhash H"@APP_HASH@"'
-helper_requirement='identifier "com.omarchy.mx.installer.helper" and cdhash H"@HELPER_HASH@"'
+app="/Applications/@APP_NAME@.app"
+helper='/Library/PrivilegedHelperTools/@HELPER_IDENTIFIER@'
+plist='/Library/LaunchDaemons/@HELPER_IDENTIFIER@.plist'
+label='@HELPER_IDENTIFIER@'
+app_requirement='identifier "@APP_IDENTIFIER@" and cdhash H"@APP_HASH@"'
+helper_requirement='identifier "@HELPER_IDENTIFIER@" and cdhash H"@HELPER_HASH@"'
 for path in /Library /Library/PrivilegedHelperTools /Library/LaunchDaemons "$helper" "$plist" "$app"; do
   [[ -e $path && ! -L $path && $(/usr/bin/stat -f %u "$path") == "0" ]] || exit 1
   mode=$(/usr/bin/stat -f %Lp "$path")

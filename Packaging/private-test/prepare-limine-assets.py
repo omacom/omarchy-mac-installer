@@ -13,7 +13,20 @@ import re
 ENGINE_NAME = "installer-v0.9.2-omarchy.17.tar.gz"
 ENGINE_SHA = "ecb61645a9c75ba733425fb300b8b53b09f9dbc297a86acce1e0ee41f36e32e5"
 ENGINE_SIZE = 17838045
-WORKSPACE = "com.omarchy.mx.installer.private-limine-20260922"
+IDENTITY = Path(__file__).resolve().parents[1] / "identity.conf"
+
+
+def configured(name):
+    for line in IDENTITY.read_text().splitlines():
+        match = re.fullmatch(name + r'="([^"\\$`]+)"', line)
+        if match:
+            return match.group(1)
+    raise ValueError(f"{IDENTITY} does not define {name}")
+
+
+APP_IDENTIFIER = configured("INSTALLER_APP_IDENTIFIER")
+PLAIN_WORKSPACE = APP_IDENTIFIER + ".private-m3-20260922"
+WORKSPACE = APP_IDENTIFIER + ".private-limine-20260922"
 
 
 def regular(path):
@@ -86,7 +99,7 @@ def prepare(catalog_path, product_path, assets, output):
               "boot_backend": "asahi-limine", "kernel_package": "linux-asahi",
               "catalog_sha256": digest(catalog_path), "product_sha256": digest(product_path), **contract}
     template = (Path(__file__).parent / "Stage assets.command").read_text()
-    template = template.replace("com.omarchy.mx.installer.private-m3-20260922", WORKSPACE)
+    template = template.replace("@APP_IDENTIFIER@.private-m3-20260922", WORKSPACE)
     template = template.replace("quattro-private-m3-family-1c595bb6030c-20260922", contract["evidence_revision"])
     template = template.replace("$bundle/baseline-assets/", "$bundle/limine-assets/")
     start = template.index("\n", template.index("done <<'PINS'")) + 1
