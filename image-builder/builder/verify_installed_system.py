@@ -7,6 +7,8 @@ first use:
 
 - /etc/pacman.conf missing [asahi-alarm] broke Apple package updates;
 - a build-only repository or file:// server left in pacman.conf broke them too;
+- a SigLevel with TrustAll lets pacman install packages signed by keys nobody
+  trusts, which the unsigned [omarchy-aarch64] fork repository relied on;
 - speakersafetyd left disabled keeps the built-in speakers silent;
 - without alsa-ucm-conf-asahi and asahi-audio the default sink is
   stereo-fallback, not the model's DSP convolver;
@@ -119,6 +121,14 @@ def check_pacman(verification: Verification, root: Path) -> None:
         "pacman-no-fork-or-build-repositories",
         not forbidden,
         "no fork or build repository" if not forbidden else "configured: " + ", ".join(forbidden),
+    )
+
+    trust_all = [line.strip() for line in text.splitlines()
+                 if "TrustAll" in line and not line.strip().startswith("#")]
+    verification.record(
+        "pacman-no-trust-all",
+        not trust_all,
+        "no SigLevel trusts every key" if not trust_all else "TrustAll: " + "; ".join(trust_all),
     )
 
     asahi_servers = [line for line in sections.get("asahi-alarm", []) if line.startswith("Server")]

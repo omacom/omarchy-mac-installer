@@ -26,6 +26,8 @@ HERE = Path(__file__).resolve().parent
 KERNEL = "linux-aurora"
 PLATFORM = "apple-silicon"
 LIMINE_STEP = "install/hardware/apple/limine-boot.sh"
+# An older runtime's Apple leaf that appends the unsigned [omarchy-aarch64] to pacman.conf.
+UNSIGNED_REPOSITORY_STEP = "install/hardware/apple/pacman.sh"
 PLYMOUTH_THEME = "omarchy"
 PLYMOUTH_CONFIG = "etc/plymouth/plymouthd.conf"
 PLYMOUTH_DEFAULTS = "usr/share/plymouth/plymouthd.defaults"
@@ -393,6 +395,8 @@ def check_first_boot(root: Path, report: dict) -> str:
         require(queue.is_file() and (root / "etc/systemd/system/multi-user.target.wants/"
                                      "omarchy-provision-hardware.service").is_symlink(),
                 "the runtime defers hardware setup but first boot has no queue to run")
+        require(UNSIGNED_REPOSITORY_STEP not in queue.read_text().splitlines(),
+                f"first boot would run {UNSIGNED_REPOSITORY_STEP}, which adds the unsigned [omarchy-aarch64]")
         report["hardware_setup"] = "deferred"
     else:
         require(not queue.exists(), "a hardware queue exists that this runtime never runs")
