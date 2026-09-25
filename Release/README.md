@@ -15,7 +15,7 @@ signing key is rotated; the descriptor also changes when the default channel
 does (it is `stable`, matching upstream Omarchy). The private key lives in the operator's login keychain under the
 service `omarchy-channel-signing-key` and must never appear here or anywhere
 else on disk; see
-[`docs/apple-silicon-distribution-channels.md`](https://github.com/maralcbr/omarchy-mx-mac/blob/4db862da7a0957758c504c5a3e041202019dbabf/docs/apple-silicon-distribution-channels.md).
+[`docs/apple-silicon-distribution-channels.md`](https://github.com/maralcbr/omarchy-mx-mac/blob/92a9054f4565b37739ac3bd4f0fb4fcf8bd48625/docs/apple-silicon-distribution-channels.md).
 
 The descriptor names both channels because the app is signed once: a channel absent from the descriptor
 cannot be opened later without shipping another signed app.
