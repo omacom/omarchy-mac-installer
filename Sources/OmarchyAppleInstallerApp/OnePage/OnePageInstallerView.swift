@@ -30,7 +30,11 @@ struct OnePageInstallerView: View {
     onChannelAvailability: @escaping (Bool) -> Void = { _ in },
     onSessionAvailable: @escaping (InstallerSession) -> Void = { _ in }
   ) {
-    _session = State(initialValue: InstallerSession(environment: environment))
+    _session = State(
+      initialValue: InstallerSession(
+        environment: environment,
+        allowsEncryption: InstallerBuildProfile.current.allowsEncryption
+      ))
     self.channel = channel
     self.onChannelAvailability = onChannelAvailability
     self.onSessionAvailable = onSessionAvailable
@@ -206,11 +210,16 @@ struct OnePageInstallerView: View {
       )
       .id(session.planRevision)
       PrefetchStrip(state: session.prefetchState)
-      EncryptDiskToggle(
-        isOn: session.encryptLinuxDisk,
-        enabled: !session.isBusy && !session.isEditingSize,
-        onChange: { session.setEncryptLinuxDisk($0) }
-      )
+      if session.allowsEncryption {
+        EncryptDiskToggle(
+          isOn: session.encryptLinuxDisk,
+          enabled: !session.isBusy && !session.isEditingSize,
+          onChange: { session.setEncryptLinuxDisk($0) }
+        )
+      } else {
+        Text("Private M3 test: Linux will be installed without disk encryption.")
+          .font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
+      }
       if let notice = session.allocationNotice {
         Text(notice).font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
       }
@@ -219,11 +228,16 @@ struct OnePageInstallerView: View {
     case .awaitingInstall(let plan, let helper, _):
       DiskSplitPanel(plan: plan, editable: false, isBusy: false, onSizeChosen: { _ in })
       PrefetchStrip(state: session.prefetchState)
-      EncryptDiskToggle(
-        isOn: session.encryptLinuxDisk,
-        enabled: false,
-        onChange: { _ in }
-      )
+      if session.allowsEncryption {
+        EncryptDiskToggle(
+          isOn: session.encryptLinuxDisk,
+          enabled: false,
+          onChange: { _ in }
+        )
+      } else {
+        Text("Private M3 test: Linux will be installed without disk encryption.")
+          .font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
+      }
       if !helper.isEnabled {
         helperNote
       }

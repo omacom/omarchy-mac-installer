@@ -228,13 +228,19 @@
       }
     }
 
-    public static let doneVerifiedRows = [
-      PlanFactRow(label: "Startup sequence", value: "m1n1 → U-Boot → GRUB → Omarchy"),
-      PlanFactRow(
-        label: "File verification",
-        value: "Release verified; installation files written"
-      ),
-    ]
+    public static var doneVerifiedRows: [PlanFactRow] {
+      doneVerifiedRows(profile: .current)
+    }
+
+    public static func doneVerifiedRows(profile: InstallerBuildProfile) -> [PlanFactRow] {
+      [
+        PlanFactRow(label: "Startup sequence", value: profile.startupSequence),
+        PlanFactRow(
+          label: "File verification",
+          value: "Release verified; installation files written"
+        ),
+      ]
+    }
 
     public static func installConfWarning(_ installConf: InstallConfHandoff) -> String? {
       switch installConf {

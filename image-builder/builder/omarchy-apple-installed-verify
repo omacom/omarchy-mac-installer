@@ -1,0 +1,182 @@
+#!/bin/bash
+
+# omarchy:summary=Verify an installed Apple Silicon system against its build evidence
+# omarchy:hidden=true
+
+# The build installs this into /usr/bin on the target, where Omarchy's command
+# router picks it up. Without this metadata it is an undocumented command and
+# `omarchy commands --check` fails on the installed system.
+
+set -euo pipefail
+
+root=${OMARCHY_VERIFY_ROOT:-}
+marker="$root/usr/share/omarchy/apple-silicon-full-os"
+pending="$root/var/lib/omarchy/provisioning/pending"
+apfs_guid=7c3457ef-0000-11aa-aa11-00306543ecac
+apfs_recovery_guid=52637672-7900-11aa-aa11-00306543ecac
+
+fail() {
+  echo "Omarchy Apple installed-system verification failed: $*" >&2
+  exit 1
+}
+
+if [[ -n $root ]]; then
+  [[ $root == /* && -d $root && ! -L $root ]] ||
+    fail "verification root is unsafe"
+fi
+[[ -f $marker && ! -L $marker ]] || fail "full-OS marker is unavailable"
+grep -Fxq 'schema_version=1' "$marker" || fail "full-OS marker schema changed"
+grep -Fxq 'product_id=omarchy-mx-mac' "$marker" || fail "full-OS product changed"
+grep -Fxq 'mode=installed-full-os' "$marker" || fail "full-OS mode changed"
+[[ ! -e $pending && ! -L $pending ]] || fail "owner provisioning is still pending"
+
+boot_profile=grub
+profile="$root/usr/share/omarchy/apple-boot-profile.json"
+if [[ -e $profile || -L $profile ]]; then
+  [[ -f $profile && ! -L $profile ]] || fail "Apple boot profile is unsafe"
+  jq -e '. == {schema: 1, boot_profile: "limine", candidate_schema: 4}' "$profile" >/dev/null ||
+    fail "Apple boot profile is invalid"
+  boot_profile=limine
+fi
+
+architecture=$(uname -m)
+kernel_release=$(uname -r)
+[[ $architecture == aarch64 ]] || fail "running architecture is not aarch64"
+[[ $kernel_release == *ARCH* ]] || fail "running kernel is not the packaged Arch kernel"
+
+model_file="$root/proc/device-tree/model"
+compatible_file="$root/proc/device-tree/compatible"
+[[ -r $model_file && -r $compatible_file ]] || fail "Apple device tree is unavailable"
+model=$(tr -d '\0' <"$model_file")
+compatible_json=$(tr '\0' '\n' <"$compatible_file" |
+  jq -Rsc 'split("\n") | map(select(length > 0))')
+jq -e '
+  index("apple,arm-platform") != null and
+  any(.[]; startswith("apple,j"))
+' <<<"$compatible_json" >/dev/null || fail "device tree is not Apple Silicon"
+
+mount_record() {
+  local target=$1 expected_type=$2 role=$3 source filesystem
+  read -r source filesystem < <(
+    findmnt -rn -o SOURCE,FSTYPE --target "$target"
+  ) || fail "$role filesystem is unavailable"
+  if [[ $role == root && $boot_profile == limine && $source == /dev/mapper/* ]]; then
+    local device=${source%%[*} parent type
+    type=$(lsblk -dnro TYPE "$device") || fail "root mapper type is unavailable"
+    parent=$(lsblk -dnro PKNAME "$device") || fail "root mapper parent is unavailable"
+    [[ $type == crypt && $parent =~ ^nvme[0-9]+n[0-9]+p[0-9]+$ ]] ||
+      fail "encrypted root is not directly backed by internal NVMe"
+  else
+    [[ $source == /dev/nvme* ]] || fail "$role is not on internal NVMe"
+  fi
+  [[ $filesystem == "$expected_type" ]] || fail "$role filesystem is not $expected_type"
+  jq -n --arg source "$source" --arg type "$filesystem" '{source: $source, type: $type}'
+}
+
+root_mount=$(mount_record "${root:-/}" btrfs root)
+boot_mount=$(mount_record "$root/boot" ext4 boot)
+esp_mount=$(mount_record "$root/boot/efi" vfat ESP)
+
+# An Aurora install records its kernel here; an Asahi install writes no such
+# file, so the default is the kernel this checker has always expected.
+kernel_package=linux-asahi
+kernel_marker="$root/usr/share/omarchy/apple-silicon-kernel"
+if [[ $boot_profile == limine ]]; then
+  kernel_package=$(omarchy-mac-kernel) || fail "cannot identify the installed kernel"
+elif [[ -f $kernel_marker && ! -L $kernel_marker ]]; then
+  kernel_package=$(<"$kernel_marker")
+  kernel_package=${kernel_package//[[:space:]]/}
+fi
+[[ $kernel_package == linux-asahi || $kernel_package == linux-aurora ]] ||
+  fail "unsupported kernel package: $kernel_package"
+linux_package=$(pacman -Q "$kernel_package" 2>/dev/null) ||
+  fail "$kernel_package package is unavailable"
+[[ -s $root/usr/bin/omarchy && ! -L $root/usr/bin/omarchy ]] ||
+  fail "Omarchy runtime is unavailable"
+
+required_artifacts=(
+  boot/efi/m1n1/boot.bin
+  boot/efi/EFI/BOOT/BOOTAA64.EFI
+  boot/grub/grub.cfg
+  "boot/vmlinuz-$kernel_package"
+  "boot/initramfs-$kernel_package.img"
+)
+if [[ $boot_profile == limine ]]; then
+  required_artifacts+=(boot/efi/limine.conf "boot/efi/EFI/Linux/omarchy_$kernel_package.efi")
+  [[ -f $root/var/lib/omarchy/limine.enabled && -f $root/etc/default/limine ]] ||
+    fail "Limine activation is incomplete"
+  # Reuse the runtime's read-only check for the installed kernel, actual EFI,
+  # menu, m1n1 composition, encryption state and retired temporary keyslots.
+  OMARCHY_BOOT_CHECK_ROOT="$root" OMARCHY_BOOT_CHECK_UNAME="$kernel_release" \
+    OMARCHY_BOOT_CHECK_ALLOW_PENDING_REBOOT=0 omarchy-apple-silicon-boot-check "$kernel_package" >&2 ||
+    fail "installed Limine boot contract failed"
+fi
+artifacts_json='{}'
+for relative in "${required_artifacts[@]}"; do
+  path="$root/$relative"
+  [[ -f $path && ! -L $path && -s $path ]] || fail "boot artifact is unavailable: /$relative"
+  digest=$(sha256sum "$path")
+  digest=${digest%% *}
+  size=$(wc -c <"$path")
+  artifacts_json=$(jq \
+    --arg path "/$relative" \
+    --arg digest "$digest" \
+    --argjson size "$size" \
+    '. + {($path): {size_bytes: $size, sha256: $digest}}' \
+    <<<"$artifacts_json")
+done
+grep -Fq 'Omarchy' "$root/boot/grub/grub.cfg" || fail "GRUB configuration is not branded"
+grep -Fq "$kernel_package" "$root/boot/grub/grub.cfg" ||
+  fail "GRUB configuration lacks $kernel_package"
+
+apfs_partition_count=0
+apfs_recovery_partition_count=0
+while IFS= read -r part_type; do
+  case ${part_type,,} in
+    "$apfs_guid") ((apfs_partition_count += 1)) ;;
+    "$apfs_recovery_guid") ((apfs_recovery_partition_count += 1)) ;;
+  esac
+done < <(lsblk -nr -o PARTTYPE)
+(( apfs_partition_count >= 2 )) || fail "expected macOS and stub APFS containers"
+(( apfs_recovery_partition_count >= 1 )) || fail "expected retained macOS Recovery partition"
+
+jq -n \
+  --arg product_id omarchy-mx-mac \
+  --arg boot_profile "$boot_profile" \
+  --arg model "$model" \
+  --argjson compatible "$compatible_json" \
+  --arg architecture "$architecture" \
+  --arg release "$kernel_release" \
+  --arg package "$linux_package" \
+  --arg kernel_package "$kernel_package" \
+  --argjson root_mount "$root_mount" \
+  --argjson boot_mount "$boot_mount" \
+  --argjson esp_mount "$esp_mount" \
+  --argjson artifacts "$artifacts_json" \
+  --argjson apfs_partition_count "$apfs_partition_count" \
+  --argjson apfs_recovery_partition_count "$apfs_recovery_partition_count" \
+  '{
+    schema_version: 1,
+    verification_kind: "omarchy-apple-installed-system",
+    product_id: $product_id,
+    device_tree: {model: $model, compatible: $compatible},
+    kernel: {
+      architecture: $architecture,
+      release: $release,
+      package: $kernel_package,
+      package_record: $package
+    },
+    filesystems: {root: $root_mount, boot: $boot_mount, esp: $esp_mount},
+    artifacts: $artifacts,
+    apple_partition_layout: {
+      apfs_container_count: $apfs_partition_count,
+      apfs_recovery_count: $apfs_recovery_partition_count
+    },
+    checks: {
+      full_os_marker: true,
+      provisioning_completed: true,
+      boot_chain_present: true,
+      apfs_partitions_retained: true,
+      macos_boot_verification_required: true
+    }
+  } | if $boot_profile == "limine" then . + {boot_profile: $boot_profile} else . end'

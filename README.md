@@ -43,3 +43,7 @@ The preserved release and cutover tools target the original publisher's infrastr
 ## License
 
 The original [MIT license](LICENSE), copyright notice and Git attribution are retained. External engine dependencies retain their own licenses; their exact revisions are recorded in `Engine/source-lock.json`.
+
+## Linux image producer
+
+The Linux image-builder source is maintained in `image-builder/`. See [source ownership, provenance and checks](docs/image-builder.md). [One image producer](docs/image-producer.md) records how it is replaced by mx-mac's `build-mac-image`, keeping the authenticated candidate importer.

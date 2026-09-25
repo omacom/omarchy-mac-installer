@@ -1,0 +1,12 @@
+release/**
+vm-saves/**
+
+# Python bytecode (orchestrator)
+__pycache__/
+*.pyc
+
+# Acceptance test harness artifacts
+test-runs/**
+
+# macOS Finder metadata
+.DS_Store
