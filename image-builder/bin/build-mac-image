@@ -65,7 +65,9 @@ verified root filesystem, databases and package archives between runs, so a
 later build from the same record installs the same bytes. --dry-run checks the
 inputs and the candidate set and prints what would be built.
 
-Needs docker, curl, gpg, python3, bsdtar and sha256sum on the host.
+Needs docker, curl, gpg, python3, bsdtar and sha256sum on the host. As root or
+with passwordless sudo, it hides its loop devices from desktop automounters
+while it runs (a transient udev rule); otherwise it refuses to run beside one.
 USAGE
 }
 
@@ -85,7 +87,7 @@ sha256_of() {
 }
 
 # ── host ───────────────────────────────────────────────────────────────────
-host_work="" host_image="" host_docker=""
+host_work="" host_image="" host_docker="" loop_rule=""
 
 # On an interruption: docker stop reaches the container's own traps, which
 # unmount and detach; its loop devices also clear themselves once it is gone.
@@ -101,8 +103,34 @@ stop_build() {
   host_docker=""
 }
 
+# A desktop automounter (udiskie, gvfs) mounts the filesystems the build puts
+# on loop devices, and asks for a password to do it. While the build runs, a
+# transient udev rule hides every loop device from udisks. It needs root, or
+# passwordless sudo; without either, a running automounter stops the build.
+hide_loop_devices() {
+  local as_root=()
+  ((EUID == 0)) || as_root=(sudo -n)
+  if [[ -d /run/udev ]] && "${as_root[@]}" true 2>/dev/null; then
+    loop_rule=/run/udev/rules.d/60-omarchy-image-build-$$.rules
+    printf 'SUBSYSTEM=="block", KERNEL=="loop*", ENV{UDISKS_IGNORE}="1"\n' |
+      "${as_root[@]}" install -D -m 0644 /dev/stdin "$loop_rule" &&
+      "${as_root[@]}" udevadm control --reload || fail "could not hide the build's loop devices from udisks"
+  elif pgrep -x udiskie >/dev/null 2>&1 || pgrep -f gvfs-udisks2-volume-monitor >/dev/null 2>&1; then
+    fail "a desktop automounter would mount the build's loop devices; stop it, or build as root or with passwordless sudo"
+  fi
+}
+
+show_loop_devices() {
+  local as_root=()
+  [[ -n $loop_rule ]] || return 0
+  ((EUID == 0)) || as_root=(sudo -n)
+  "${as_root[@]}" rm -f "$loop_rule" && "${as_root[@]}" udevadm control --reload || true
+  loop_rule=""
+}
+
 host_cleanup() {
   stop_build
+  show_loop_devices
   if [[ -n $host_work ]]; then
     chmod -R u+w "$host_work" 2>/dev/null || true
     rm -rf "$host_work"
@@ -189,6 +217,7 @@ host_main() {
     fail "could not import the root filesystem"
   rm -f "$host_work/rootfs.tar.gz"
 
+  hide_loop_devices
   # /work is an anonymous volume: loop devices need a real filesystem under
   # them, and --rm removes it with the container. In the background, so an
   # interruption reaches the traps above at once.

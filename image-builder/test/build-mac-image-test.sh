@@ -177,3 +177,16 @@ make_first_boot "/usr/bin/omarchy-provision-hardware"
 [[ -f $target/var/lib/omarchy/mac-first-boot/pending && ! -e $target/var/lib/omarchy/mac-first-boot/deferred-steps ]] ||
   fail "a first boot without that contract gets pending only"
 pass "first boot is armed by the boot package, with deferred-steps only for the contract it reads"
+
+# ── desktop automounters ───────────────────────────────────────────────────
+if ((EUID != 0)); then
+  sudo() { return 1; }
+  pgrep() { [[ $* == "-x udiskie" ]]; }
+  if (fail() { builder_fail "$@"; }; hide_loop_devices) >/dev/null 2>&1; then
+    fail "a build without root or passwordless sudo runs beside a desktop automounter"
+  fi
+  pgrep() { return 1; }
+  (fail() { builder_fail "$@"; }; hide_loop_devices) || fail "a build without an automounter needs no root"
+  unset -f sudo pgrep
+  pass "without a way to hide its loop devices, the build refuses to run beside a desktop automounter"
+fi
