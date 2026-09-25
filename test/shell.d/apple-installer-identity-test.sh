@@ -96,15 +96,43 @@ done
 git -C "$ROOT" ls-files -z >"$test_tmp/tracked" || fail "git lists the tracked files"
 mapfile -d '' -t tracked <"$test_tmp/tracked"
 exempt='^(docs|evidence|Design)/|\.md$|^Packaging/identity\.conf$|^Release/release\.json$|^scripts/release-inputs.*\.template\.json$'
-scanned=()
+scanned=() producer=()
 for file in "${tracked[@]}"; do
-  [[ $file =~ $exempt ]] || scanned+=("$file")
+  # A submodule gitlink is a directory, not a file to scan.
+  [[ $file =~ $exempt || -d $ROOT/$file ]] && continue
+  if [[ $file == image-builder/* ]]; then
+    producer+=("$file")
+  else
+    scanned+=("$file")
+  fi
 done
 (( ${#scanned[@]} > 100 )) || fail "the repeated-value scan covers the repository" "${#scanned[@]} files"
 status=0
 hits=$(cd "$ROOT" && grep -n -I -F "${patterns[@]}" -- "${scanned[@]}") || status=$?
 (( status == 1 )) || fail "identity and hosting values live only in Packaging/identity.conf" "$hits"
 pass "no code, script or test repeats an identity or hosting value"
+
+# The image producer pins the owner's package repository and ALARM snapshot
+# mirror. Those are package hosting, not installer identity; the producer port
+# (docs/image-producer.md) moves them into its pinned inputs. Nothing else in
+# it may repeat a configured value.
+if (( ${#producer[@]} )); then
+  status=0
+  hits=$(cd "$ROOT" && grep -n -I -F "${patterns[@]}" -- "${producer[@]}") || status=$?
+  (( status <= 1 )) || fail "grep scans the image producer" "$hits"
+  remaining=()
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    stripped=${line//"github.com/$INSTALLER_GITHUB_RELEASE_LOGIN/omarchy-pkgs/"/}
+    stripped=${stripped//"${INSTALLER_PUBLIC_BASE#https://}/mirror/alarm/"/}
+    if grep -q -F "${patterns[@]}" <<<"$stripped"; then
+      remaining+=("$line")
+    fi
+  done <<<"$hits"
+  (( ${#remaining[@]} == 0 )) ||
+    fail "the image producer names configured values only as package hosts" "$(printf '%s\n' "${remaining[@]}")"
+  pass "the image producer repeats no identity value beyond its package hosts"
+fi
 
 # A different configuration changes what the packaging scripts produce.
 cat >"$test_tmp/identity.conf" <<'CONF'
