@@ -103,6 +103,53 @@ class CandidateSetTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "wrong package set"):
             self.verify(directory, receipt)
 
+    def test_closure_and_channel_packages(self):
+        contents = fixtures.default_contents()
+        contents["omarchy-mac-boot"]["usr/share/omarchy-mac/boot-source-revision"] = ("d" * 40 + "\n").encode()
+        versions = {"hyprland": "0.56.2-3", "omarchy-keyring": "20251027-1", "asdcontrol": "1:0.6.0-2"}
+        directory, receipt = self.variant(
+            versions=versions, contents=contents, names=[*fixtures.VERSIONS, *versions],
+            channel=("omarchy-mac-boot", "linux-aurora", "linux-aurora-headers"), arches={"omarchy-keyring": "any"})
+        summary = self.verify(directory, receipt)
+        packages = {p["name"]: p for p in summary["packages"]}
+        self.assertEqual(len(packages), 12)
+        self.assertTrue(summary["candidate_only"])
+        self.assertEqual({n: p["origin"] for n, p in packages.items() if p["group"] == "runtime"},
+                         {"omarchy": "commit", "omarchy-settings": "commit", "omarchy-mac": "commit",
+                          "omarchy-mac-boot": "channel " + "d" * 40})
+        self.assertEqual(packages["linux-aurora"]["origin"], "channel")
+        self.assertEqual(packages["uboot-asahi"]["origin"], "pull-request")
+        self.assertEqual({n for n, p in packages.items() if p["group"] == "closure"}, set(versions))
+        self.assertEqual(packages["asdcontrol"]["filename"], "asdcontrol-1.0.6.0-2-aarch64.pkg.tar.xz")
+
+    def test_package_sources_outside_the_plan(self):
+        def point(name, source):
+            return lambda m: next(p for p in m["packages"] if p["name"] == name).update(source=source)
+
+        closure = [*fixtures.VERSIONS, "hyprland"]
+        cases = (
+            ("closure from a commit", dict(manifest_edit=point("hyprland", {"repository": "omacom/omarchy-pkgs",
+                                                                           "commit": "e" * 40})),
+             "unknown closure package source: hyprland"),
+            ("closure from another file", dict(manifest_edit=point(
+                "hyprland", fixtures.channel_source("hyprland-0.56.1-1-aarch64.pkg.tar.xz"))),
+             "unknown closure package source: hyprland"),
+            ("closure from another host", dict(manifest_edit=point("hyprland", dict(
+                fixtures.channel_source("hyprland-0.56.2-3-aarch64.pkg.tar.xz"),
+                url="https://example.invalid/edge/aarch64/hyprland-0.56.2-3-aarch64.pkg.tar.xz"))),
+             "unknown closure package source: hyprland"),
+            ("runtime from a channel", dict(channel=("omarchy-mac",)), "mixed package sources: omarchy-mac"),
+            ("boot package any-arch", dict(arches={"uboot-asahi": "any"}), "package metadata mismatch: uboot-asahi"),
+        )
+        for name, change, pattern in cases:
+            with self.subTest(name):
+                directory = self.work / name.replace(" ", "-")
+                receipt = fixtures.make_set(directory, self.signer, versions={"hyprland": "0.56.2-3"},
+                                            names=closure, **change)
+                with self.assertRaisesRegex(ValueError, pattern):
+                    self.verify(directory, receipt)
+                shutil.rmtree(self.work / "output", ignore_errors=True)
+
     def test_refused_package(self):
         versions = dict(fixtures.VERSIONS, m1n1="1.5.0-1")
         contents = fixtures.default_contents()

@@ -47,6 +47,7 @@ def _load(name: str, file: str):
 candidate_set = _load("candidate_set", "candidate_set.py")
 limine = _load("apple_limine", "apple_limine.py")
 installed_system = _load("verify_installed_system", "verify_installed_system.py")
+test_image_pin = _load("test_image_pin", "test_image_pin.py")
 
 
 class InspectionError(RuntimeError):
@@ -193,10 +194,14 @@ def extract(candidates: Candidates, name: str, into: Path) -> Path:
 
 
 def check_candidate_files(root: Path, candidates: Candidates, report: dict) -> str:
-    """Every file every set package carries is in the image with the set's bytes."""
+    """Every file every runtime and boot package of the set carries is in the
+    image with the set's bytes. The closure's packages are held to the set's
+    versions and archives (candidate-versions, PROVENANCE): the runtime may
+    change their files, as it restyles the Yaru icons."""
     counts, changed = 0, []
+    planned = sorted(name for name, p in candidates.packages.items() if p.get("group", "runtime") != "closure")
     with tempfile.TemporaryDirectory(prefix="inspect-") as scratch:
-        for name in sorted(candidates.packages):
+        for name in planned:
             unpacked = extract(candidates, name, Path(scratch))
             for directory, subdirectories, files in os.walk(unpacked):
                 # os.walk lists a link to a directory with the directories and never follows it.
@@ -218,7 +223,7 @@ def check_candidate_files(root: Path, candidates: Candidates, report: dict) -> s
             subprocess.run(["rm", "-rf", str(unpacked)], check=True)
     report["candidate_files"] = counts
     require(not changed, f"{len(changed)} files differ from the set: " + ", ".join(sorted(changed)[:12]))
-    return f"all {counts} files and links of the {len(candidates.packages)} set packages carry the set's bytes and modes"
+    return f"all {counts} files and links of the {len(planned)} runtime and boot packages carry the set's bytes and modes"
 
 
 def mtree_digests(root: Path, package: str) -> dict[str, str]:
@@ -395,14 +400,21 @@ def check_first_boot(root: Path, report: dict) -> str:
     return f"first boot and owner provisioning armed, Limine gate set, {contract}, hardware setup {report['hardware_setup']}"
 
 
-def check_pacman_config(root: Path, channel: str) -> str:
-    template = root / f"usr/share/omarchy/default/pacman/aarch64/pacman-{channel}.conf"
-    mirrorlist = root / f"usr/share/omarchy/default/pacman/aarch64/mirrorlist-{channel}"
-    require((root / "etc/pacman.conf").read_bytes() == limine.regular(template),
-            f"/etc/pacman.conf is not the runtime's aarch64 {channel} configuration")
+def check_pacman_config(root: Path, channel: str, candidates: Candidates) -> str:
+    # As the runtime stages it on an Apple Silicon Mac: the apple-silicon
+    # repositories (an older runtime's aarch64 ones), the aarch64 mirror list.
+    templates = root / "usr/share/omarchy/default/pacman"
+    kind = "apple-silicon" if (templates / f"apple-silicon/pacman-{channel}.conf").is_file() else "aarch64"
+    template = templates / f"{kind}/pacman-{channel}.conf"
+    mirrorlist = templates / f"aarch64/mirrorlist-{channel}"
+    pinned = test_image_pin.pinned(candidates.summary)
+    require((root / "etc/pacman.conf").read_bytes() == test_image_pin.render(limine.regular(template), pinned),
+            f"/etc/pacman.conf is not the runtime's {kind} {channel} configuration"
+            + (" with the test image's pin" if pinned else ""))
     require((root / "etc/pacman.d/mirrorlist").read_bytes() == limine.regular(mirrorlist),
             f"/etc/pacman.d/mirrorlist is not the runtime's aarch64 {channel} mirror list")
-    return f"the runtime's aarch64 {channel} pacman.conf and mirror list"
+    return (f"the runtime's {kind} {channel} pacman.conf and aarch64 mirror list"
+            + (f"; test image pin: IgnorePkg = {' '.join(pinned)}" if pinned else ""))
 
 
 def check_installed_system(root: Path, report: dict) -> str:
@@ -455,7 +467,7 @@ def inspect(root: Path, candidates_dir: Path, channel: str, factory: Path | None
         ("image-target", lambda: check_image_target(root)),
         ("first-boot", lambda: check_first_boot(root, report)),
         ("snapshots", lambda: check_snapshots(root)),
-        ("pacman-config", lambda: check_pacman_config(root, channel)),
+        ("pacman-config", lambda: check_pacman_config(root, channel, candidates)),
         ("installed-system", lambda: check_installed_system(root, report)),
     ]
     if factory is not None:

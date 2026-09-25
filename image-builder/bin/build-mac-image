@@ -261,6 +261,7 @@ candidates=/candidates
 body=""
 api_mounts=()
 lane=""
+test_image_pin=""
 declare -a unavailable=()
 
 field() {
@@ -609,11 +610,21 @@ candidate_archive() {
   jq -r --arg name "$1" '.packages[] | select(.name == $name) | .filename' "$candidates/import.json"
 }
 
-# The runtime's package list for LABEL (base or apple), read from the
+# The runtime's package list for LABEL (base, aarch64 or apple), read from the
 # candidate omarchy archive itself.
 runtime_list() {
   bsdtar -xOf "$candidates/$(candidate_archive omarchy)" "usr/share/omarchy/install/omarchy-$1.packages" |
     awk 'NF && $1 !~ /^#/ { print $1 }'
+}
+
+# What omarchy-pkg-defaults composes before the Apple list: the base list, then
+# the aarch64 additions of a runtime that ships them.
+runtime_lists() {
+  runtime_list base
+  if bsdtar -tf "$candidates/$(candidate_archive omarchy)" usr/share/omarchy/install/omarchy-aarch64.packages \
+    >/dev/null 2>&1; then
+    runtime_list aarch64
+  fi
 }
 
 qualified() {
@@ -627,9 +638,9 @@ qualified() {
   done
 }
 
-# Names of the base list the pinned repositories carry. Those they lack (an
-# x86-only application) are recorded in PROVENANCE and not installed; a name
-# they carry that does not resolve stops the build.
+# Names of the base and aarch64 lists the pinned repositories carry. Those
+# they lack (an x86-only application) are recorded in PROVENANCE and not
+# installed; a name they carry that does not resolve stops the build.
 available_base() {
   local name
   base_names=()
@@ -641,9 +652,9 @@ available_base() {
     elif grep -Fq "target not found: $name" <<<"$output"; then
       unavailable+=("$name")
     else
-      fail "$name from omarchy-base.packages does not resolve: $(tail -n 1 <<<"$output")"
+      fail "$name from the runtime's package lists does not resolve: $(tail -n 1 <<<"$output")"
     fi
-  done < <(runtime_list base)
+  done < <(runtime_lists | awk '!seen[$0]++')
   printf '%s\n' "${unavailable[@]}" >"$work/unavailable"
 }
 
@@ -731,15 +742,25 @@ release_build_pacman_config() {
   rmdir "$target/var/cache/omarchy-image-repositories" "$target/var/cache/omarchy-image-packages"
 }
 
-# The installed configuration: the runtime's own aarch64 template for the
-# channel the inputs name, with its mirror list.
+# The installed configuration, as the runtime stages it for an Apple Silicon
+# Mac: its apple-silicon template for the channel the inputs name (an older
+# runtime's aarch64 one), with the aarch64 mirror list. TEST IMAGES ONLY: a
+# test candidate set's runtime sorts below the channel's omarchy, so its
+# [options] gain a marked IgnorePkg for the packages built from the set's
+# source commit, which keeps a pacman -Syu from replacing them
+# (builder/test_image_pin.py).
 write_installed_config() {
-  local channel templates=$target/usr/share/omarchy/default/pacman/aarch64
+  local channel templates=$target/usr/share/omarchy/default/pacman repositories
   channel=$(field omarchy_channel)
-  [[ -f $templates/pacman-$channel.conf && -f $templates/mirrorlist-$channel ]] ||
-    fail "the runtime ships no aarch64 pacman configuration for $channel"
-  install -m 0644 "$templates/pacman-$channel.conf" "$target/etc/pacman.conf"
-  install -D -m 0644 "$templates/mirrorlist-$channel" "$target/etc/pacman.d/mirrorlist"
+  repositories=$templates/apple-silicon
+  [[ -f $repositories/pacman-$channel.conf ]] || repositories=$templates/aarch64
+  [[ -f $repositories/pacman-$channel.conf && -f $templates/aarch64/mirrorlist-$channel ]] ||
+    fail "the runtime ships no Apple Silicon pacman configuration for $channel"
+  python3 "$ROOT/builder/test_image_pin.py" render "$repositories/pacman-$channel.conf" "$candidates/import.json" \
+    >"$work/pacman.conf" || fail "could not write the test image's pacman configuration"
+  install -m 0644 "$work/pacman.conf" "$target/etc/pacman.conf"
+  install -D -m 0644 "$templates/aarch64/mirrorlist-$channel" "$target/etc/pacman.d/mirrorlist"
+  test_image_pin=$(python3 "$ROOT/builder/test_image_pin.py" names "$candidates/import.json")
 }
 
 # The image keyring for the runtime's own transactions during setup; removed
@@ -1165,6 +1186,7 @@ write_provenance() {
     done
     jq -r '.packages[] | "candidate=\(.name)|\(.version)|\(.filename)|\(.sha256)"' "$candidates/import.json"
     printf 'hardware_setup=%s\n' "$hardware_setup"
+    printf 'test_image_pin=%s\n' "$test_image_pin"
     while read -r name; do
       [[ -z $name ]] || printf 'unavailable=%s\n' "$name"
     done <"$work/unavailable"
@@ -1194,6 +1216,7 @@ write_image() {
       printf '%s=%s\n' "$key" "$(field "$key")"
     done
     printf 'hardware_setup=%s\n' "$hardware_setup"
+    printf 'test_image_pin=%s\n' "$test_image_pin"
     printf 'package_set_sha256=%s\n' "$(package_set_sha256)"
     (cd "$work/final" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) | while read -r path; do
       printf 'image_sha256=%s|%s\n' "$path" "$(sha256_of "$work/final/$path")"
