@@ -209,7 +209,10 @@ struct OnePageInstallerView: View {
         onEditingChange: { session.setSizeEditing($0) }
       )
       .id(session.planRevision)
-      PrefetchStrip(state: session.prefetchState)
+      PrefetchStrip(
+        state: session.prefetchState,
+        onRetry: session.canRetryPrefetch ? { session.retryPrefetch() } : nil
+      )
       if session.allowsEncryption {
         EncryptDiskToggle(
           isOn: session.encryptLinuxDisk,
@@ -227,7 +230,10 @@ struct OnePageInstallerView: View {
 
     case .awaitingInstall(let plan, let helper, _):
       DiskSplitPanel(plan: plan, editable: false, isBusy: false, onSizeChosen: { _ in })
-      PrefetchStrip(state: session.prefetchState)
+      PrefetchStrip(
+        state: session.prefetchState,
+        onRetry: session.canRetryPrefetch ? { session.retryPrefetch() } : nil
+      )
       if session.allowsEncryption {
         EncryptDiskToggle(
           isOn: session.encryptLinuxDisk,
@@ -553,6 +559,7 @@ struct OnePageInstallerView: View {
 
 private struct PrefetchStrip: View {
   let state: PayloadPrefetchState
+  var onRetry: (() -> Void)?
 
   var body: some View {
     if showsStrip {
@@ -568,7 +575,18 @@ private struct PrefetchStrip: View {
                 .foregroundStyle(OmarchyTheme.secondaryText)
             }
           }
-          ProgressTrack(fraction: fraction, height: 10)
+          if case .failed(let reason) = state {
+            Text(reason)
+              .font(OmarchyTheme.caption)
+              .foregroundStyle(OmarchyTheme.secondaryText)
+              .textSelection(.enabled)
+              .fixedSize(horizontal: false, vertical: true)
+            if let onRetry {
+              Button(PlainLanguage.prefetchRetry, action: onRetry)
+            }
+          } else {
+            ProgressTrack(fraction: fraction, height: 10)
+          }
         }
         .padding(.vertical, 2)
       }
