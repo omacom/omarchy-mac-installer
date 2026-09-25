@@ -15,5 +15,6 @@ staging=$(mktemp "$(dirname -- "$2")/.render-identity.XXXXXX")
 trap 'rm -f -- "$staging"' EXIT
 printf '%s\n' "$text" >"$staging"
 chmod 0644 "$staging"
-# link(2) never replaces or follows an existing DEST, even one raced in after the check.
-ln -- "$staging" "$2"
+# link(2) never replaces, follows or descends into an existing DEST, even one
+# raced in after the check; ln(1) would place the file inside a directory.
+/usr/bin/perl -e 'link($ARGV[0], $ARGV[1]) or die "render-identity: $ARGV[1]: $!\n"' "$staging" "$2"

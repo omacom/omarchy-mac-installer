@@ -120,11 +120,13 @@ if (( ${#producer[@]} )); then
   status=0
   hits=$(cd "$ROOT" && grep -n -I -F "${patterns[@]}" -- "${producer[@]}") || status=$?
   (( status <= 1 )) || fail "grep scans the image producer" "$hits"
-  package_hosts=(
-    "github.com/$INSTALLER_GITHUB_RELEASE_LOGIN/omarchy-pkgs/releases/download/"
-    "github.com/$INSTALLER_GITHUB_RELEASE_LOGIN/omarchy-pkgs/releases/download\""
-    "${INSTALLER_PUBLIC_BASE#https://}/mirror/alarm/"
-  )
+  package_hosts=("$INSTALLER_PUBLIC_BASE/mirror/alarm/")
+  for scheme in https http; do
+    package_hosts+=(
+      "$scheme://github.com/$INSTALLER_GITHUB_RELEASE_LOGIN/omarchy-pkgs/releases/download/"
+      "$scheme://github.com/$INSTALLER_GITHUB_RELEASE_LOGIN/omarchy-pkgs/releases/download\""
+    )
+  done
   remaining=()
   while IFS= read -r line; do
     [[ -n $line ]] || continue
