@@ -166,5 +166,19 @@ class BuildDirectoryTest(unittest.TestCase):
             check.check_payload("edge", self.out / NAME, self.out / "installer_data.json")
 
 
+class SubvolumeTest(unittest.TestCase):
+    def test_the_five_subvolumes_and_snappers(self):
+        check.check_subvolumes(["@", "@home", "@log", "@pkg", "@factory"])
+        check.check_subvolumes(["@", "@home", "@log", "@pkg", "@factory", "@/.snapshots"])
+
+    def test_a_missing_extra_or_other_nested_subvolume(self):
+        for listed in (["@", "@home", "@log", "@factory"],
+                       ["@", "@home", "@log", "@pkg", "@factory", "@swap"],
+                       ["@", "@home", "@log", "@pkg", "@factory", "@/.snapshots", "@/.snapshots/1/snapshot"],
+                       ["@", "@home", "@log", "@pkg", "@factory", "@factory/.snapshots"]):
+            with self.subTest(listed), self.assertRaisesRegex(check.CheckError, "subvolumes"):
+                check.check_subvolumes(listed)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,8 @@ first use:
 - /etc/pacman.conf missing [asahi-alarm] broke Apple package updates;
 - a build-only repository or file:// server left in pacman.conf broke them too;
 - speakersafetyd left disabled keeps the built-in speakers silent;
+- without alsa-ucm-conf-asahi and asahi-audio the default sink is
+  stereo-fallback, not the model's DSP convolver;
 - bluetooth.service left disabled leaves Bluetooth off;
 - NetworkManager without the iwd backend leaves Apple Wi-Fi unmanaged.
 
@@ -41,6 +43,8 @@ REQUIRED_PACKAGES = (
     "limine-snapper-sync",
     "asahi-fwextract",
     "speakersafetyd",
+    "alsa-ucm-conf-asahi",
+    "asahi-audio",
     "iwd",
     "networkmanager",
     "bluez",

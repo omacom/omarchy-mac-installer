@@ -47,6 +47,8 @@ ROOT_SIZE = 34359738368
 ICON = "omarchy-volume.icns"
 ICON_SHA256 = "cf26ed5d2831db99c00d62ca046040e01a18e08e63363d629340d04ac6ec8c23"
 SUBVOLUMES = ("@", "@factory", "@home", "@log", "@pkg")
+# Snapper's, nested in @, when the runtime's setup made it during the build.
+NESTED_SUBVOLUMES = ("@/.snapshots",)
 KERNEL = "linux-aurora"
 PLATFORM = "apple-silicon"
 REQUIRED_MEMBERS = {
@@ -472,6 +474,13 @@ def run(*command: str) -> str:
     return result.stdout
 
 
+def check_subvolumes(listed: list[str]) -> None:
+    top = sorted(path for path in listed if "/" not in path)
+    nested = sorted(path for path in listed if "/" in path)
+    require(top == sorted(SUBVOLUMES) and set(nested) <= set(NESTED_SUBVOLUMES),
+            f"root.img holds subvolumes {sorted(listed)}, not {list(SUBVOLUMES)} and optionally {list(NESTED_SUBVOLUMES)}")
+
+
 def check_image(lane: str, root_image: Path, boot_image: Path, esp: Path, candidates: Path, report: Path | None) -> None:
     require(os.geteuid() == 0, "image checks mount the images and need root")
     for image, capacity in ((root_image, ROOT_SIZE), (boot_image, BOOT_SIZE)):
@@ -489,8 +498,7 @@ def check_image(lane: str, root_image: Path, boot_image: Path, esp: Path, candid
             run("mount", "-o", "loop,ro", str(root_image), str(top))
             mounts.append(str(top))
             root_loop = run("findmnt", "-n", "-o", "SOURCE", str(top)).strip().split("[")[0]
-            listed = sorted(line.split(" path ", 1)[1] for line in run("btrfs", "subvolume", "list", str(top)).splitlines())
-            require(listed == sorted(SUBVOLUMES), f"root.img holds subvolumes {listed}, not {list(SUBVOLUMES)}")
+            check_subvolumes([line.split(" path ", 1)[1] for line in run("btrfs", "subvolume", "list", str(top)).splitlines()])
             props = run("btrfs", "property", "get", "-ts", str(top / "@factory"))
             require("ro=true" in props, "@factory is not a read-only snapshot")
             tree = Path(scratch, "tree")

@@ -52,6 +52,10 @@ BOOTSTRAP=(base sudo btrfs-progs dosfstools e2fsprogs archlinuxarm-keyring asahi
 # /etc/default/grub, the kernel command line's source, and as the image's own
 # bootable state until Limine is activated.
 PLATFORM_PACKAGES=(mkinitcpio grub limine limine-snapper-sync asahi-scripts asahi-fwextract)
+# The speaker stack's model profiles and DSP chain. Without alsa-ucm-conf-asahi
+# the default sink is stereo-fallback, not the model's convolver; the runtime's
+# audio leaf, deferred to first boot, may find no network to fetch them.
+APPLE_AUDIO=(alsa-ucm-conf-asahi asahi-audio)
 TOOLCHAIN=(pacman arch-install-scripts btrfs-progs e2fsprogs dosfstools libarchive util-linux systemd jq python gnupg)
 
 usage() {
@@ -650,7 +654,7 @@ precheck_transaction() {
   local resolved refused name
   available_base
   resolved=$(target_pacman -Sp --print-format '%r %n %v' "${BOOTSTRAP[@]}" "${PLATFORM_PACKAGES[@]}" \
-    "$(qualified omarchy)" "$(qualified omarchy-settings)" "${base_names[@]}" \
+    "$(qualified omarchy)" "$(qualified omarchy-settings)" "${base_names[@]}" "${APPLE_AUDIO[@]}" \
     $(qualified $(runtime_list apple) $(candidate_names boot)) 2>>"$logs/precheck.log") ||
     fail "the package set does not resolve against the pinned databases (logs/precheck.log)"
   printf '%s\n' "$resolved" >"$logs/precheck.log"
@@ -690,7 +694,7 @@ install_apple_set() {
   local installed name version
   mount_api
   target_pacman -S $(qualified $(runtime_list apple) $(candidate_names boot)) "${PLATFORM_PACKAGES[@]}" \
-    >>"$logs/install.log" 2>&1 || fail "could not install the Apple set (logs/install.log)"
+    "${APPLE_AUDIO[@]}" >>"$logs/install.log" 2>&1 || fail "could not install the Apple set (logs/install.log)"
   unmount_api
   installed=$(pacman --dbpath "$target/var/lib/pacman" -Q)
   while read -r name version; do
@@ -1073,6 +1077,7 @@ seal_images() {
   mount_image "$final/root.img" "$work/final-root" compress=zstd
   for subvolume in @ @home @log @pkg; do
     btrfs subvolume create "$work/final-root/$subvolume" >/dev/null
+    [[ $subvolume != @ ]] || carry_snapshots_subvolume "$build_top/@" "$work/final-root/@"
     cp -a "$build_top/$subvolume/." "$work/final-root/$subvolume/"
   done
   seal_factory "$work/final-root"
@@ -1090,6 +1095,21 @@ seal_images() {
   e2fsck -fn "$final/boot.img" >/dev/null || fail "the sealed boot image does not check clean"
   btrfs check --readonly "$final/root.img" >/dev/null 2>&1 || fail "the sealed root image does not check clean"
   cleanup
+}
+
+# Snapper's /.snapshots, when the runtime's setup made it here, is a subvolume
+# nested in @. A file copy would flatten it into a plain directory, and snapper
+# on the Mac would then fail, so the sealed @ gets its own subvolume before the
+# copy fills in its mode. It must be empty: the build's snapshots never ship.
+# (@factory, a snapshot of @, carries it as an empty directory, which a factory
+# reset turns back into a subvolume.)
+carry_snapshots_subvolume() {
+  local from=$1/.snapshots to=$2/.snapshots
+  [[ -e $from || -L $from ]] || return 0
+  [[ -d $from && ! -L $from ]] && btrfs subvolume show "$from" >/dev/null 2>&1 ||
+    fail "/.snapshots in the build root is not a btrfs subvolume"
+  [[ -z $(ls -A "$from") ]] || fail "/.snapshots in the build root holds snapshots"
+  btrfs subvolume create "$to" >/dev/null || fail "could not create /.snapshots in the sealed root"
 }
 
 # Keeps the boot and ESP trees, then unmounts the build root's subvolumes,
