@@ -11,6 +11,9 @@ text=$(<"$1")
 text=${text//@APP_NAME@/"$INSTALLER_APP_NAME"}
 text=${text//@APP_IDENTIFIER@/"$INSTALLER_APP_IDENTIFIER"}
 text=${text//@HELPER_IDENTIFIER@/"$INSTALLER_HELPER_IDENTIFIER"}
-# noclobber creates DEST exclusively, so a raced file or symlink is never followed.
-set -C
-printf '%s\n' "$text" >"$2"
+staging=$(mktemp "$(dirname -- "$2")/.render-identity.XXXXXX")
+trap 'rm -f -- "$staging"' EXIT
+printf '%s\n' "$text" >"$staging"
+chmod 0644 "$staging"
+# link(2) never replaces or follows an existing DEST, even one raced in after the check.
+ln -- "$staging" "$2"

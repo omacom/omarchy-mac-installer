@@ -121,16 +121,19 @@ if (( ${#producer[@]} )); then
   hits=$(cd "$ROOT" && grep -n -I -F "${patterns[@]}" -- "${producer[@]}") || status=$?
   (( status <= 1 )) || fail "grep scans the image producer" "$hits"
   package_hosts=(
-    "github.com/$INSTALLER_GITHUB_RELEASE_LOGIN/omarchy-pkgs/releases/download"
+    "github.com/$INSTALLER_GITHUB_RELEASE_LOGIN/omarchy-pkgs/releases/download/"
+    "github.com/$INSTALLER_GITHUB_RELEASE_LOGIN/omarchy-pkgs/releases/download\""
     "${INSTALLER_PUBLIC_BASE#https://}/mirror/alarm/"
   )
   remaining=()
   while IFS= read -r line; do
     [[ -n $line ]] || continue
     stripped=$line
+    lower=${line,,}
     for host in "${package_hosts[@]}"; do
-      # A dot-dot after an allowed prefix could climb to another path on that host.
-      if [[ $line == *"$host"*..* ]]; then
+      # A dot segment, plain or encoded, after an allowed prefix could climb
+      # to another path on that host.
+      if [[ $lower == *"${host,,}"*..* || $lower == *"${host,,}"*%2e* ]]; then
         stripped=$line
         break
       fi
