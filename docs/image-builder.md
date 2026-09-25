@@ -1,23 +1,15 @@
 # Linux image builder
 
-This import is being replaced. [One image producer](image-producer.md) records the decision: mx-mac's `build-mac-image` becomes the base, this builder's candidate importer and installed-system checks move beside it, and the rest is removed.
+`image-builder/` holds the one Apple Silicon image producer: mx-mac's `build-mac-image`, adapted to build from a signed candidate set, with #2's candidate importer, Limine contract and installed-system checks beside it. [One image producer](image-producer.md) records the decision and where each part comes from; [image-builder/README.md](../image-builder/README.md) is how to run it.
 
-The installer application and its Linux image producer are reviewed in this repository. The producer source lives in `image-builder/`; the macOS application/engine layout is unchanged. Runtime changes remain in `omacom/omarchy-mac:quattro-upstream`, and package recipes remain in `omarchy-mac/omarchy-pkgs-aarch64`.
-
-## Import and provenance
-
-`image-builder-import.json` records original file hashes/modes, the source tree and commit `dbc46807e3c341b82fa518c2db2416464a087dd3` from the previously tested builder. `image-builder/archiso` retains gitlink `424e78130db2af6c1ceb55b442d7914b1109ff2b`, declared in the root `.gitmodules`. Initialize it with `git submodule update --init image-builder/archiso`.
-
-The imported nightly publication workflow is deliberately excluded. Historical release/sign/upload commands and documentation remain attributed source, not configured publication destinations for this fork. No image publishing workflow is activated by this import. Historical validation records describe their original source and are not qualification of the relocated producer.
-
-The builder now distinguishes its logical source root from the enclosing Git root. Source paths stay builder-relative; Git history/status remain scoped to those paths. Frozen producer inputs preserve the repository prefix and copied Git metadata. The admission-receipt schema and authorization checks are unchanged; its paths identify logical input groups. A relocated producer has new identities; do not relabel prior checkpoints or reuse build-25 qualification for changed sources.
+The installer application and its image producer are reviewed in this repository. Runtime changes remain in `omacom/omarchy-mac:quattro-upstream`, and package recipes in `omacom/omarchy-pkgs`.
 
 ## Checks and entrypoints
 
-Run `bash test/all` for portable installer checks and `bash image-builder/test/all` for VM-free producer checks. The latter needs Bash 5, Python, Git, jq, libarchive tools, GnuPG, and the filesystem/archive utilities installed by the source-check CI job. Its lease fixtures need a private temporary directory under a trusted user-owned parent, rather than a world-writable `/tmp` ancestor. Tests create fixture Git commits; disable signing for the test process only if local Git configuration otherwise signs every commit.
+Run `bash test/all` for portable installer checks and `bash image-builder/test/all` for the producer's source checks. The latter needs Bash 5, Python 3.11 or newer, GnuPG, jq and bsdtar; it needs no container, network or root.
 
-The producer entrypoint is `image-builder/bin/omarchy-iso-make`; it resolves its source root from its own location. See the imported builder documentation for explicit private candidate inputs. Building, signing, booting a VM, and publishing are separate operations and are not part of the ordinary PR source-check job.
+Building an image needs an aarch64 Linux host with Docker and loop devices: `image-builder/bin/mac-image-inputs resolve`, then `image-builder/bin/build-mac-image`. Building, signing, booting a VM and publishing are separate operations and are not part of the ordinary PR source-check job.
 
 ## Qualification boundary
 
-This source relocation and the coordinated runtime/package refactor require a newly pinned candidate. Before physical testing, validate package ownership/dependencies and VM installation/second boot. Scott's subsequent M3 qualification includes installation, encrypted reboot, recovery-key unlock and factory reset through another owner setup. Keep the existing pilot frozen and its tested build available. No merge or production release is authorized by source-check success.
+An image is inspected against its candidate set before it is packaged, but inspection is not boot qualification: install, first boot, encryption and second boot on a Mac or a VM remain the hardware gate. No merge or production release is authorized by source-check success.

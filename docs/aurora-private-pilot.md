@@ -1,5 +1,7 @@
 # Private Aurora pilot integration
 
+This plan predates the one image producer: the `image-builder/` paths below are the omarchy-iso-derived builder at #2's head, `5274846`, which this repository no longer holds (see [One image producer](image-producer.md)).
+
 The Aurora package prototype lives in [omarchy-mac/omarchy-pkgs-aarch64 #67](https://github.com/omarchy-mac/omarchy-pkgs-aarch64/pull/67). Its kernel, headers and compatible m1n1 are independently rebuilt candidates. A successful build does not qualify them for installation. The tested Asahi/Limine build 25 remains the baseline; do not replace its product pins, branding manifest, tester bundle or instructions with unqualified Aurora output.
 
 ## Repository responsibilities

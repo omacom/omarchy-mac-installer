@@ -1,33 +1,35 @@
 #!/bin/bash
-#
-# Fast, VM-free tests only. The integration scenarios that boot the ISO in
-# QEMU live in test/integration.d/ and run via ./test/integration.
+
+# The image producer's source checks: no container, loop device, network or
+# root. Needs Bash 5, Python 3.11+, GnuPG, jq and bsdtar (libarchive).
 
 set -euo pipefail
 
-ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-jobs=${OMARCHY_BUILD_JOBS:-10}
-mode=${OMARCHY_BUILD_MODE:-qualification}
-test_timeout_seconds=${OMARCHY_TEST_TIMEOUT_SECONDS:-300}
-result_ledger=${OMARCHY_TEST_RESULT_LEDGER:-$ROOT/test-runs/unit-test-results.json}
-
 if (( BASH_VERSINFO[0] < 5 )); then
-  echo "test/all requires Bash 5+; found $BASH_VERSION at $BASH" >&2
-  exit 2
+  echo "image-builder/test/all requires Bash 5 or newer" >&2
+  exit 1
 fi
-epoch_first=${EPOCHREALTIME:-}
-epoch_second=${EPOCHREALTIME:-}
-if [[ ! $epoch_first =~ ^[0-9]+\.[0-9]+$ ||
-  ! $epoch_second =~ ^[0-9]+\.[0-9]+$ ||
-  $epoch_first == "$epoch_second" ]]; then
-  echo "test/all requires a working EPOCHREALTIME clock" >&2
-  exit 2
-fi
-export OMARCHY_TEST_BASH=$BASH
 
-python3 "$ROOT/test/run-manifest.py" \
-  --jobs "$jobs" \
-  --mode "$mode" \
-  --test-timeout-seconds "$test_timeout_seconds" \
-  --result-ledger "$result_ledger" \
-  "$@"
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$root"
+tests_temp=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-image-builder-tests.XXXXXX")
+trap 'rm -rf -- "$tests_temp"' EXIT
+export TMPDIR=$tests_temp
+export PYTHONPYCACHEPREFIX=$tests_temp/pycache
+
+for script in bin/build-mac-image bin/mac-image-inputs builder/finalize-root test/all test/*.sh; do
+  bash -n "$script"
+done
+for script in bin/mac-image-check builder/*.py test/*.py; do
+  python3 -m py_compile "$script"
+done
+echo "ok - shell syntax and Python compilation"
+
+python3 test/test_candidate_set.py
+python3 test/test_inspection.py
+python3 test/test_mac_image_check.py
+for test_file in test/*-test.sh; do
+  "$BASH" "$test_file"
+done
+
+echo "Image producer source checks passed; building an image needs an aarch64 Linux host with Docker."
