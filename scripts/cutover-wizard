@@ -289,12 +289,12 @@ pause
 stage "Commit the release identity"
 say "The app is built against these two files. They change only if the key is"
 say "ever rotated, so they belong in the repository."
-run cp "$WORK_DIR/trust-root.ed25519.pub" "$APP_DIR/Release/trust-root.ed25519.pub"
+run cp "$WORK_DIR/trust-root.ed25519.pub" "$APP_DIR/$INSTALLER_TRUST_ROOT"
 if [[ -f "$APP_DIR/Release/release.json" ]]; then
   note "Release/release.json already exists — leaving it as it is."
 else
   run "$APP_DIR/scripts/make-release-descriptor" \
-    --public-key "$APP_DIR/Release/trust-root.ed25519.pub" \
+    --public-key "$APP_DIR/$INSTALLER_TRUST_ROOT" \
     --base-url "$PUBLIC_BASE" \
     --output "$APP_DIR/Release/release.json"
 fi
@@ -397,7 +397,7 @@ open(signature, "wb").write(base64.b64decode(document["signature"]))
 print("  sequence:", json.load(open(catalog, encoding="utf-8"))["sequence"])
 PYDECODE
   run xcrun swift "$APP_DIR/scripts/catalog-signing.swift" verify \
-    "$APP_DIR/Release/trust-root.ed25519.pub" \
+    "$APP_DIR/$INSTALLER_TRUST_ROOT" \
     "$WORK_DIR/catalog/catalog.json" "$WORK_DIR/catalog/catalog.json.sig"
   say "Reusing it. Nothing is regenerated and nothing is re-signed."
   pause
@@ -427,7 +427,7 @@ say "Signing with the keychain key. macOS may ask for your login password."
 run xcrun swift "$APP_DIR/scripts/catalog-signing.swift" sign-keychain \
   "$KEY_SERVICE" "$WORK_DIR/catalog/catalog.json" "$WORK_DIR/catalog/catalog.json.sig"
 run xcrun swift "$APP_DIR/scripts/catalog-signing.swift" verify \
-  "$APP_DIR/Release/trust-root.ed25519.pub" \
+  "$APP_DIR/$INSTALLER_TRUST_ROOT" \
   "$WORK_DIR/catalog/catalog.json" "$WORK_DIR/catalog/catalog.json.sig"
 run "$APP_DIR/scripts/publish-channels" envelope \
   --catalog "$WORK_DIR/catalog/catalog.json" \

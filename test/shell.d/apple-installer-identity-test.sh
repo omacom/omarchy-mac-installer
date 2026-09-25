@@ -10,7 +10,7 @@ trap 'rm -rf "$test_tmp"' EXIT
 
 # The Swift generator parses this file while the shell sources it, so only
 # lines whose meaning is identical in both are allowed.
-entry_pattern='^(INSTALLER_[A-Z0-9_]+)="([^"\$`]+)"$'
+entry_pattern='^(INSTALLER_[A-Z][A-Z0-9]*(_[A-Z0-9]+)*)="([^"\$`]+)"$'
 declare -A seen=()
 line_number=0
 while IFS= read -r line || [[ -n $line ]]; do
@@ -79,12 +79,17 @@ patterns=()
 for value in "${guarded[@]}"; do
   patterns+=(-e "$value")
 done
-hits=$(
-  git -C "$ROOT" ls-files -z |
-    grep -zv -E '^(docs|evidence|Design)/|\.md$|^Packaging/identity\.conf$|^Release/release\.json$|^scripts/release-inputs.*\.template\.json$' |
-    (cd "$ROOT" && xargs -0 grep -n -I -F "${patterns[@]}" --) || true
-)
-[[ -z $hits ]] || fail "identity and hosting values live only in Packaging/identity.conf" "$hits"
+git -C "$ROOT" ls-files -z >"$test_tmp/tracked" || fail "git lists the tracked files"
+mapfile -d '' -t tracked <"$test_tmp/tracked"
+exempt='^(docs|evidence|Design)/|\.md$|^Packaging/identity\.conf$|^Release/release\.json$|^scripts/release-inputs.*\.template\.json$'
+scanned=()
+for file in "${tracked[@]}"; do
+  [[ $file =~ $exempt ]] || scanned+=("$file")
+done
+(( ${#scanned[@]} > 100 )) || fail "the repeated-value scan covers the repository" "${#scanned[@]} files"
+status=0
+hits=$(cd "$ROOT" && grep -n -I -F "${patterns[@]}" -- "${scanned[@]}") || status=$?
+(( status == 1 )) || fail "identity and hosting values live only in Packaging/identity.conf" "$hits"
 pass "no code, script or test repeats an identity or hosting value"
 
 # A different configuration changes what the packaging scripts produce.

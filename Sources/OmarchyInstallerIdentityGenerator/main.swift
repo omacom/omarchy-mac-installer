@@ -24,13 +24,20 @@ func fail(_ message: String) -> Never {
   exit(1)
 }
 
+// INSTALLER_ then words of A-Z and 0-9 joined by single underscores, the
+// first starting with a letter, so every name maps to a distinct identifier.
 func isValidName(_ name: Substring) -> Bool {
-  guard name.hasPrefix(namePrefix), name.count > namePrefix.count else {
+  guard name.hasPrefix(namePrefix) else {
     return false
   }
-  return name.allSatisfy { character in
-    character == "_" || ("A"..."Z").contains(character)
-      || ("0"..."9").contains(character)
+  let words = name.dropFirst(namePrefix.count)
+    .split(separator: "_", omittingEmptySubsequences: false)
+  guard let first = words.first?.first, ("A"..."Z").contains(first) else {
+    return false
+  }
+  return words.allSatisfy { word in
+    !word.isEmpty
+      && word.allSatisfy { ("A"..."Z").contains($0) || ("0"..."9").contains($0) }
   }
 }
 
@@ -59,10 +66,11 @@ func parse(_ source: String) -> [IdentityEntry] {
     guard !value.contains(where: forbiddenValueCharacters.contains) else {
       fail("line \(lineNumber) value contains a quote, backslash, dollar or backtick")
     }
-    guard seen.insert(String(name)).inserted else {
+    let entry = IdentityEntry(name: String(name), value: String(value))
+    guard seen.insert(entry.propertyName).inserted else {
       fail("line \(lineNumber) repeats \(name)")
     }
-    entries.append(IdentityEntry(name: String(name), value: String(value)))
+    entries.append(entry)
   }
   guard !entries.isEmpty else {
     fail("the configuration defines no values")
