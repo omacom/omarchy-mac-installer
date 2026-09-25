@@ -39,7 +39,7 @@ A build takes about 15 minutes and 25 GB of disk. On a host with a desktop sessi
 - the pacman hooks that rebuild the UKI and redeploy Limine come from their packages, the Apple gate included
 - the image-target manifest, first boot, owner provisioning, the Limine gate and the fresh-image `deferred-steps` contract
 - `/.snapshots` is an empty btrfs subvolume under snapper's root configuration, or absent with a deferred hardware step queued to create it; a plain directory fails
-- the installed pacman configuration is the runtime's Apple Silicon template for the channel (`default/pacman/apple-silicon`, or `aarch64` on an older runtime) with the aarch64 mirror list, as the runtime stages it on a Mac, plus the test image's pin below, and the installed-system checks (`builder/verify_installed_system.py`) pass, `alsa-ucm-conf-asahi` and `asahi-audio` included; Bluetooth counts as enabled when its hardware step is queued for first boot
+- the installed pacman configuration is the runtime's Apple Silicon template for the channel (`default/pacman/apple-silicon`, or `aarch64` on an older runtime) with the aarch64 mirror list, as the runtime stages it on a Mac, plus the test image's pin below, and the installed-system checks (`builder/verify_installed_system.py`) pass, `alsa-ucm-conf-asahi`, `asahi-audio`, `vulkan-asahi` and `asahi-bless` included; Bluetooth counts as enabled when its hardware step is queued for first boot
 - `@factory` is sealed for the set without fresh-image or owner state
 
 `bin/mac-image-check` also holds the payload to the installer engine's contract and checks `PROVENANCE` and `IMAGE` against the bytes beside them.
@@ -54,6 +54,7 @@ Inspection is not boot qualification. After the owner's first login on the Mac, 
 
 - `btrfs subvolume show /.snapshots` succeeds, and `snapper list` and `systemctl start snapper-cleanup.service` finish without error
 - `plymouth-set-default-theme` prints `omarchy`, and `/proc/cmdline` has `splash plymouth.ignore-serial-consoles`
+- `/var/lib/omarchy/image/deferred-steps` is gone: the deferred hardware setup finished (if not, `/var/log/omarchy-install.log` names the step it stopped at)
 - `pacman -Q alsa-ucm-conf-asahi asahi-audio` lists both, and in the owner's session `wpctl status` shows the model's `audio_effect.<model>-convolver` (on the M2 Max, `j416-convolver`) as the default sink, not a `stereo-fallback` one
 
 ## Reproducibility
@@ -62,7 +63,7 @@ Inspection is not boot qualification. After the owner's first login on the Mac, 
 
 ## Checks
 
-`bash image-builder/test/all` runs the source checks: the importer against signed fixture sets (tampering, a foreign key, a key that travels with the set, missing and refused packages, closure and channel packages and their sources, versions below a minimum, a file with two owners, a runtime package from another commit), the inspection against fixture images (every boot component missing or mismatched, a set file rewritten, a wrong `@factory`, a `bgrt` or missing splash, a flattened `/.snapshots`, a missing speaker stack, a missing or different test image pin), the inputs record and the builder's own decisions. They need Bash 5, Python 3.11 or newer, GnuPG, jq and bsdtar, and no container, network or root.
+`bash image-builder/test/all` runs the source checks: the importer against signed fixture sets (tampering, a foreign key, a key that travels with the set, missing and refused packages, closure and channel packages and their sources, versions below a minimum, a file with two owners, a runtime package from another commit), the inspection against fixture images (every boot component missing or mismatched, a set file rewritten, a wrong `@factory`, a `bgrt` or missing splash, a flattened `/.snapshots`, a missing speaker stack, Vulkan driver or `asahi-bless`, a missing or different test image pin), the inputs record and the builder's own decisions. They need Bash 5, Python 3.11 or newer, GnuPG, jq and bsdtar, and no container, network or root.
 
 ## Sources
 

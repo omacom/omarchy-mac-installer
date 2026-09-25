@@ -10,6 +10,10 @@ first use:
 - speakersafetyd left disabled keeps the built-in speakers silent;
 - without alsa-ucm-conf-asahi and asahi-audio the default sink is
   stereo-fallback, not the model's DSP convolver;
+- without vulkan-asahi the deferred Vulkan step tried to install it on a
+  first boot with no package databases, often offline, and stopped every
+  hardware step after it;
+- without asahi-bless the startup volume cannot be picked from Linux;
 - bluetooth.service left disabled leaves Bluetooth off;
 - NetworkManager without the iwd backend leaves Apple Wi-Fi unmanaged.
 
@@ -45,6 +49,8 @@ REQUIRED_PACKAGES = (
     "speakersafetyd",
     "alsa-ucm-conf-asahi",
     "asahi-audio",
+    "vulkan-asahi",
+    "asahi-bless",
     "iwd",
     "networkmanager",
     "bluez",
