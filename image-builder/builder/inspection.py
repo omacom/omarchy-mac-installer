@@ -191,8 +191,10 @@ def check_candidate_files(root: Path, candidates: Candidates, report: dict) -> s
     with tempfile.TemporaryDirectory(prefix="inspect-") as scratch:
         for name in sorted(candidates.packages):
             unpacked = extract(candidates, name, Path(scratch))
-            for directory, _, files in os.walk(unpacked):
-                for file in files:
+            for directory, subdirectories, files in os.walk(unpacked):
+                # os.walk lists a link to a directory with the directories and never follows it.
+                links = [name for name in subdirectories if Path(directory, name).is_symlink()]
+                for file in (*files, *links):
                     source = Path(directory, file)
                     relative = source.relative_to(unpacked)
                     installed = root / relative
