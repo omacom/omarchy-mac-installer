@@ -217,17 +217,14 @@
     public static let startOver = "Start over"
     public static let downloadInstaller = "Download the installer"
     public static let rcBadge = "Release candidate"
-    public static let rcAuroraBadge = "RC (Aurora)"
     public static let channelMenuTitle = "Release channel"
     public static let channelStable = "Stable"
     public static let channelRC = "Release candidate"
-    public static let channelRCAurora = "RC (Aurora)"
 
     public static func badge(for channel: ReleaseChannel) -> String {
       switch channel {
       case .stable: channelStable
       case .rc: rcBadge
-      case .rcAurora: rcAuroraBadge
       }
     }
 
@@ -286,6 +283,125 @@
     public static let notReadyDetail =
       "The installer couldn’t confirm that this Mac meets the installation requirements."
     public static let supportedBadge = "Supported"
+
+    /// "MacBook Pro 14-inch (M3, 2023) · Mac15,3 · apple,j504", leaving out
+    /// what isn't known.
+    public static func macDescription(
+      deviceIdentifier: String,
+      modelIdentifier: String? = nil
+    ) -> String {
+      [MacModelNames.name(for: deviceIdentifier), modelIdentifier, deviceIdentifier]
+        .compactMap { $0 }
+        .filter { !$0.isEmpty }
+        .joined(separator: " · ")
+    }
+
+    /// The blocked-model card: names this Mac and, when the signed catalog
+    /// could be read, the model families this release supports.
+    public static func unsupportedModel(
+      deviceIdentifier: String,
+      modelIdentifier: String? = nil,
+      supportedDeviceIdentifiers: [String]? = nil,
+      technicalDetail: String? = nil
+    ) -> FailureDisplay {
+      let mac = macDescription(
+        deviceIdentifier: deviceIdentifier, modelIdentifier: modelIdentifier)
+      let remedy: String
+      if let supported = supportedDeviceIdentifiers,
+        let summary = MacModelNames.supportedFamiliesSummary(supported)
+      {
+        remedy =
+          "This release supports these Macs (\(supported.count) models): \(summary). "
+          + blockedExplainer
+      } else {
+        remedy = blockedExplainer
+      }
+      return FailureDisplay(
+        headline: blockedHeadline,
+        plainDetail: "This Mac (\(mac)) isn’t included in this release.",
+        technicalDetail: technicalDetail,
+        remedy: remedy,
+        isBlockedModel: true
+      )
+    }
+
+    public static func unsupportedModel(_ model: UnsupportedModelDisplay) -> FailureDisplay {
+      unsupportedModel(
+        deviceIdentifier: model.deviceIdentifier,
+        modelIdentifier: model.modelIdentifier,
+        supportedDeviceIdentifiers: model.supportedDeviceIdentifiers
+      )
+    }
+
+    // MARK: Engine failures
+
+    public static let replanAction = "Check available space"
+    public static let engineDiagnosticsLocation =
+      "Use Copy error details to keep them. A copy is normally saved in ~/Library/Logs/\(EngineFailureUserLog.directoryName)."
+
+    /// Plain wording for a typed engine failure. The disk-unchanged sentence
+    /// appears only when the helper proved it from the installation journal.
+    public static func engineFailure(
+      _ notice: EngineFailureNotice,
+      technicalDetail: String
+    ) -> FailureDisplay {
+      let unchanged = notice.diskUnchanged
+      let diskState =
+        unchanged
+        ? "No disk changes were made."
+        : "The installer couldn’t confirm whether disk changes started."
+      switch notice.reason {
+      case .approvedSpaceChanged:
+        return FailureDisplay(
+          headline: "The space available for Omarchy changed",
+          plainDetail:
+            "The size you approved no longer fits the space this Mac can provide now, so the installer stopped before using it. \(diskState)",
+          technicalDetail: technicalDetail,
+          remedy: unchanged
+            ? "Choose \(replanAction) to prepare a new plan with the space available now, then review and approve it."
+            : "Save the error details and check the verified installation record before trying again. \(engineDiagnosticsLocation)",
+          replanAvailable: unchanged
+        )
+      case .diskLayoutChanged:
+        return FailureDisplay(
+          headline: "The disk changed after you approved the plan",
+          plainDetail:
+            "The disk layout no longer matches the approved plan, so the installer stopped. \(diskState)",
+          technicalDetail: technicalDetail,
+          remedy: unchanged
+            ? "Choose \(replanAction) to prepare a new plan for the disk as it is now, then review and approve it."
+            : "Save the error details and check the verified installation record before trying again. \(engineDiagnosticsLocation)",
+          replanAvailable: unchanged
+        )
+      case .deviceUnsupported:
+        return FailureDisplay(
+          headline: blockedHeadline,
+          plainDetail: "The installer engine doesn’t support this Mac model. \(diskState)",
+          technicalDetail: technicalDetail,
+          remedy: blockedExplainer,
+          isBlockedModel: true
+        )
+      case .planIntegrity:
+        return FailureDisplay(
+          headline: "The installation plan failed a safety check",
+          plainDetail:
+            "The installer engine refused the plan because it didn’t match the verified release. \(diskState)",
+          technicalDetail: technicalDetail,
+          remedy: unchanged
+            ? "Choose Check again to inspect this Mac and prepare a new plan. \(engineDiagnosticsLocation)"
+            : "Save the error details and check the verified installation record before trying again. \(engineDiagnosticsLocation)"
+        )
+      case .unclassified:
+        return FailureDisplay(
+          headline: "The installer engine stopped with an error",
+          plainDetail: diskState,
+          technicalDetail: technicalDetail,
+          remedy: unchanged
+            ? "Choose Check again to start over. \(engineDiagnosticsLocation)"
+            : "Save the error details and check the verified installation record before trying again. \(engineDiagnosticsLocation)"
+        )
+      }
+    }
 
     // MARK: Errors
 
@@ -368,6 +484,8 @@
             remedy:
               "Keep your Mac connected to power. Save the error details and check the verified installation record before trying again."
           )
+        case .engineFailed(let notice):
+          return engineFailure(notice, technicalDetail: technical)
         case .helperRejected(let domain, let code):
           let busy = ClosedEngineHelperError.busy as NSError
           if domain == busy.domain, code == busy.code {
@@ -414,13 +532,7 @@
             technicalDetail: technical
           )
         case .unsupportedDevice(let identifier):
-          return FailureDisplay(
-            headline: blockedHeadline,
-            plainDetail: blockedSubheadline,
-            technicalDetail: technical,
-            remedy: "This release does not support Mac model \(identifier).",
-            isBlockedModel: true
-          )
+          return unsupportedModel(deviceIdentifier: identifier, technicalDetail: technical)
         default:
           return FailureDisplay(
             headline: "The installation service reported an error",
@@ -484,13 +596,8 @@
 
       if let preparation = error as? InstallerPlanPreparationError {
         switch preparation {
-        case .unsupportedDevice:
-          return FailureDisplay(
-            headline: blockedHeadline,
-            plainDetail: blockedSubheadline,
-            technicalDetail: technical,
-            isBlockedModel: true
-          )
+        case .unsupportedDevice(let identifier):
+          return unsupportedModel(deviceIdentifier: identifier, technicalDetail: technical)
         default:
           return FailureDisplay(
             headline: "An installation plan couldn’t be prepared",
@@ -523,12 +630,13 @@
             isBlockedModel: true
           )
         case .unsupportedDevice(let identifier):
-          return FailureDisplay(
-            headline: "This release doesn’t support this Mac",
-            plainDetail:
-              "Mac model \(identifier) is not listed in this release’s signed support catalog.",
-            technicalDetail: technical,
-            isBlockedModel: true
+          return unsupportedModel(deviceIdentifier: identifier, technicalDetail: technical)
+        case .notInCatalog(let identifier, let model, let supported):
+          return unsupportedModel(
+            deviceIdentifier: identifier,
+            modelIdentifier: model,
+            supportedDeviceIdentifiers: supported,
+            technicalDetail: technical
           )
         case .deliveryMetadataUnavailable:
           return FailureDisplay(

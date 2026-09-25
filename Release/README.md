@@ -3,21 +3,21 @@
 Production packaging reads this directory and copies its contents into
 `Omarchy MX Mac Installer.app/Contents/Resources/Release/`:
 
-- `release.json` — schema version 3 descriptor naming the stable, rc, and rc-aurora
+- `release.json` — schema version 3 descriptor naming the stable and rc
   channel catalog URLs, the default channel, the expected Ed25519 trust-root
   fingerprint, the helper Mach service name, and the helper code-signing
   requirement. Generate it with `scripts/make-release-descriptor`.
 - `trust-root.ed25519.pub` — exactly 32 raw Ed25519 public-key bytes matching
   the descriptor fingerprint.
 
-Both files are the same for every build and change only when the signing key is
-rotated. The private key lives in the operator's login keychain under the
+Both files are the same for every build. The trust root changes only when the
+signing key is rotated; the descriptor also changes when the default channel
+does (it is `stable`, matching upstream Omarchy). The private key lives in the operator's login keychain under the
 service `omarchy-channel-signing-key` and must never appear here or anywhere
 else on disk; see
-[`docs/apple-silicon-distribution-channels.md`](https://github.com/maralcbr/omarchy-mx-mac/blob/4db862da7a0957758c504c5a3e041202019dbabf/docs/apple-silicon-distribution-channels.md).
+[`docs/apple-silicon-distribution-channels.md`](https://github.com/maralcbr/omarchy-mx-mac/blob/92a9054f4565b37739ac3bd4f0fb4fcf8bd48625/docs/apple-silicon-distribution-channels.md).
 
-The descriptor names all three channels even while only the stable channel is in
-use, because the app is signed once: a channel absent from the descriptor
+The descriptor names both channels because the app is signed once: a channel absent from the descriptor
 cannot be opened later without shipping another signed app.
 
 The app rejects missing, symlinked, group- or world-writable, oversized,

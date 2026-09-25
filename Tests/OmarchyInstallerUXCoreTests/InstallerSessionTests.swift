@@ -176,7 +176,33 @@
       XCTAssertEqual(environment.approveCount, 0)
     }
 
-    func testReplanResetsPrefetchSoInstallWaitsForTheSelectedPayload() async throws {
+    func testReplanKeepsTheRunningDownload() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.payloadPrefetchRequired = true
+      let gate = OperationGate()
+      environment.prefetchGate = gate
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      await session.continueToPlan()
+      await gate.waitUntilEntered()
+      session.continueToPlanReview()
+      let cancelsBefore = environment.prefetchCancelCount
+
+      await session.replan(omarchyBytes: 200_000_000_000)
+
+      XCTAssertEqual(environment.prefetchCancelCount, cancelsBefore)
+      await waitUntil { environment.prefetchStartCount == 2 }
+      XCTAssertNotEqual(session.prefetchState, .verified)
+      session.setAcknowledged(true)
+      session.approve()
+      XCTAssertFalse(session.canStartInstallation)
+
+      await gate.release()
+      await waitUntil { session.prefetchState == .verified }
+      XCTAssertTrue(session.canStartInstallation)
+    }
+
+    func testReplanWaitsForAPayloadTheCatalogReplaced() async throws {
       let environment = MockInstallerEnvironment()
       environment.payloadPrefetchRequired = true
       let first = OperationGate()
@@ -185,16 +211,15 @@
       await session.inspect()
       await session.continueToPlan()
       await first.waitUntilEntered()
-      XCTAssertNotEqual(session.prefetchState, .verified)
       await first.release()
       await waitUntil { session.prefetchState == .verified }
 
       session.continueToPlanReview()
       let second = OperationGate()
       environment.prefetchGate = second
+      environment.payloadPrefetchState = .idle
       await session.replan(omarchyBytes: 200_000_000_000)
 
-      XCTAssertGreaterThanOrEqual(environment.prefetchCancelCount, 1)
       await second.waitUntilEntered()
       XCTAssertNotEqual(session.prefetchState, .verified)
       XCTAssertEqual(environment.prefetchStartCount, 2)
@@ -204,6 +229,66 @@
 
       await second.release()
       await waitUntil { session.prefetchState == .verified }
+      XCTAssertTrue(session.canStartInstallation)
+    }
+
+    func testTheOldDownloadCannotVerifyAPayloadTheCatalogReplaced() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.payloadPrefetchRequired = true
+      let first = OperationGate()
+      environment.prefetchGate = first
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      await session.continueToPlan()
+      await first.waitUntilEntered()
+      session.continueToPlanReview()
+
+      let second = OperationGate()
+      environment.prefetchGate = second
+      environment.payloadPrefetchState = .idle
+      await session.replan(omarchyBytes: 200_000_000_000)
+      await second.waitUntilEntered()
+
+      await first.release()
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertNotEqual(session.prefetchState, .verified)
+      session.setAcknowledged(true)
+      session.approve()
+      XCTAssertFalse(session.canStartInstallation)
+
+      await second.release()
+      await waitUntil { session.prefetchState == .verified }
+      XCTAssertTrue(session.canStartInstallation)
+    }
+
+    func testAFailureDeliveredAfterAReplanCannotBlockTheRetry() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.payloadPrefetchRequired = true
+      let first = OperationGate()
+      environment.prefetchGate = first
+      environment.prefetchFailure = true
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      await session.continueToPlan()
+      await first.waitUntilEntered()
+      session.continueToPlanReview()
+
+      let second = OperationGate()
+      environment.prefetchGate = second
+      environment.prefetchFailure = false
+      await session.replan(omarchyBytes: 200_000_000_000)
+      await second.waitUntilEntered()
+
+      await first.release()
+      try await Task.sleep(for: .milliseconds(50))
+      if case .failed = session.prefetchState {
+        XCTFail("A stale failure reached the session: \(session.prefetchState)")
+      }
+
+      await second.release()
+      await waitUntil { session.prefetchState == .verified }
+      session.setAcknowledged(true)
+      session.approve()
       XCTAssertTrue(session.canStartInstallation)
     }
 
@@ -562,6 +647,63 @@
       }
     }
 
+    func testEngineRefusalReleasesTheLatchOnlyWithJournalProof() async throws {
+      for unchanged in [false, true] {
+        let environment = MockInstallerEnvironment()
+        environment.executeResults = [
+          .failure(
+            EngineXPCSubmissionError.engineFailed(
+              EngineFailureNotice(
+                reason: .approvedSpaceChanged, exitStatus: 1, diskUnchanged: unchanged,
+                summary: "omarchy_execution.ExecutionAdmissionError: approved extent changed")))
+        ]
+        let session = await ready(environment)
+        let approvedBytes = environment.plan.omarchyBytes
+        session.presentInstallCredentials()
+        await session.submit(try authorization())
+        guard case .failed(let failure) = session.phase else {
+          return XCTFail("Expected failure")
+        }
+        XCTAssertEqual(failure.replanAvailable, unchanged)
+        XCTAssertEqual(session.hasExecutionStarted, !unchanged)
+        XCTAssertEqual(session.canInspect, unchanged)
+        let prepared = environment.prepareCount
+
+        await session.replanAfterEngineRefusal()
+        if unchanged {
+          XCTAssertEqual(environment.prepareCount, prepared + 1)
+          XCTAssertEqual(environment.lastOmarchyBytes, approvedBytes)
+          guard case .planReview(_, let acknowledged) = session.phase else {
+            return XCTFail("Expected planReview, got \(session.phase)")
+          }
+          XCTAssertFalse(acknowledged)
+          XCTAssertFalse(session.canStartInstallation)
+        } else {
+          XCTAssertEqual(environment.prepareCount, prepared)
+          guard case .failed = session.phase else { return XCTFail("Expected failure") }
+        }
+      }
+    }
+
+    func testUnsupportedModelHostNamesTheMac() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.engineSupported = false
+      environment.host = HostDisplay(
+        chipAndSpace: "Apple M3 · 400 GB free", supported: false,
+        unsupportedModel: UnsupportedModelDisplay(
+          deviceIdentifier: "apple,j504", modelIdentifier: "Mac15,3",
+          supportedDeviceIdentifiers: ["apple,j314s"]))
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      guard case .unsupported(let failure) = session.phase else {
+        return XCTFail("Expected unsupported, got \(session.phase)")
+      }
+      XCTAssertTrue(failure.isBlockedModel)
+      XCTAssertTrue(failure.plainDetail.contains("Mac15,3"))
+      XCTAssertTrue(try XCTUnwrap(failure.remedy).contains("M1: MacBook Pro"))
+      XCTAssertNotNil(failure.device)
+    }
+
     func testShutdownRetainsInstructionsForAcceptedAndFailedRequests() async throws {
       for accepted in [false, true] {
         let environment = MockInstallerEnvironment()
@@ -795,17 +937,17 @@
 
   actor OperationGate {
     private var entered = false
-    private var continuation: CheckedContinuation<Void, Never>?
+    private var continuations: [CheckedContinuation<Void, Never>] = []
     func wait() async {
       entered = true
-      await withCheckedContinuation { continuation = $0 }
+      await withCheckedContinuation { continuations.append($0) }
     }
     func waitUntilEntered() async {
       while !entered { await Task.yield() }
     }
     func release() {
-      continuation?.resume()
-      continuation = nil
+      for continuation in continuations { continuation.resume() }
+      continuations.removeAll()
     }
   }
 
@@ -856,6 +998,7 @@
     var prefetchGate: OperationGate?
     private(set) var prefetchStartCount = 0
     private(set) var prefetchCancelCount = 0
+    var prefetchFailure = false
     var payloadPrefetchState: PayloadPrefetchState = .idle
 
     func preparePlan(
@@ -909,7 +1052,9 @@
     ) async throws {
       prefetchStartCount += 1
       progress(.idle)
+      let fails = prefetchFailure
       await prefetchGate?.wait()
+      if fails { throw PayloadPrefetchError.failed("retry") }
       payloadPrefetchState = .verified
       progress(.verified)
     }

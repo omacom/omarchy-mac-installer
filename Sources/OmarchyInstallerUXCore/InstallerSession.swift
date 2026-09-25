@@ -74,9 +74,10 @@
     }
 
     /// One-shot latch: an approved plan may be submitted for execution once.
-    /// Cleared only by the re-inspect / re-prepare reset cascades, plus the one
-    /// provable no-work case (the helper rejected the credentials before it
-    /// imported the package or started the engine).
+    /// Cleared only by the re-inspect / re-prepare reset cascades, plus the
+    /// provable no-work cases: the helper rejected the credentials before it
+    /// imported the package or started the engine, or the engine failed and
+    /// the helper proved from its root-owned journal that no mutation began.
     public private(set) var hasExecutionStarted = false
     public private(set) var recoveryRetryAvailable = false
 
@@ -88,10 +89,18 @@
     private var lastHost: HostDisplay?
     private var lastOmarchyBytes: UInt64?
     private var lastPrepared: (plan: PlanDisplay, update: AssetProgressUpdate)?
+    /// The approved plan the engine refused before changing the disk, kept so
+    /// a re-plan can start from the size the person chose.
+    private var refusedPlan: PlanDisplay?
     /// True while a chosen size is being re-planned; the Plan screen stays
     /// visible with its controls disabled instead of showing the download
     /// screen again.
     private var isReplanning = false
+    /// Identifies the running payload download watcher. A size change re-plans
+    /// the same payload, so the download keeps going across it.
+    private var prefetchID = UUID()
+    private var isObservingPrefetch = false
+    private var prefetchWatcher: Task<Void, Never>?
 
     public init(environment: any InstallerEnvironment) {
       self.environment = environment
@@ -165,6 +174,8 @@
         } else if host.supported, !environment.installationBlocked {
           lastHost = host
           phase = .welcome(host)
+        } else if let model = host.unsupportedModel {
+          phase = .unsupported(PlainLanguage.unsupportedModel(model).on(host))
         } else {
           let blockedModel = environment.installationBlocked
           phase = .unsupported(
@@ -206,6 +217,20 @@
       await preparePlan(host: lastHost, omarchyBytes: omarchyBytes, hold: false)
     }
 
+    /// After the engine refused the approved plan because the available space
+    /// or disk layout moved, and proved no disk change began, prepare a new
+    /// plan from the refused size. The normal size check clamps it to what is
+    /// available now, and the new plan needs a fresh review and approval.
+    public func replanAfterEngineRefusal() async {
+      guard !isBusy, !isExecuting, !hasExecutionStarted,
+        case .failed(let failure) = phase, failure.replanAvailable,
+        let plan = refusedPlan
+      else { return }
+      refusedPlan = nil
+      phase = .planReview(plan, acknowledged: false)
+      await replan(omarchyBytes: plan.omarchyBytes)
+    }
+
     private func preparePlan(
       host: HostDisplay?,
       omarchyBytes: UInt64? = nil,
@@ -214,7 +239,7 @@
       guard !isBusy && !isExecuting && !hasExecutionStarted else { return }
       operationID = UUID()
       let currentOperation = operationID
-      resetForPlanPreparation()
+      resetForPlanPreparation(keepingPrefetch: isReplanning)
       lastOmarchyBytes = omarchyBytes
       if !isReplanning {
         phase = .preparingPlan(AssetProgressUpdate(stage: .fetchingCatalog))
@@ -245,6 +270,14 @@
             }
           lastPrepared = (plan, lastUpdate)
           phase = hold ? .planPrepared(plan, lastUpdate) : .planReview(plan, acknowledged: false)
+          if isReplanning {
+            // The re-plan may have replaced or restarted the download. Watch it
+            // afresh so no result from the old watcher counts for this plan.
+            forgetPrefetchWatcher()
+            if environment.payloadPrefetchRequired {
+              prefetchState = environment.payloadPrefetchState
+            }
+          }
           startPrefetchIfNeeded()
         case .existingInstallChoice(let options):
           // Never replace, never install alongside: say what was found and
@@ -541,6 +574,17 @@
         return
       }
 
+      if context.kind == .install,
+        case .engineFailed(let notice) = error as? EngineXPCSubmissionError,
+        notice.diskUnchanged
+      {
+        // The helper derived this from the run's root-owned journal, not from
+        // engine output: no event, checkpoint or completion was recorded, so
+        // no disk mutation began. The latch may be released, as for rejected
+        // credentials; any new attempt still needs a new reviewed plan.
+        hasExecutionStarted = false
+        refusedPlan = plan
+      }
       beginInstallingIfNeeded()
       recoveryRetryAvailable = RecoveryAuthorizationRetryPolicy.isEligible(
         after: error
@@ -629,22 +673,43 @@
       if case .verified = prefetchState {
         return
       }
-      let currentOperation = operationID
-      Task { @MainActor in
+      guard !isObservingPrefetch else { return }
+      isObservingPrefetch = true
+      let currentPrefetch = UUID()
+      prefetchID = currentPrefetch
+      prefetchWatcher = Task { @MainActor in
+        defer {
+          if self.prefetchID == currentPrefetch { self.isObservingPrefetch = false }
+        }
         do {
           try await environment.prefetchPayload { [weak self] state in
             Task { @MainActor in
-              guard let self, self.operationID == currentOperation else { return }
+              // A progress hop queued behind completion must not undo it.
+              guard let self, self.prefetchID == currentPrefetch, self.isObservingPrefetch
+              else { return }
               self.prefetchState = state
             }
           }
-          guard self.operationID == currentOperation else { return }
+          guard self.prefetchID == currentPrefetch else { return }
           prefetchState = .verified
         } catch {
-          guard self.operationID == currentOperation else { return }
+          guard self.prefetchID == currentPrefetch else { return }
           prefetchState = .failed(String(describing: error))
         }
       }
+    }
+
+    private func forgetPrefetchWatcher() {
+      prefetchWatcher?.cancel()
+      prefetchWatcher = nil
+      prefetchID = UUID()
+      isObservingPrefetch = false
+      prefetchState = environment.payloadPrefetchRequired ? .idle : .verified
+    }
+
+    private func stopPrefetch() {
+      forgetPrefetchWatcher()
+      environment.cancelPayloadPrefetch()
     }
 
     // MARK: Reset cascades
@@ -663,14 +728,16 @@
       recoveryRetryAvailable = false
       isExecuting = false
       lastHost = nil
+      refusedPlan = nil
       encryptLinuxDisk = true
       environment.setEncryptLinuxDisk(true)
-      prefetchState = environment.payloadPrefetchRequired ? .idle : .verified
-      environment.cancelPayloadPrefetch()
+      stopPrefetch()
     }
 
-    /// Mirrors the field resets of `prepareSignedPlan()`.
-    private func resetForPlanPreparation() {
+    /// Mirrors the field resets of `prepareSignedPlan()`. A size change keeps
+    /// the payload download: the payload does not depend on the size, and the
+    /// environment reuses an in-flight download of the same digest.
+    private func resetForPlanPreparation(keepingPrefetch: Bool) {
       isEditingSize = false
       environment.discardApproval()
       stagingProgress = [:]
@@ -679,8 +746,10 @@
       hasExecutionStarted = false
       recoveryRetryAvailable = false
       isExecuting = false
-      prefetchState = environment.payloadPrefetchRequired ? .idle : .verified
-      environment.cancelPayloadPrefetch()
+      refusedPlan = nil
+      if !keepingPrefetch {
+        stopPrefetch()
+      }
     }
   }
   /// Receipt is synchronous even when UI delivery needs a main-actor hop.
