@@ -298,7 +298,7 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
     summary = {
         'schema': 1,
         'set': data['set'],
-        'candidate_only': True,
+        'candidate_only': data['candidate_only'] is True,
         'source_commit': source_commit,
         'signer': policy['primary_fingerprint'].upper(),
         'receipt_sha256': receipt_sha256,
