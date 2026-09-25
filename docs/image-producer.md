@@ -8,9 +8,9 @@ The base is mx-mac's image builder: `bin/build-mac-image`, `bin/mac-image-inputs
 
 Why this base:
 
-- It already builds the payload the 2.0.10 app and engine install: fixed UUIDs, ESP volume id and sizes, the zip members and `installer_data.json` that `_validate_full_os_package` checks. Since 2026-09-22 it has built mx-mac's published fresh-install payloads, including the current rc image. Those images ship Limine behind m1n1 and U-Boot with the Aurora kernel, and they pass mx-mac's image VM acceptance.
+- It already builds the payload the 2.0.10 app and engine install: fixed UUIDs, ESP volume id and sizes, the zip members and `installer_data.json` that `_validate_full_os_package` checks. Since 2026-09-22 it has built mx-mac's published fresh-install payloads, including the current rc image (mx-mac `docs/apple-silicon-release-lifecycle.md`). Those images ship Limine behind m1n1 and U-Boot with the Aurora kernel. The 2026-09-23 rc image passed mx-mac's image VM acceptance (`test/vm/mac-image`) before publication.
 - It is small: three scripts of about 2,700 lines and 1,700 lines of tests. The imported builder is about 270 files and 70,000 lines. Most of that is ISO, archinstall, checkpoint and stage machinery for linux-asahi and GRUB products the plan retires.
-- One inputs record pins every moving input by sha256, so each image traces back to the bytes it was built from.
+- One inputs record pins the package databases and the root filesystem by sha256, so each image traces back to the bytes it was built from. The one exception is the fork runtime release, pinned by tag and checked by signature at build time; the port removes it.
 
 Why keep #2's importer: `build-mac-image` today trusts the fork. It installs a runtime release of `install-asahi-quattro` from maralcbr/omarchy-mx-mac and a `CANDIDATE` descriptor signed with the fork's repository key. The plan replaces that with signed candidate packages pinned to one `quattro-upstream` commit. `builder/quattro-candidate.py` already verifies such a set without trusting keys that arrive with it:
 
@@ -18,7 +18,7 @@ Why keep #2's importer: `build-mac-image` today trusts the fork. It installs a r
 - a signed receipt, the manifest digest it names, and each archive's sha256 and detached signature
 - each archive's `.PKGINFO` name, architecture, version and dependencies, and the source revision embedded in the package
 - the exact package set, one source revision for the runtime packages, and single ownership of every boot payload file
-- a read-only frozen copy that a failed import cannot leave half-written
+- an output directory created exclusively, so a failed import is never reused, and frozen read-only only once every check passes
 
 ## What comes from where
 
@@ -34,9 +34,9 @@ Why keep #2's importer: `build-mac-image` today trusts the fork. It installs a r
 | Signer policy and public key | #2 `builder/quattro-trust/` | kept as the mechanism; the key becomes the test-lane key from the candidate set |
 | Duplicate, overlap and replacement checks between the candidate set and the platform | #2 `builder/quattro-dependencies.py` | kept as a library for the transaction check |
 | Real pacman transaction in a disposable root before image assembly | #2 `builder/quattro-package-install-check.sh` | kept as a fast pre-check |
-| Installed-system checks: pacman sections, required packages, enabled units, Limine loader, UKI sections, menu and root UUID | #2 `builder/verify-asahi-installed-system.py` | kept; GRUB and linux-asahi branches dropped |
+| Installed-system checks: pacman sections, required packages, enabled units, Limine loader, UKI sections, menu and root UUID | #2 `builder/verify-asahi-installed-system.py`, plus the Limine contract it loads through `capture-asahi-os-package-contents.py` from `configs/airootfs/usr/share/omarchy-iso/orchestrator/asahi_limine.py` | kept; the Limine contract is extracted beside it before the orchestrator goes, and the GRUB and linux-asahi branches are dropped |
 | Volume icon | #2 `builder/branding/omarchy-volume.icns` | kept; same bytes as `build-mac-image` pins (`cf26ed5d…`) |
-| ISO media, archiso gitlink, archinstall configurator, VM tooling, asahi stages, checkpoints, leases, orchestrator, products, branding manifests, publication and upload commands | #2 `image-builder/` | removed |
+| ISO media, archiso gitlink, archinstall configurator, VM tooling, asahi stages, checkpoints, leases, orchestrator (after the Limine contract is extracted), products, branding manifests, publication and upload commands | #2 `image-builder/` | removed |
 | `release-mac-image.yml` publication workflow | omarchy-pkgs | not ported; building stays an owner-run step until release qualification |
 
 The private M3 pilot's image recipe (the `omarchy-mx-mac-limine-private` product and `private-limine-qualification.py`) is not ported. The plan scopes M3 out, and that recipe stays reproducible from #2's head, `5274846`. The app side of the pilot stays: the `InstallerBuildProfile` private profiles, `Packaging/private-test/` and their tests.
@@ -59,6 +59,7 @@ Candidate set, as the importer will accept it:
 - **Boot group** (source revision = the pinned omarchy-pkgs recipe commit): `linux-aurora`, `linux-aurora-headers`, `m1n1-aurora`, `uboot-asahi`, `limine-mkinitcpio-hook`, `limine-snapper-sync`
 - **Minimum versions:** the manifest records one for `omarchy-mac-boot` and one for `limine-mkinitcpio-hook`, the versions the Limine enablement needs. The importer refuses a set below either.
 - **Refused outright:** `omarchy-apple-boot`, `omarchy-first-boot`, `linux-asahi` and the Asahi `m1n1`.
+- **Not in the set:** the `limine` loader package. It comes from the ALARM snapshot the inputs record pins, as #2 pinned it (`builder/quattro-limine.json`, by sha256 and the ALARM signature).
 
 Build steps inside the container:
 
@@ -69,7 +70,7 @@ Build steps inside the container:
 5. Inspect, then package. The build fails on a missing or mismatched boot component:
    - the Limine UKI embeds an initramfs, and that initramfs carries `omarchy-mac-boot`'s encryption hook
    - the ESP's m1n1 stage 1 and `m1n1/boot.bin` come from the candidate `m1n1-aurora`, with the Aurora DTBs of every supported model and the candidate U-Boot
-   - `EFI/BOOT/BOOTAA64.EFI` is the candidate Limine
+   - `EFI/BOOT/BOOTAA64.EFI` is the loader the installed `limine` package owns, from the pinned snapshot
    - installed versions equal the manifest's and meet the minimums
 6. `PROVENANCE` and `IMAGE` record the receipt and manifest sha256, the source commit, the signer fingerprint and each archive's sha256. They drop the `installer=install-asahi-quattro` and runtime release lines.
 

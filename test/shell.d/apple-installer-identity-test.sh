@@ -120,14 +120,26 @@ if (( ${#producer[@]} )); then
   status=0
   hits=$(cd "$ROOT" && grep -n -I -F "${patterns[@]}" -- "${producer[@]}") || status=$?
   (( status <= 1 )) || fail "grep scans the image producer" "$hits"
+  package_hosts=(
+    "github.com/$INSTALLER_GITHUB_RELEASE_LOGIN/omarchy-pkgs/releases/download"
+    "${INSTALLER_PUBLIC_BASE#https://}/mirror/alarm/"
+  )
   remaining=()
   while IFS= read -r line; do
     [[ -n $line ]] || continue
-    stripped=${line//"github.com/$INSTALLER_GITHUB_RELEASE_LOGIN/omarchy-pkgs/"/}
-    stripped=${stripped//"${INSTALLER_PUBLIC_BASE#https://}/mirror/alarm/"/}
-    if grep -q -F "${patterns[@]}" <<<"$stripped"; then
-      remaining+=("$line")
-    fi
+    stripped=$line
+    for host in "${package_hosts[@]}"; do
+      # A dot-dot after an allowed prefix could climb to another path on that host.
+      if [[ $line == *"$host"*..* ]]; then
+        stripped=$line
+        break
+      fi
+      stripped=${stripped//"$host"/}
+    done
+    status=0
+    grep -q -F "${patterns[@]}" <<<"$stripped" || status=$?
+    (( status <= 1 )) || fail "grep rescans an image producer line" "$line"
+    (( status == 1 )) || remaining+=("$line")
   done <<<"$hits"
   (( ${#remaining[@]} == 0 )) ||
     fail "the image producer names configured values only as package hosts" "$(printf '%s\n' "${remaining[@]}")"
