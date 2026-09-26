@@ -204,11 +204,18 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       selectedLane = channel.rawValue
     }
     try catalogStore.store(release.assets.catalogIdentity)
+    // The payload is pinned by the verified catalog and does not depend on the
+    // plan, so it downloads while the engine checks the Mac and the owner picks
+    // a size. The session cancels it if this preparation fails.
+    beginPayloadPrefetch(release.assets.payload)
 
     progress(
       AssetProgressUpdate(stage: .inspectingEngine, rows: collector.rows())
     )
 
+    // Sampled before the engine reads free space, so a download that moves on
+    // during inspection only makes the reserve more cautious.
+    let payloadBytesOnDisk = prefetch.bytesOnDisk(for: release.assets.payload)
     let stagedEngine = release.assets.engine
     let archive = try PinnedAsahiEngineArchive(
       fileURL: stagedEngine.fileURL,
@@ -238,7 +245,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     let recommendation = try InstallerAllocationRecommendation(
       inventory: inventory,
       targetBytes: omarchyBytes ?? InstallerAllocationRecommendation.balancedTargetBytes,
-      reservedBytes: release.assets.additionalHandoffBytes,
+      reservedBytes: release.assets.planningReserveBytes(payloadBytesOnDisk: payloadBytesOnDisk),
       snapshotConstraint: {
         APFSSnapshotInspector().constraint(in: host.storage)
       }
@@ -266,7 +273,6 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       planReview = prepared.review
       releaseConfiguration = configuration
     }
-    beginPayloadPrefetch(release.assets.payload)
 
     return .plan(
       Self.planDisplay(
