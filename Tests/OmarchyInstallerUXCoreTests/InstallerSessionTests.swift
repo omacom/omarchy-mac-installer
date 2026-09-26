@@ -287,7 +287,7 @@
       XCTAssertGreaterThan(environment.prefetchCancelCount, environment.cancelsBeforePrepare)
     }
 
-    func testAFailedSizeChangeKeepsTheRunningDownload() async {
+    func testAFailedSizeChangeStopsTheDownload() async {
       let environment = MockInstallerEnvironment()
       environment.payloadPrefetchRequired = true
       let gate = OperationGate()
@@ -305,7 +305,7 @@
       guard case .failed = session.phase else {
         return XCTFail("Expected failed, got \(session.phase)")
       }
-      XCTAssertEqual(environment.prefetchCancelCount, cancelsBefore)
+      XCTAssertGreaterThan(environment.prefetchCancelCount, cancelsBefore)
       await gate.release()
     }
 
