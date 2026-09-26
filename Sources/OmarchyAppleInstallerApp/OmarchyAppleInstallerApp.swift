@@ -117,7 +117,7 @@ struct OmarchyAppleInstallerApp: App {
             ContentUnavailableView(
               "Removal needs review", systemImage: "externaldrive.badge.exclamationmark",
               description: Text(
-                "Check the removal journal and disk layout before making further disk changes."))
+                "Check the removal record and disk layout before changing any disks."))
             #if DEBUG
               if isSimulation {
                 Button("Reset simulation") {

@@ -174,15 +174,17 @@
       ])
       XCTAssertEqual(steps.count, 3)
       XCTAssertEqual(steps.map(\.number), [1, 2, 3])
+      XCTAssertTrue(steps.allSatisfy { !($0.detail ?? "").isEmpty })
 
       let unknown = PlainLanguage.recoverySteps(for: ["somethingNew"])
       XCTAssertEqual(unknown.count, 1)
+      XCTAssertEqual(unknown.first?.title, "Unsupported Recovery instruction: somethingNew")
       XCTAssertEqual(
-        unknown.first?.title,
-        "Unsupported Recovery instruction: somethingNew. Save the installation record and get support before continuing."
+        unknown.first?.detail,
+        "Save the installation record and get support before continuing."
       )
 
-      XCTAssertEqual(PlainLanguage.recoverySteps(for: []).count, 3)
+      XCTAssertEqual(PlainLanguage.recoverySteps(for: []), steps)
     }
 
     func testKnownErrorsMapToDistinctHeadlinesAndKeepTechnicalDetail() {
@@ -338,14 +340,16 @@
 
     func testEncryptionCopyNamesTheCheckboxAndDefaultOnFailure() {
       XCTAssertEqual(
-        PlainLanguage.encryptLinuxDiskTitle, "Encrypt this Mac's Linux disk")
+        PlainLanguage.encryptLinuxDiskTitle, "Encrypt the Omarchy disk")
       XCTAssertEqual(
         PlainLanguage.encryptLinuxDiskPassword,
-        "The Linux login password you set at first boot unlocks the disk after setup.")
+        "The Omarchy password you select at first boot will unlock the encrypted disk after installation."
+      )
       XCTAssertFalse(PlainLanguage.encryptLinuxDiskPassword.lowercased().contains("macos"))
       XCTAssertEqual(
         PlainLanguage.encryptionChoiceNotRecorded,
-        "Encryption choice not recorded: first boot will encrypt")
+        "The encryption choice wasn’t saved, so Omarchy will encrypt its disk when it first starts."
+      )
       XCTAssertTrue(
         PlainLanguage.nextActionMessage(.enterRecovery, installConf: .notRecorded)
           .contains(PlainLanguage.encryptionChoiceNotRecorded))

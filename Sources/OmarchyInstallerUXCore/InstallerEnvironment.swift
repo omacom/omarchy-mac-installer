@@ -270,12 +270,15 @@
   public struct RecoveryStep: Equatable, Sendable, Identifiable {
     public let number: Int
     public let title: String
+    /// How to do the step, drawn as help text under the short title.
+    public let detail: String?
 
     public var id: Int { number }
 
-    public init(number: Int, title: String) {
+    public init(number: Int, title: String, detail: String? = nil) {
       self.number = number
       self.title = title
+      self.detail = detail
     }
   }
 

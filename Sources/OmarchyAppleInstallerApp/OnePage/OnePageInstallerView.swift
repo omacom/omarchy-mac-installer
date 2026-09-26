@@ -138,8 +138,9 @@ struct OnePageInstallerView: View {
     if let host {
       HStack(spacing: 12) {
         Text(host.chipAndSpace)
-          .font(OmarchyTheme.heading)
-          .foregroundStyle(OmarchyTheme.secondaryText)
+          .font(OmarchyTheme.eyebrow)
+          .textCase(.uppercase)
+          .foregroundStyle(OmarchyTheme.accent)
         if isBlocked {
           StatusBadge(text: PlainLanguage.blockedBadge, kind: .blocked)
         } else {
@@ -152,8 +153,9 @@ struct OnePageInstallerView: View {
       .lineLimit(1)
     } else {
       Text(PlainLanguage.inspectingHeadline)
-        .font(OmarchyTheme.heading)
-        .foregroundStyle(OmarchyTheme.secondaryText)
+        .font(OmarchyTheme.eyebrow)
+        .textCase(.uppercase)
+        .foregroundStyle(OmarchyTheme.accent)
     }
   }
 
@@ -309,7 +311,7 @@ struct OnePageInstallerView: View {
       .keyboardShortcut(.defaultAction)
 
     case .awaitingInstall:
-      Button("Edit disk size") { session.editPlan() }
+      Button("Change size") { session.editPlan() }
         .omarchySecondaryButton()
         .disabled(!session.canEditPlan)
       Button(PlainLanguage.planInstall) { session.presentInstallCredentials() }
@@ -403,7 +405,7 @@ struct OnePageInstallerView: View {
         }
         if session.hasExecutionStarted {
           Text(
-            "The previous installation result must be checked before you can start again. Keep your Mac connected to power."
+            "Check the previous installation’s result before starting again. Keep this Mac plugged in."
           )
           .font(OmarchyTheme.body)
           DisclosureGroup("Last verified steps") {
@@ -435,7 +437,7 @@ struct OnePageInstallerView: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(.vertical, 2)
       Text(
-        "To remove it and return its space to macOS, choose Installation → Remove Omarchy from the menu bar."
+        "If you’d like to remove Omarchy and return its space to macOS, select Installation → Remove Omarchy from the menu bar."
       )
       .font(OmarchyTheme.body)
       .foregroundStyle(OmarchyTheme.secondaryText)
@@ -641,11 +643,8 @@ private struct EncryptDiskToggle: View {
       .controlSize(.large)
       .tint(OmarchyTheme.accent)
       .disabled(!enabled)
-      Text(PlainLanguage.encryptLinuxDiskPassword)
-        .font(OmarchyTheme.detail)
-        .foregroundStyle(OmarchyTheme.secondaryText)
-        .fixedSize(horizontal: false, vertical: true)
-      Text(PlainLanguage.encryptLinuxDiskRecovery)
+      // One help paragraph: the password, then the recovery key.
+      Text(PlainLanguage.encryptLinuxDiskPassword + " " + PlainLanguage.encryptLinuxDiskRecovery)
         .font(OmarchyTheme.detail)
         .foregroundStyle(OmarchyTheme.secondaryText)
         .fixedSize(horizontal: false, vertical: true)
@@ -816,12 +815,12 @@ private struct DiskSplitPanel: View {
           Text(
             "\(PlainLanguage.bytes(plan.unallocatedBytes(for: displayedOmarchyBytes))) remains unallocated. macOS keeps its current size."
           )
-          .font(OmarchyTheme.body)
+          .font(OmarchyTheme.detail)
+          .foregroundStyle(OmarchyTheme.secondaryText)
         }
-        Text(
-          "Omarchy will use the space shown above. Finish setup in Recovery after restarting."
-        )
-        .font(OmarchyTheme.body)
+        Text("Omarchy will use the space selected above.")
+          .font(OmarchyTheme.detail)
+          .foregroundStyle(OmarchyTheme.secondaryText)
         if isBusy {
           // A released divider re-plans through the engine, which takes a
           // moment; say so instead of leaving the bar and the tick inert.

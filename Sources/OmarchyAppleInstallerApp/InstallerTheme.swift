@@ -48,6 +48,9 @@ enum OmarchyTheme {
   // and never set their own point size.
   static let title = mono(22, .bold)
   static let heading = mono(13, .bold)
+  /// Try Omarchy's subtitle line ("OMARCHY  ·  APPLE SILICON"): short facts
+  /// drawn uppercase in the accent colour.
+  static let eyebrow = mono(10, .semibold)
   static let body = mono(11)
   static let detail = mono(10)
   static let control = mono(11, .medium)

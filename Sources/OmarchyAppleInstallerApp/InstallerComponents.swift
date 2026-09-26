@@ -57,6 +57,8 @@ struct StatusBadge: View {
   var body: some View {
     Text(text)
       .font(OmarchyTheme.badge)
+      .textCase(.uppercase)
+      .tracking(OmarchyTheme.buttonTracking)
       .foregroundStyle(
         kind == .ok ? OmarchyTheme.accentText : Color.white
       )
@@ -217,8 +219,16 @@ struct RecoveryStepRow: View {
         .foregroundStyle(OmarchyTheme.accentText)
         .frame(width: 24, height: 24)
         .background(Circle().fill(OmarchyTheme.accent))
-      Text(step.title)
-        .font(OmarchyTheme.heading)
+      VStack(alignment: .leading, spacing: 3) {
+        Text(step.title)
+          .font(OmarchyTheme.heading)
+        if let detail = step.detail {
+          Text(detail)
+            .font(OmarchyTheme.detail)
+            .foregroundStyle(OmarchyTheme.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
       Spacer(minLength: 0)
     }
     .padding(.horizontal, 12)

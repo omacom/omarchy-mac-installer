@@ -36,7 +36,7 @@ struct CredentialSheet: View {
       Text(
         isSimulation
           ? "This simulation uses a test account. No real password is needed."
-          : "Use a macOS account authorized to install on this Mac. Your password authorizes the disk changes you reviewed and the Recovery setup."
+          : "Use a macOS account that is allowed to install on this Mac. Your password approves the disk changes you reviewed and the Recovery setup."
       )
       .font(OmarchyTheme.body)
       .fixedSize(horizontal: false, vertical: true)
@@ -45,7 +45,7 @@ struct CredentialSheet: View {
         Text(isRetry ? "Approved operation" : "Space for Omarchy")
           .foregroundStyle(OmarchyTheme.secondaryText)
         Spacer()
-        Text(isRetry ? "Recovery authorization only" : approvedSize ?? "Reviewed allocation")
+        Text(isRetry ? "Recovery authorization only" : approvedSize ?? "Reviewed size")
           .fontWeight(.medium)
       }
       .font(OmarchyTheme.body)
