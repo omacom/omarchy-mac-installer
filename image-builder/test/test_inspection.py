@@ -300,6 +300,10 @@ class InspectionTest(unittest.TestCase):
         fixtures.local_package(self.root, "linux-asahi", "6.16-1", [])
         self.assertFails("refused-packages", "linux-asahi")
 
+    def test_grub_installed(self):
+        fixtures.local_package(self.root, "grub", "2:2.16-1", [])
+        self.assertFails("refused-packages", "grub")
+
     def test_maintenance_hook_without_the_apple_gate(self):
         hook = self.root / "etc/pacman.d/hooks/90-mkinitcpio-install.hook"
         hook.write_text("[Action]\nExec = /usr/share/libalpm/scripts/limine-mkinitcpio-install\n")
