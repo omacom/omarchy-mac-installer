@@ -1,19 +1,20 @@
 import AppKit
 import SwiftUI
 
-/// Design tokens for the approved installer look: native macOS shapes and
-/// spacing, omarchy.org's Tokyo Night colours (blue accent), light and dark
-/// palettes that follow the system appearance.
+/// Design tokens for the approved installer look: Try Omarchy's monospaced
+/// type and buttons on omarchy.org's Tokyo Night colours (blue accent), with
+/// light and dark palettes that follow the system appearance.
 enum OmarchyTheme {
   // MARK: Palette
 
   // Dark palette: omarchy.org's Tokyo Night tokens (background night/storm,
-  // terminal white/blue/black, red and yellow from the same scheme). Light
+  // foreground lavender, blue accent, red and yellow from the same scheme).
+  // Secondary text is the accent at Try Omarchy's muted strength. Light
   // palette: the Tokyo Night "Day" counterparts.
   static let window = dynamic(light: 0xE1_E2E7, dark: 0x1A_1B26)
   static let card = dynamic(light: 0xFF_FFFF, dark: 0x24_283B)
-  static let text = dynamic(light: 0x37_60BF, dark: 0x7A_A2F7)
-  static let secondaryText = dynamic(light: 0x61_72B0, dark: 0x9A_A5CE)
+  static let text = dynamic(light: 0x37_60BF, dark: 0xC0_CAF5)
+  static let secondaryText = dynamic(light: 0x61_72B0, dark: 0x7A_A2F7, darkOpacity: 0.78)
   static let separator = dynamic(light: 0xC4_C8DA, dark: 0x41_4868)
   static let track = dynamic(light: 0xD0_D5E3, dark: 0x2F_334D)
   static let accent = dynamic(light: 0x2E_7DE9, dark: 0x7A_A2F7)
@@ -26,34 +27,65 @@ enum OmarchyTheme {
   /// segment in both appearances.
   static let handle = dynamic(light: 0x1F_5FD6, dark: 0x3D_74E8)
 
+  // Try Omarchy's button feedback: a primary button brightens to pale cyan
+  // under the pointer and turns cyan while pressed; a secondary button takes
+  // an accent border and pale text on hover and a lighter surface when pressed.
+  static let buttonHover = dynamic(light: 0x5A_96EE, dark: 0xB4_F9F8)
+  static let buttonPressed = dynamic(light: 0x00_7197, dark: 0x7D_CFFF)
+  static let buttonHoverText = dynamic(light: 0x2E_7DE9, dark: 0xB4_F9F8)
+  static let buttonPressedSurface = dynamic(light: 0xC4_C8DA, dark: 0x41_4868)
+
   // MARK: Metrics
 
-  static let cardRadius: CGFloat = 10
+  static let cardRadius: CGFloat = 8
+  static let buttonRadius: CGFloat = 6
+  static let buttonHeight: CGFloat = 32
+  static let buttonTracking: CGFloat = 0.35
 
   // MARK: Type
 
-  static let body = Font.system(size: 12.5)
-  static let caption = Font.system(size: 11)
-  static let monospaceSmall = Font.system(size: 10.5, design: .monospaced)
+  // Try Omarchy's scale, all in the system monospaced face. Views pick a role
+  // and never set their own point size.
+  static let title = mono(22, .bold)
+  static let heading = mono(13, .bold)
+  static let body = mono(11)
+  static let detail = mono(10)
+  static let control = mono(11, .medium)
+  static let button = mono(11, .bold)
+  static let badge = mono(10, .bold)
+  static let technical = mono(10)
+  static let numeral = mono(13, .bold)
 
-  private static func dynamic(light: Int, dark: Int) -> Color {
+  static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+    .system(size: size, weight: weight, design: .monospaced)
+  }
+
+  private static func dynamic(light: Int, dark: Int, darkOpacity: CGFloat = 1) -> Color {
     Color(
       nsColor: NSColor(name: nil) { appearance in
         let isDark =
           appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        return NSColor(hex: isDark ? dark : light)
+        return isDark ? NSColor(hex: dark, alpha: darkOpacity) : NSColor(hex: light)
       }
     )
   }
 }
 
+extension View {
+  /// The default type for a window or sheet, so text and controls without a
+  /// role of their own are monospaced too.
+  func omarchyTypography() -> some View {
+    font(OmarchyTheme.body).fontDesign(.monospaced)
+  }
+}
+
 extension NSColor {
-  fileprivate convenience init(hex: Int) {
+  fileprivate convenience init(hex: Int, alpha: CGFloat = 1) {
     self.init(
       srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
       green: CGFloat((hex >> 8) & 0xFF) / 255,
       blue: CGFloat(hex & 0xFF) / 255,
-      alpha: 1
+      alpha: alpha
     )
   }
 }

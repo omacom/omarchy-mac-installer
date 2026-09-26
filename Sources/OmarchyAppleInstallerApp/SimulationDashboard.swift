@@ -20,7 +20,7 @@
       VStack(spacing: 0) {
         VStack(alignment: .leading, spacing: 10) {
           Text("SIMULATION · No installation changes to your Mac")
-            .font(.headline)
+            .font(OmarchyTheme.heading)
           HStack {
             Picker("Scenario", selection: $scenario) {
               ForEach(InstallerSimulationScenario.allCases) { scenario in
@@ -37,11 +37,12 @@
             Toggle("Slow playback", isOn: $slow)
             Toggle("Dark mode", isOn: $dark)
           }
-          Text(scenario.guidance).font(.callout).fixedSize(horizontal: false, vertical: true)
+          Text(scenario.guidance).font(OmarchyTheme.body).fixedSize(
+            horizontal: false, vertical: true)
           Text(
             "Test data only: no downloads, disk changes, or shutdown. Changing the scenario or speed restarts the simulation."
           )
-          .font(.caption)
+          .font(OmarchyTheme.detail)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -37,7 +37,7 @@ struct FactGrid: View {
             .foregroundStyle(OmarchyTheme.secondaryText)
             .frame(width: labelWidth, alignment: .leading)
           Text(row.value)
-            .font(row.isMonospaced ? OmarchyTheme.monospaceSmall : OmarchyTheme.body)
+            .font(row.isMonospaced ? OmarchyTheme.technical : OmarchyTheme.body)
             .foregroundStyle(OmarchyTheme.text)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
@@ -56,7 +56,7 @@ struct StatusBadge: View {
 
   var body: some View {
     Text(text)
-      .font(.system(size: 11, weight: .semibold))
+      .font(OmarchyTheme.badge)
       .foregroundStyle(
         kind == .ok ? OmarchyTheme.accentText : Color.white
       )
@@ -165,7 +165,7 @@ struct DiskBar: View {
       // Center each live capacity in the full area on its side of the handle.
       Text(PlainLanguage.bytes(bytes))
         .accessibilityLabel(name + " " + PlainLanguage.bytes(bytes))
-        .font(.system(size: 10.5, weight: .semibold))
+        .font(OmarchyTheme.badge)
         .foregroundStyle(foreground)
         .lineLimit(1)
         .padding(.horizontal, 4)
@@ -213,12 +213,12 @@ struct RecoveryStepRow: View {
   var body: some View {
     HStack(alignment: .center, spacing: 13) {
       Text("\(step.number)")
-        .font(.system(size: 12, weight: .bold))
+        .font(OmarchyTheme.numeral)
         .foregroundStyle(OmarchyTheme.accentText)
         .frame(width: 24, height: 24)
         .background(Circle().fill(OmarchyTheme.accent))
       Text(step.title)
-        .font(.system(size: 13, weight: .semibold))
+        .font(OmarchyTheme.heading)
       Spacer(minLength: 0)
     }
     .padding(.horizontal, 12)
@@ -240,7 +240,7 @@ struct TechnicalDetailText: View {
 
   var body: some View {
     Text(text)
-      .font(OmarchyTheme.monospaceSmall)
+      .font(OmarchyTheme.technical)
       .foregroundStyle(OmarchyTheme.secondaryText)
       .textSelection(.enabled)
       .fixedSize(horizontal: false, vertical: true)
@@ -252,56 +252,88 @@ struct TechnicalDetailText: View {
   }
 }
 
-/// Rectangular action buttons with rounded corners — the system's large
-/// bordered styles render as capsules, which the approved look rejects.
-struct OmarchyPrimaryButtonStyle: ButtonStyle {
+/// Try Omarchy's buttons: bold uppercase monospace on a rounded rectangle.
+/// The system's large bordered styles render as capsules, which the approved
+/// look rejects. Labels stay in sentence case in source; only the drawing is
+/// uppercase, so VoiceOver reads them normally.
+struct OmarchyButtonStyle: ButtonStyle {
+  enum Kind { case primary, secondary, danger }
+
+  let kind: Kind
   @Environment(\.isEnabled) private var isEnabled
 
   func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .font(.system(size: 15, weight: .medium))
-      .lineLimit(1)
-      .fixedSize()
-      .foregroundStyle(OmarchyTheme.accentText)
-      .padding(.horizontal, 21)
-      .frame(height: 42)
-      .background(
-        RoundedRectangle(cornerRadius: 9)
-          .fill(OmarchyTheme.accent)
-      )
-      .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.4)
+    OmarchyButtonBody(configuration: configuration, kind: kind, isEnabled: isEnabled)
   }
 }
 
-struct OmarchySecondaryButtonStyle: ButtonStyle {
-  @Environment(\.isEnabled) private var isEnabled
+private struct OmarchyButtonBody: View {
+  let configuration: ButtonStyleConfiguration
+  let kind: OmarchyButtonStyle.Kind
+  let isEnabled: Bool
+  @State private var isHovered = false
 
-  func makeBody(configuration: Configuration) -> some View {
+  var body: some View {
+    let colors = self.colors
     configuration.label
-      .font(.system(size: 15))
+      .font(OmarchyTheme.button)
+      .textCase(.uppercase)
+      .tracking(OmarchyTheme.buttonTracking)
       .lineLimit(1)
       .fixedSize()
-      .foregroundStyle(OmarchyTheme.text)
-      .padding(.horizontal, 21)
-      .frame(height: 42)
+      .foregroundStyle(colors.foreground)
+      .padding(.horizontal, 18)
+      .frame(height: OmarchyTheme.buttonHeight)
       .background(
-        RoundedRectangle(cornerRadius: 9)
-          .fill(OmarchyTheme.card)
+        RoundedRectangle(cornerRadius: OmarchyTheme.buttonRadius)
+          .fill(colors.background)
       )
       .overlay(
-        RoundedRectangle(cornerRadius: 9)
-          .strokeBorder(OmarchyTheme.separator, lineWidth: 1)
+        RoundedRectangle(cornerRadius: OmarchyTheme.buttonRadius)
+          .strokeBorder(colors.border, lineWidth: 1)
       )
-      .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.4)
+      .opacity(isEnabled ? 1 : 0.4)
+      .contentShape(Rectangle())
+      .onHover { isHovered = $0 }
+  }
+
+  private var colors: (foreground: Color, background: Color, border: Color) {
+    let pressed = isEnabled && configuration.isPressed
+    let hovered = isEnabled && isHovered
+    switch kind {
+    case .primary:
+      let fill =
+        pressed
+        ? OmarchyTheme.buttonPressed : hovered ? OmarchyTheme.buttonHover : OmarchyTheme.accent
+      return (OmarchyTheme.accentText, fill, fill)
+    case .secondary:
+      return (
+        hovered ? OmarchyTheme.buttonHoverText : OmarchyTheme.text,
+        pressed ? OmarchyTheme.buttonPressedSurface : OmarchyTheme.card,
+        hovered ? OmarchyTheme.accent : OmarchyTheme.separator
+      )
+    case .danger:
+      // Quiet until the pointer commits to it, then filled red.
+      let filled = pressed || hovered
+      return (
+        filled ? OmarchyTheme.window : OmarchyTheme.danger,
+        filled ? OmarchyTheme.danger.opacity(pressed ? 0.8 : 1) : OmarchyTheme.card,
+        filled ? OmarchyTheme.danger : OmarchyTheme.separator
+      )
+    }
   }
 }
 
 extension View {
   func omarchyPrimaryButton() -> some View {
-    buttonStyle(OmarchyPrimaryButtonStyle())
+    buttonStyle(OmarchyButtonStyle(kind: .primary))
   }
 
   func omarchySecondaryButton() -> some View {
-    buttonStyle(OmarchySecondaryButtonStyle())
+    buttonStyle(OmarchyButtonStyle(kind: .secondary))
+  }
+
+  func omarchyDangerButton() -> some View {
+    buttonStyle(OmarchyButtonStyle(kind: .danger))
   }
 }

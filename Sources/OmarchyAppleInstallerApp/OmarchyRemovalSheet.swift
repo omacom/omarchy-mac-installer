@@ -30,7 +30,7 @@ struct OmarchyRemovalSheet: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 18) {
       Text(completed ? "Omarchy removed" : "Remove Omarchy")
-        .font(.system(size: 23, weight: .semibold))
+        .font(OmarchyTheme.title)
         .foregroundStyle(OmarchyTheme.accent)
       #if DEBUG
         if isSimulation {
@@ -42,7 +42,7 @@ struct OmarchyRemovalSheet: View {
           .disabled(busy)
           .onChange(of: scenario) { _, _ in Task { await prepare() } }
           Text("SIMULATION · No disks will be changed")
-            .font(OmarchyTheme.caption)
+            .font(OmarchyTheme.detail)
             .foregroundStyle(OmarchyTheme.secondaryText)
         }
       #endif
@@ -64,7 +64,7 @@ struct OmarchyRemovalSheet: View {
           Text("Type the following to confirm:")
             .foregroundStyle(OmarchyTheme.secondaryText)
           Text(OmarchyRemovalTicket.confirmation)
-            .font(.system(size: 13, weight: .medium, design: .monospaced))
+            .font(OmarchyTheme.heading)
             .textSelection(.enabled)
           TextField("Confirmation phrase", text: $phrase)
             .textFieldStyle(.roundedBorder)
@@ -91,7 +91,7 @@ struct OmarchyRemovalSheet: View {
         HStack(spacing: 10) {
           ProgressView().controlSize(.small)
           Text(submitted ? "Keep your Mac on until removal finishes." : "Reading the disk layout…")
-            .font(OmarchyTheme.caption)
+            .font(OmarchyTheme.detail)
         }
         .foregroundStyle(OmarchyTheme.secondaryText)
       }
@@ -107,7 +107,7 @@ struct OmarchyRemovalSheet: View {
         .disabled(busy)
         if ticket != nil && !submitted {
           Button("Remove Omarchy", role: .destructive) { Task { await remove() } }
-            .buttonStyle(RemovalButtonStyle())
+            .omarchyDangerButton()
             .disabled(!canRemove)
             .accessibilityIdentifier("remove-omarchy")
         }
@@ -116,6 +116,7 @@ struct OmarchyRemovalSheet: View {
     }
     .padding(26)
     .frame(width: 520)
+    .omarchyTypography()
     .foregroundStyle(OmarchyTheme.text)
     .background(OmarchyTheme.window)
     .interactiveDismissDisabled(busy)
@@ -215,20 +216,6 @@ struct OmarchyRemovalSheet: View {
     onRequiresReview()
     message =
       "The helper connection was lost. Removal may still be running. Do not restart removal or turn off your Mac. Check the removal journal before continuing."
-  }
-}
-
-private struct RemovalButtonStyle: ButtonStyle {
-  @Environment(\.isEnabled) private var enabled
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .font(.system(size: 14, weight: .medium))
-      .padding(.horizontal, 16).padding(.vertical, 11)
-      .foregroundStyle(enabled ? OmarchyTheme.window : OmarchyTheme.secondaryText)
-      .background(
-        enabled
-          ? OmarchyTheme.danger.opacity(configuration.isPressed ? 0.8 : 1) : OmarchyTheme.card,
-        in: RoundedRectangle(cornerRadius: 8))
   }
 }
 

@@ -30,7 +30,7 @@ struct CredentialSheet: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       Text(isRetry ? PlainLanguage.authorizeRetryTitle : PlainLanguage.authorizeTitle)
-        .font(.system(size: 20, weight: .semibold))
+        .font(OmarchyTheme.title)
         .foregroundStyle(OmarchyTheme.accent)
 
       Text(
@@ -84,7 +84,7 @@ struct CredentialSheet: View {
             Text(PlainLanguage.authorizeRejected).foregroundStyle(OmarchyTheme.danger)
           }
         }
-        .font(OmarchyTheme.caption)
+        .font(OmarchyTheme.detail)
         .foregroundStyle(OmarchyTheme.secondaryText)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
@@ -108,6 +108,7 @@ struct CredentialSheet: View {
     }
     .padding(24)
     .frame(width: 456)
+    .omarchyTypography()
     .foregroundStyle(OmarchyTheme.text)
     .background(OmarchyTheme.window)
     .disabled(context.isVerifying)
@@ -148,14 +149,14 @@ struct CredentialSheet: View {
   ) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       Text(label)
-        .font(.system(size: 13, weight: .medium))
+        .font(OmarchyTheme.control)
         .foregroundStyle(OmarchyTheme.secondaryText)
       content()
         .controlSize(.large)
         .frame(height: 36)
       if let reason {
         Text(reason)
-          .font(.system(size: 10))
+          .font(OmarchyTheme.detail)
           .foregroundStyle(OmarchyTheme.secondaryText)
       }
     }

@@ -151,6 +151,7 @@ struct OmarchyAppleInstallerApp: App {
       }
       .preferredColorScheme(isSimulation ? (simulationDark ? .dark : .light) : nil)
       .frame(minWidth: 640)
+      .omarchyTypography()
       .tint(OmarchyTheme.accent)
       // The window itself takes the theme colour, title bar included, so the
       // translucent system title bar never tints from the wallpaper behind.
