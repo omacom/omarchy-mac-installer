@@ -30,13 +30,13 @@ struct CredentialSheet: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       Text(isRetry ? PlainLanguage.authorizeRetryTitle : PlainLanguage.authorizeTitle)
-        .font(.system(size: 20, weight: .semibold))
+        .font(OmarchyTheme.title)
         .foregroundStyle(OmarchyTheme.accent)
 
       Text(
         isSimulation
           ? "This simulation uses a test account. No real password is needed."
-          : "Use a macOS account authorized to install on this Mac. Your password authorizes the disk changes you reviewed and the Recovery setup."
+          : "Use a macOS account that is allowed to install on this Mac. Your password approves the disk changes you reviewed and the final setup."
       )
       .font(OmarchyTheme.body)
       .fixedSize(horizontal: false, vertical: true)
@@ -45,7 +45,7 @@ struct CredentialSheet: View {
         Text(isRetry ? "Approved operation" : "Space for Omarchy")
           .foregroundStyle(OmarchyTheme.secondaryText)
         Spacer()
-        Text(isRetry ? "Recovery authorization only" : approvedSize ?? "Reviewed allocation")
+        Text(isRetry ? "Recovery authorization only" : approvedSize ?? "Reviewed size")
           .fontWeight(.medium)
       }
       .font(OmarchyTheme.body)
@@ -84,8 +84,9 @@ struct CredentialSheet: View {
             Text(PlainLanguage.authorizeRejected).foregroundStyle(OmarchyTheme.danger)
           }
         }
-        .font(OmarchyTheme.caption)
+        .font(OmarchyTheme.detail)
         .foregroundStyle(OmarchyTheme.secondaryText)
+        .lineSpacing(OmarchyTheme.helpLineSpacing)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
@@ -108,6 +109,7 @@ struct CredentialSheet: View {
     }
     .padding(24)
     .frame(width: 456)
+    .omarchyTypography()
     .foregroundStyle(OmarchyTheme.text)
     .background(OmarchyTheme.window)
     .disabled(context.isVerifying)
@@ -148,14 +150,14 @@ struct CredentialSheet: View {
   ) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       Text(label)
-        .font(.system(size: 13, weight: .medium))
+        .font(OmarchyTheme.control)
         .foregroundStyle(OmarchyTheme.secondaryText)
       content()
         .controlSize(.large)
         .frame(height: 36)
       if let reason {
         Text(reason)
-          .font(.system(size: 10))
+          .font(OmarchyTheme.detail)
           .foregroundStyle(OmarchyTheme.secondaryText)
       }
     }

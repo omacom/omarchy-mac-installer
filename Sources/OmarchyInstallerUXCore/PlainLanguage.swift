@@ -7,17 +7,20 @@
   public enum PlainLanguage {
     // MARK: Chrome
 
-    public static let windowTitle = "Omarchy Installer"
+    public static let windowTitle = InstallerProductIdentity.appName
+    /// The downloaded package people run again to repair the installation
+    /// service, named as it is saved so it can't be mistaken for this app.
+    public static let installerPackage = InstallerProductIdentity.appName + ".pkg"
 
     // MARK: Screen A — Check
 
     public static let checkSubheadline =
-      "When setup is complete, you can choose Omarchy or macOS at startup."
+      "Omarchy installs next to macOS. You can select either one by holding the power button when the Mac starts."
     public static let checkContinue = "Continue"
     public static let checkAgain = "Check again"
-    public static let inspectingHeadline = "Checking this Mac"
+    public static let inspectingHeadline = "Checking this Mac…"
     public static let inspectingSubheadline =
-      "Checking your Mac model, macOS version, power connection, FileVault, and available disk space."
+      "Checking the Mac model, macOS version, power, FileVault, and free disk space."
 
     // MARK: Screen A2 — Existing install
 
@@ -37,25 +40,30 @@
     }
 
     public static let replanning = "Checking the new size…"
-    public static let planAcknowledgement =
-      "I have a current backup and approve the disk sizes shown above."
+    /// A free-space plan leaves macOS its current size, so only a plan that
+    /// shrinks macOS asks to approve a resize.
+    public static func planAcknowledgement(resizesMacOS: Bool) -> String {
+      resizesMacOS
+        ? "I have a current backup and approve the disk resize above."
+        : "I have a current backup and approve the disk layout above."
+    }
     public static let planInstall = "Install"
-    public static let downloadingPackagesTitle = "Downloading installation files"
-    public static let encryptLinuxDiskTitle = "Encrypt this Mac's Linux disk"
+    public static let downloadingPackagesTitle = "Downloading Omarchy"
+    public static let encryptLinuxDiskTitle = "Encrypt the Omarchy disk"
     public static let encryptLinuxDiskPassword =
-      "The Linux login password you set at first boot unlocks the disk after setup."
+      "The Omarchy password you create at first boot will unlock the encrypted disk after installation."
     public static let encryptLinuxDiskRecovery =
-      "A recovery key is shown once at first boot. Write it down."
+      "A recovery key is also shown then, only once, in case you’re ever unable to use the password. Write it down."
     public static let encryptionChoiceNotRecorded =
-      "Encryption choice not recorded: first boot will encrypt"
+      "The encryption choice wasn’t saved, so Omarchy will encrypt its disk at first boot."
     public static let encryptionOptOutRecorded =
-      "Disk encryption was turned off. That choice was recorded."
+      "Disk encryption is off, and that choice was saved."
     public static let encryptionChoiceUnconfirmed =
       "Encryption was recorded, but the installer could not confirm the disk was unmounted."
     public static let prefetchWaitingForNetwork = "Waiting for Wi-Fi or Ethernet…"
     public static let prefetchPaused = "Download paused"
-    public static let prefetchVerifying = "Verifying installation files…"
-    public static let prefetchFailed = "The installation files could not be downloaded or verified."
+    public static let prefetchVerifying = "Verifying the download…"
+    public static let prefetchFailed = "The download failed or didn’t pass verification."
     public static let prefetchRetry = "Try again"
 
     public static func prefetchTitle(for state: PayloadPrefetchState) -> String {
@@ -81,10 +89,10 @@
       _ stage: AssetProgressUpdate.Stage
     ) -> String {
       switch stage {
-      case .fetchingCatalog: "Checking the signed release…"
-      case .downloading: "Downloading installation files…"
+      case .fetchingCatalog: "Checking the release signature…"
+      case .downloading: "Downloading Omarchy…"
       case .inspectingEngine: "Checking disk compatibility…"
-      case .planning: "Preparing your installation plan…"
+      case .planning: "Planning the disk layout…"
       }
     }
 
@@ -93,22 +101,22 @@
     public static let authorizeTitle =
       "Authorize installation"
     public static let authorizeRetryTitle = "Authorize the Recovery step"
-    public static let authorizeUsernameLabel = "macOS account name"
-    public static let authorizeChecking = "Checking your credentials…"
+    public static let authorizeUsernameLabel = "macOS user"
+    public static let authorizeChecking = "Checking your macOS account…"
     public static let authorizeStillWorking =
-      "This can take a few minutes. After your credentials are accepted, the installer prepares the installation package."
-    public static let authorizePasswordLabel = "macOS login password"
+      "This can take a few minutes. Once your account is confirmed, the installer prepares Omarchy’s files."
+    public static let authorizePasswordLabel = "macOS password"
     public static let authorizeCancel = "Cancel"
     public static let authorizeRetryAction = "Authorize"
     public static let authorizeRejected =
-      "The account name or password wasn’t accepted."
+      "The user name or password was incorrect."
 
     // MARK: Confirmation dialogs (preserved verbatim)
 
     public static let recoveryRetryConfirmationTitle =
       "Retry the Recovery authorization step?"
     public static let recoveryRetryConfirmationBody =
-      "The installer will verify the approved plan, installation files, disk location, and completed checkpoint before retrying Apple’s boot authorization. This retry cannot resize the disk, change partitions, or rewrite the installed system."
+      "Before retrying Apple’s startup authorization, the installer rechecks the approved plan, the installation files, the disk location, and the last completed step. The retry can’t resize the disk, change partitions, or rewrite the installed system."
     public static let recoveryRetryConfirmationAction =
       "Retry Recovery authorization"
     public static let cancel = "Cancel"
@@ -116,13 +124,13 @@
     // MARK: Screen D — Install
 
     public static let installWarning =
-      "Keep your Mac open and connected to power."
+      "Keep this Mac open and plugged in."
     public static let installDegraded =
-      "Live progress is unavailable. The installer will verify the installation record when it receives a result."
+      "Live progress isn’t available. The installer will check the installation record when complete."
     public static let installVerifyingOwner = "Checking your macOS account…"
     public static let installStageLabels = [
       "Preparing disk space", "Installing boot files",
-      "Preparing the Recovery step",
+      "Preparing final setup",
     ]
 
     public static func installPhaseTitle(forPhase phase: String?) -> String {
@@ -131,7 +139,7 @@
       case "existing_removal": "Removing the previous Omarchy installation…"
       case "apfs_preparation": "Preparing disk space…"
       case "stub_and_esp": "Writing boot files…"
-      case "awaiting_recovery": "Preparing the Recovery step…"
+      case "awaiting_recovery": "Preparing final setup…"
       case "boot_policy": "Authorizing startup…"
       case "media_handoff": "Preparing installation media…"
       case "omarchy_install": "Installing Omarchy…"
@@ -144,7 +152,7 @@
       case "existing_removal_started": "Removing the previous Omarchy installation…"
       case "apfs_preparation_started": "Preparing disk space…"
       case "stub_and_esp_started": "Writing boot files…"
-      case "recovery_handoff_started": "Preparing the Recovery step…"
+      case "recovery_handoff_started": "Preparing final setup…"
       default: nil
       }
     }
@@ -153,8 +161,8 @@
       switch identifier {
       case "existing-install-removed": "Previous Omarchy installation removed"
       case "apfs-target-prepared": "Disk space reserved for Omarchy"
-      case "stub-and-esp-installed": "Installation files written"
-      case "recovery-handoff-prepared": "Ready for Recovery"
+      case "stub-and-esp-installed": "Boot files written"
+      case "recovery-handoff-prepared": "Ready to finish setup"
       default: "Additional installation activity (\(identifier))"
       }
     }
@@ -164,18 +172,18 @@
       case "existing_removal_started": "Started removing the previous Omarchy installation"
       case "apfs_preparation_started": "Started preparing disk space"
       case "stub_and_esp_started": "Started writing boot files"
-      case "recovery_handoff_started": "Started preparing the Recovery step"
+      case "recovery_handoff_started": "Started preparing final setup"
       default: "Additional installation activity (\(name))"
       }
     }
 
     // MARK: Screen E — Recovery
 
-    public static let recoveryHeadline = "Finish setup in Recovery"
+    public static let recoveryHeadline = "Finish setup"
     public static let recoveryShutDown = "Shut down"
     public static let shutdownConfirmationTitle = "Shut down this Mac now?"
     public static let shutdownConfirmationBody =
-      "Save your work before shutting down. When your Mac is off, hold the power button until “Loading startup options” appears. Choose Omarchy → Finish Installation, then sign in with your macOS account."
+      "Save your work first. When this Mac is off, press and hold the power button until “Loading startup options” appears. Choose Omarchy → Finish Installation, then sign in with your macOS account."
     public static let shutdownConfirmationAction = "Shut down"
     public static let mediaHeadline = "Connect the installation media"
 
@@ -186,28 +194,37 @@
     ) -> [RecoveryStep] {
       var steps = [RecoveryStep]()
       var number = 1
-      func append(_ title: String) {
-        steps.append(RecoveryStep(number: number, title: title))
+      func append(_ title: String, _ detail: String) {
+        steps.append(RecoveryStep(number: number, title: title, detail: detail))
         number += 1
+      }
+      func enterRecovery() {
+        append("Shut down this Mac", "Save your work first.")
+        append(
+          "Hold the power button",
+          "When this Mac is off, press and hold the power button until “Loading startup options” appears."
+        )
+      }
+      func authenticate() {
+        append(
+          "Finish installation",
+          "Choose Omarchy → Finish Installation, then sign in with your macOS account.")
       }
       for token in requiredHumanSteps {
         switch token {
         case "enterOneTrueRecovery":
-          append("Shut down")
-          append(
-            "When your Mac is off, press and hold the power button until startup options appear.")
+          enterRecovery()
         case "authenticateMachineOwner":
-          append("Choose Omarchy → Finish Installation, then sign in with your macOS account.")
+          authenticate()
         default:
           append(
-            "Unsupported Recovery instruction: \(token). Save the installation record and get support before continuing."
-          )
+            "Unsupported Recovery instruction: \(token)",
+            "Save the installation record and get support before continuing.")
         }
       }
       if steps.isEmpty {
-        append("Shut down")
-        append("Hold the power button until startup options appear.")
-        append("Choose Omarchy → Finish Installation, then sign in with your macOS account.")
+        enterRecovery()
+        authenticate()
       }
       return steps
     }
@@ -238,7 +255,7 @@
         PlanFactRow(label: "Startup sequence", value: profile.startupSequence),
         PlanFactRow(
           label: "File verification",
-          value: "Release verified; installation files written"
+          value: "Release verified, files written"
         ),
       ]
     }
@@ -264,7 +281,7 @@
         base = "Your approved plan was accepted. Installation is continuing."
       case .enterRecovery:
         base =
-          "Omarchy’s files are installed. Finish setup in Recovery to allow your Mac to start Omarchy."
+          "Omarchy’s files are in place. Finish setup at startup so this Mac can start Omarchy."
       case .attachInstallationMedia:
         base = "Preparation is complete. Connect the verified installation media to continue."
       case .verifyInstalledSystem:
@@ -284,7 +301,7 @@
     public static let blockedSubheadline =
       "This Mac model has not been approved for this release."
     public static let blockedExplainer =
-      "Each Mac model requires physical testing before it is included in a signed installer release. Catalog updates can withdraw support; adding a model requires a new signed release."
+      "Each Mac model is tested on real hardware before a signed release includes it. A catalog update can withdraw support, but adding a model needs a new release."
     public static let blockedBadge = "Not supported"
     public static let notReadyHeadline = "This Mac isn’t ready yet"
     public static let notReadyDetail =
@@ -344,7 +361,7 @@
 
     public static let replanAction = "Check available space"
     public static let engineDiagnosticsLocation =
-      "Use Copy error details to keep them. A copy is normally saved in ~/Library/Logs/\(EngineFailureUserLog.directoryName)."
+      "Choose Copy error details to keep them. A copy is usually saved in ~/Library/Logs/\(EngineFailureUserLog.directoryName)."
 
     /// Plain wording for a typed engine failure. The disk-unchanged sentence
     /// appears only when the helper proved it from the installation journal.
@@ -417,7 +434,7 @@
     /// Shown when the pre-installed system daemon is missing. The remedy is to
     /// run the installer package again — never to open Login Items.
     public static let helperNotInstalled =
-      "The system installation service is missing. Run the Omarchy installer package again, then reopen this app."
+      "The installation service is missing. Run the downloaded \(installerPackage) again, then reopen this app."
 
     public static let engineUnavailable =
       "This build is missing the required validation engine. Installation is unavailable."
@@ -480,7 +497,7 @@
             plainDetail:
               "The app couldn’t get a response from the installation service. Installation has not started.",
             technicalDetail: technical,
-            remedy: "Run the Omarchy installer package again, then reopen this app."
+            remedy: "Run the downloaded \(installerPackage) again, then reopen this app."
           )
         case .connectionFailed:
           return FailureDisplay(
@@ -625,7 +642,7 @@
               "This release requires installer \(minimum) or later. You’re using \(current).",
             technicalDetail: technical,
             remedy:
-              "Download and run the latest installer package, then reopen this app.",
+              "Download and open the latest \(installerPackage), then reopen this app.",
             actionURL: downloadURL,
             actionTitle: downloadInstaller
           )

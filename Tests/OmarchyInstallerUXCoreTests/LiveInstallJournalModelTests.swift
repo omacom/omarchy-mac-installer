@@ -29,7 +29,7 @@
       XCTAssertEqual(model.stageIndex, 2)
       XCTAssertTrue(titles.contains("Preparing disk space…"))
       XCTAssertTrue(titles.contains("Writing boot files…"))
-      XCTAssertTrue(titles.contains("Preparing the Recovery step…"))
+      XCTAssertTrue(titles.contains("Preparing final setup…"))
       XCTAssertEqual(model.feed.count, 7)
       XCTAssertEqual(model.feed.last?.kind, .completion)
     }

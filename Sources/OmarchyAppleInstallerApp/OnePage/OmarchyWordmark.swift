@@ -4,6 +4,8 @@ import SwiftUI
 /// at any size, coloured with the cyan-to-purple gradient of the site's hero
 /// art. No image file is involved.
 struct OmarchyWordmark: View {
+  @Environment(\.colorScheme) private var colorScheme
+
   /// 81 × 19 cells, sampled from the site's OpenGraph image.
   static let grid: [String] = [
     ".................###.............................................................",
@@ -35,10 +37,19 @@ struct OmarchyWordmark: View {
     0x71_56B3, 0x7C_4CAB, 0x8A_45A8, 0x9C_3EA6, 0xA8_3AA3,
   ].map(rgb)
 
+  /// The same ramp for light mode without its white and pale cyan top, which
+  /// vanish on the light window: light blue down to the same purple.
+  static let lightRowColors: [Color] = [
+    0x55_B5F2, 0x4D_ACEE, 0x46_A2E9, 0x42_99E5, 0x41_8FE1, 0x48_84DA, 0x4E_7BD4,
+    0x55_72CC, 0x5C_6AC5, 0x64_62BE, 0x6B_5BB8, 0x72_55B2, 0x78_4FAE, 0x7F_4AAA,
+    0x87_47A9, 0x90_43A7, 0x9A_3FA6, 0xA1_3CA5, 0xA8_3AA3,
+  ].map(rgb)
+
   static let columns = grid[0].count
   static let rows = grid.count
 
   var body: some View {
+    let colors = colorScheme == .dark ? Self.rowColors : Self.lightRowColors
     Canvas { context, size in
       let columns = CGFloat(Self.columns)
       let rows = CGFloat(Self.rows)
@@ -46,7 +57,7 @@ struct OmarchyWordmark: View {
       let originX = (size.width - cell * columns) / 2
       let originY = (size.height - cell * rows) / 2
       for (row, line) in Self.grid.enumerated() {
-        let colour = Self.rowColors[row]
+        let colour = colors[row]
         for (column, character) in line.enumerated() where character == "#" {
           let rect = CGRect(
             x: originX + CGFloat(column) * cell,

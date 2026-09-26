@@ -128,11 +128,11 @@
             try file.close()
             let directory = open(workingDirectory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
             guard directory >= 0 else {
-              throw RemovalFailure(message: "The removal journal could not be saved.")
+              throw RemovalFailure(message: "The removal record couldn’t be saved.")
             }
             defer { Darwin.close(directory) }
             guard fsync(directory) == 0 else {
-              throw RemovalFailure(message: "The removal journal could not be saved.")
+              throw RemovalFailure(message: "The removal record couldn’t be saved.")
             }
             phase = next
           }
@@ -147,10 +147,10 @@
             message = "\(detail) No disk changes were made."
           } else if phase == "returning-space-to-macos" || phase == "complete" {
             message =
-              "Omarchy was removed, but returning its space to macOS could not be confirmed. The space may still be unallocated. \(detail) Do not repeat deletion; the removal journal was kept for recovery."
+              "Omarchy was removed, but the installer couldn’t confirm its space went back to macOS. The space may still be unallocated. \(detail) Don’t start removal again; the removal record was kept for recovery."
           } else {
             message =
-              "Removal stopped and some Omarchy data may already be deleted. \(detail) Do not repeat deletion; the removal journal was kept for recovery."
+              "Removal stopped, and some Omarchy data may already be deleted. \(detail) Don’t start removal again; the removal record was kept for recovery."
           }
           return OmarchyRemovalReply(requiresReview: phase != "checking", message: message)
         }
@@ -170,7 +170,7 @@
         else {
           throw RemovalFailure(
             message:
-              "An earlier removal did not finish. Review the saved removal journal and disk layout before making further disk changes."
+              "An earlier removal didn’t finish. Check the saved removal record and disk layout before changing any disks."
           )
         }
       }

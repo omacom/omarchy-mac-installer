@@ -89,7 +89,7 @@ On the M1, in Safari, open `$RELEASE`, and download the app zip from the
 Assets list into `~/Downloads`. Do not copy anything over the cable.
 
 Double-click the zip to unpack it. You should get
-`Omarchy MX Mac Installer.app`.
+`Omarchy Installer.app` (releases built before the rename unpack to `Omarchy MX Mac Installer.app`).
 
 ---
 

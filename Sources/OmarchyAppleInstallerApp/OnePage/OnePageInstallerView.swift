@@ -138,8 +138,9 @@ struct OnePageInstallerView: View {
     if let host {
       HStack(spacing: 12) {
         Text(host.chipAndSpace)
-          .font(.system(size: 13, weight: .medium))
-          .foregroundStyle(OmarchyTheme.secondaryText)
+          .font(OmarchyTheme.eyebrow)
+          .textCase(.uppercase)
+          .foregroundStyle(OmarchyTheme.accent)
         if isBlocked {
           StatusBadge(text: PlainLanguage.blockedBadge, kind: .blocked)
         } else {
@@ -152,8 +153,9 @@ struct OnePageInstallerView: View {
       .lineLimit(1)
     } else {
       Text(PlainLanguage.inspectingHeadline)
-        .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(OmarchyTheme.secondaryText)
+        .font(OmarchyTheme.eyebrow)
+        .textCase(.uppercase)
+        .foregroundStyle(OmarchyTheme.accent)
     }
   }
 
@@ -185,7 +187,7 @@ struct OnePageInstallerView: View {
 
     case .welcome:
       Text(PlainLanguage.checkSubheadline)
-        .font(.system(size: 14))
+        .font(OmarchyTheme.body)
         .foregroundStyle(OmarchyTheme.secondaryText)
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
@@ -226,7 +228,7 @@ struct OnePageInstallerView: View {
       if let notice = session.allocationNotice {
         Text(notice).font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
       }
-      acknowledgement(acknowledged)
+      acknowledgement(acknowledged, resizesMacOS: plan.fixedMacOSBytes == nil)
 
     case .awaitingInstall(let plan, let helper, _):
       DiskSplitPanel(plan: plan, editable: false, isBusy: false, onSizeChosen: { _ in })
@@ -309,7 +311,7 @@ struct OnePageInstallerView: View {
       .keyboardShortcut(.defaultAction)
 
     case .awaitingInstall:
-      Button("Edit disk size") { session.editPlan() }
+      Button("Change size") { session.editPlan() }
         .omarchySecondaryButton()
         .disabled(!session.canEditPlan)
       Button(PlainLanguage.planInstall) { session.presentInstallCredentials() }
@@ -319,7 +321,7 @@ struct OnePageInstallerView: View {
 
     case .installing:
       Text(PlainLanguage.installWarning)
-        .font(OmarchyTheme.caption.weight(.medium))
+        .font(OmarchyTheme.detail.weight(.medium))
         .foregroundStyle(OmarchyTheme.accent)
 
     case .awaitingRecovery:
@@ -365,7 +367,7 @@ struct OnePageInstallerView: View {
     Panel {
       VStack(alignment: .leading, spacing: 12) {
         Text(title)
-          .font(.system(size: 13.5, weight: .medium))
+          .font(OmarchyTheme.heading)
           .foregroundStyle(OmarchyTheme.secondaryText)
         ProgressTrack(fraction: nil, height: 14)
       }
@@ -379,7 +381,7 @@ struct OnePageInstallerView: View {
     Panel {
       VStack(alignment: .leading, spacing: 8) {
         Text(headline)
-          .font(.system(size: 16, weight: .semibold))
+          .font(OmarchyTheme.heading)
           .foregroundStyle(isError ? OmarchyTheme.danger : OmarchyTheme.text)
         Text(detail)
           .font(OmarchyTheme.body)
@@ -403,7 +405,7 @@ struct OnePageInstallerView: View {
         }
         if session.hasExecutionStarted {
           Text(
-            "The previous installation result must be checked before you can start again. Keep your Mac connected to power."
+            "This installation can’t be started again yet. Review the installation record below, and keep this Mac plugged in."
           )
           .font(OmarchyTheme.body)
           DisclosureGroup("Last verified steps") {
@@ -419,7 +421,7 @@ struct OnePageInstallerView: View {
               NSPasteboard.general.setString(record, forType: .string)
             }
             ForEach(session.journal.feed) { line in
-              Text(line.text).font(OmarchyTheme.caption).textSelection(.enabled)
+              Text(line.text).font(OmarchyTheme.technical).textSelection(.enabled)
             }
           }
         }
@@ -431,11 +433,11 @@ struct OnePageInstallerView: View {
   private func existingInstallRefusedPanel() -> some View {
     Panel {
       Text(PlainLanguage.existingInstallHeadline)
-        .font(.system(size: 16, weight: .semibold))
+        .font(OmarchyTheme.heading)
         .fixedSize(horizontal: false, vertical: true)
         .padding(.vertical, 2)
       Text(
-        "To remove it and return its space to macOS, choose Installation → Remove Omarchy from the menu bar."
+        "If you’d like to remove Omarchy and return its space to macOS, select Installation → Remove Omarchy from the menu bar."
       )
       .font(OmarchyTheme.body)
       .foregroundStyle(OmarchyTheme.secondaryText)
@@ -445,8 +447,9 @@ struct OnePageInstallerView: View {
 
   /// The tick and its text. Both are inert while a re-plan runs so a tick
   /// cannot land between the drag and the new plan.
-  private func acknowledgement(_ acknowledged: Bool) -> some View {
-    HStack(alignment: .center, spacing: 12) {
+  private func acknowledgement(_ acknowledged: Bool, resizesMacOS: Bool) -> some View {
+    let text = PlainLanguage.planAcknowledgement(resizesMacOS: resizesMacOS)
+    return HStack(alignment: .center, spacing: 12) {
       Toggle(
         "",
         isOn: Binding(get: { acknowledged }, set: { session.setAcknowledged($0) })
@@ -455,9 +458,9 @@ struct OnePageInstallerView: View {
       .toggleStyle(.checkbox)
       .controlSize(.large)
       .tint(OmarchyTheme.accent)
-      .accessibilityLabel(PlainLanguage.planAcknowledgement)
-      Text(PlainLanguage.planAcknowledgement)
-        .font(.system(size: 13.5, weight: .medium))
+      .accessibilityLabel(text)
+      Text(text)
+        .font(OmarchyTheme.heading)
         .foregroundStyle(OmarchyTheme.accent)
         .fixedSize(horizontal: false, vertical: true)
         .onTapGesture { session.setAcknowledged(!acknowledged) }
@@ -473,9 +476,7 @@ struct OnePageInstallerView: View {
       Image(systemName: "lock.shield")
         .foregroundStyle(OmarchyTheme.caution)
       Text(PlainLanguage.helperNotInstalled)
-        .font(OmarchyTheme.caption)
-        .foregroundStyle(OmarchyTheme.secondaryText)
-        .fixedSize(horizontal: false, vertical: true)
+        .omarchyHelpText()
       Spacer(minLength: 0)
     }
     .padding(.horizontal, 4)
@@ -484,7 +485,7 @@ struct OnePageInstallerView: View {
   private func recoveryPanel(_ handoff: HandoffDisplay) -> some View {
     VStack(alignment: .leading, spacing: 10) {
       Text(handoff.headline)
-        .font(.system(size: 17, weight: .semibold))
+        .font(OmarchyTheme.heading)
         .padding(.bottom, 4)
       if let warning = handoff.warning {
         Text(warning)
@@ -506,10 +507,11 @@ struct OnePageInstallerView: View {
       VStack(alignment: .leading, spacing: 8) {
         HStack(spacing: 10) {
           Image(systemName: "checkmark.circle.fill")
-            .font(.system(size: 20))
+            .font(OmarchyTheme.heading)
+            .imageScale(.large)
             .foregroundStyle(OmarchyTheme.accent)
           Text(completion.headline)
-            .font(.system(size: 16, weight: .semibold))
+            .font(OmarchyTheme.heading)
         }
         Text(completion.subheadline)
           .font(OmarchyTheme.body)
@@ -567,20 +569,18 @@ private struct PrefetchStrip: View {
         VStack(alignment: .leading, spacing: 8) {
           HStack {
             Text(PlainLanguage.prefetchTitle(for: state))
-              .font(.system(size: 13, weight: .medium))
+              .font(OmarchyTheme.heading)
             Spacer(minLength: 8)
             if let accessory {
               Text(accessory)
-                .font(OmarchyTheme.caption.monospacedDigit())
+                .font(OmarchyTheme.detail)
                 .foregroundStyle(OmarchyTheme.secondaryText)
             }
           }
           if case .failed(let reason) = state {
             Text(reason)
-              .font(OmarchyTheme.caption)
-              .foregroundStyle(OmarchyTheme.secondaryText)
+              .omarchyHelpText()
               .textSelection(.enabled)
-              .fixedSize(horizontal: false, vertical: true)
             if let onRetry {
               Button(PlainLanguage.prefetchRetry, action: onRetry)
             }
@@ -640,14 +640,9 @@ private struct EncryptDiskToggle: View {
       .controlSize(.large)
       .tint(OmarchyTheme.accent)
       .disabled(!enabled)
-      Text(PlainLanguage.encryptLinuxDiskPassword)
-        .font(OmarchyTheme.caption)
-        .foregroundStyle(OmarchyTheme.secondaryText)
-        .fixedSize(horizontal: false, vertical: true)
-      Text(PlainLanguage.encryptLinuxDiskRecovery)
-        .font(OmarchyTheme.caption)
-        .foregroundStyle(OmarchyTheme.secondaryText)
-        .fixedSize(horizontal: false, vertical: true)
+      // One help paragraph: the password, then the recovery key.
+      Text(PlainLanguage.encryptLinuxDiskPassword + " " + PlainLanguage.encryptLinuxDiskRecovery)
+        .omarchyHelpText()
     }
     .padding(.horizontal, 4)
     .padding(.top, 4)
@@ -673,11 +668,11 @@ private struct DownloadPanel: View {
       VStack(alignment: .leading, spacing: 12) {
         HStack(alignment: .firstTextBaseline) {
           Text(title)
-            .font(.system(size: 13.5, weight: .medium))
+            .font(OmarchyTheme.heading)
           Spacer(minLength: 8)
           if let accessory {
             Text(accessory)
-              .font(OmarchyTheme.caption.monospacedDigit())
+              .font(OmarchyTheme.detail)
               .foregroundStyle(OmarchyTheme.secondaryText)
           }
         }
@@ -739,11 +734,11 @@ private struct DiskSplitPanel: View {
       VStack(alignment: .leading, spacing: 10) {
         HStack(alignment: .firstTextBaseline) {
           Text(plan.fixedMacOSBytes == nil ? "macOS" : "macOS + free space")
-            .font(.system(size: 13.5, weight: .semibold).monospacedDigit())
+            .font(OmarchyTheme.heading)
             .foregroundStyle(OmarchyTheme.accent)
           Spacer(minLength: 8)
           Text("Omarchy")
-            .font(.system(size: 13.5, weight: .semibold).monospacedDigit())
+            .font(OmarchyTheme.heading)
             .foregroundStyle(OmarchyTheme.accent)
         }
         DiskBar(
@@ -772,7 +767,7 @@ private struct DiskSplitPanel: View {
                 )
               )
               .textFieldStyle(.roundedBorder)
-              .font(OmarchyTheme.body.monospacedDigit())
+              .font(OmarchyTheme.control)
               .frame(width: 62, height: 28)
               .focused($sizeFocused)
               .onTapGesture {
@@ -782,11 +777,11 @@ private struct DiskSplitPanel: View {
               .accessibilityLabel("Omarchy size in gigabytes")
               .onSubmit(applySize)
               .onExitCommand(perform: cancelSize)
-              Text("GB").font(OmarchyTheme.caption)
+              Text("GB").font(OmarchyTheme.detail)
               if sizeInput.isEditing {
                 Button(action: applySize) {
                   Image(systemName: "checkmark")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(OmarchyTheme.control)
                     .frame(width: 28, height: 28)
                 }
                 .buttonStyle(SizeEditButtonStyle(tint: OmarchyTheme.success))
@@ -795,7 +790,7 @@ private struct DiskSplitPanel: View {
                 .disabled(sizeInput.requestedBytes == nil)
                 Button(action: cancelSize) {
                   Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(OmarchyTheme.control)
                     .frame(width: 28, height: 28)
                 }
                 .buttonStyle(SizeEditButtonStyle(tint: OmarchyTheme.danger))
@@ -805,7 +800,7 @@ private struct DiskSplitPanel: View {
               Spacer(minLength: 0)
             }
             if let message = sizeInput.validationMessage {
-              Text(message).font(OmarchyTheme.caption).foregroundStyle(OmarchyTheme.danger)
+              Text(message).font(OmarchyTheme.detail).foregroundStyle(OmarchyTheme.danger)
             }
           }
           .disabled(isBusy)
@@ -815,12 +810,10 @@ private struct DiskSplitPanel: View {
           Text(
             "\(PlainLanguage.bytes(plan.unallocatedBytes(for: displayedOmarchyBytes))) remains unallocated. macOS keeps its current size."
           )
-          .font(OmarchyTheme.body)
+          .omarchyHelpText()
         }
-        Text(
-          "Omarchy will use the space shown above. Finish setup in Recovery after restarting."
-        )
-        .font(OmarchyTheme.body)
+        Text("Omarchy will use the space selected above.")
+          .omarchyHelpText()
         if isBusy {
           // A released divider re-plans through the engine, which takes a
           // moment; say so instead of leaving the bar and the tick inert.
@@ -828,7 +821,7 @@ private struct DiskSplitPanel: View {
             ProgressView()
               .controlSize(.small)
             Text(PlainLanguage.replanning)
-              .font(OmarchyTheme.caption)
+              .font(OmarchyTheme.detail)
               .foregroundStyle(OmarchyTheme.secondaryText)
           }
         }
@@ -907,19 +900,19 @@ private struct InstallPanel: View {
       VStack(alignment: .leading, spacing: 12) {
         HStack(alignment: .firstTextBaseline) {
           Text(stageLabel)
-            .font(.system(size: 13.5, weight: .medium))
+            .font(OmarchyTheme.heading)
             .lineLimit(1)
             .truncationMode(.tail)
           Spacer(minLength: 8)
           TimelineView(.periodic(from: progress.startedAt, by: 1)) { context in
             Text(elapsed(at: context.date))
-              .font(OmarchyTheme.caption.monospacedDigit())
+              .font(OmarchyTheme.detail)
               .foregroundStyle(OmarchyTheme.secondaryText)
           }
           Text(
             "Step \(min(progress.stageIndex + 1, progress.stageLabels.count)) of \(progress.stageLabels.count)"
           )
-          .font(OmarchyTheme.body.monospacedDigit())
+          .font(OmarchyTheme.body)
         }
         TimelineView(.periodic(from: progress.startedAt, by: 1)) { context in
           let elapsed = max(0, context.date.timeIntervalSince(progress.startedAt))
@@ -934,7 +927,7 @@ private struct InstallPanel: View {
                 Text("Taking longer than estimated")
               }
             }
-            .font(OmarchyTheme.caption.monospacedDigit())
+            .font(OmarchyTheme.detail)
             .foregroundStyle(OmarchyTheme.secondaryText)
           }
           .onChange(of: context.date, initial: true) { _, date in
@@ -945,14 +938,12 @@ private struct InstallPanel: View {
         }
         DisclosureGroup("View activity") {
           ForEach(progress.feed) { line in
-            Text(line.text).font(OmarchyTheme.caption).textSelection(.enabled)
+            Text(line.text).font(OmarchyTheme.technical).textSelection(.enabled)
           }
         }
         if progress.degraded {
           Text(PlainLanguage.installDegraded)
-            .font(OmarchyTheme.caption)
-            .foregroundStyle(OmarchyTheme.secondaryText)
-            .fixedSize(horizontal: false, vertical: true)
+            .omarchyHelpText()
         }
       }
       .padding(.vertical, 4)

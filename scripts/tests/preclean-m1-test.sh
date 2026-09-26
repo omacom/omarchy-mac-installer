@@ -11,7 +11,7 @@ set -uo pipefail
 script_dir=$(cd "$(dirname "$0")" && pwd)
 readonly PRECLEAN="$script_dir/../preclean-m1.sh"
 source "$script_dir/../../Packaging/identity.conf"
-export INSTALLER_APP_IDENTIFIER INSTALLER_APP_NAME
+export INSTALLER_APP_IDENTIFIER INSTALLER_APP_NAME INSTALLER_LEGACY_APP_NAME
 [[ -x $PRECLEAN || -f $PRECLEAN ]] || { echo "cannot find preclean-m1.sh" >&2; exit 1; }
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/preclean-test.XXXXXX")
@@ -57,7 +57,7 @@ case $op in
   partitions) cat "$SHIM_DATA_DIR/partitions.tsv" ;;
   containers) cat "$SHIM_DATA_DIR/containers.tsv" ;;
   app-support) printf 'present\t2048\t/Users/mina/Library/Application Support/%s\n' "$INSTALLER_APP_IDENTIFIER" ;;
-  old-apps) printf '/Applications/%s.app\n' "$INSTALLER_APP_NAME" ;;
+  old-apps) printf '/Applications/%s.app\n' "$INSTALLER_APP_NAME" "$INSTALLER_LEGACY_APP_NAME" ;;
   recheck) printf '%s\n' "${SHIM_RECHECK_NAME:-}" ;;
   exists)
     for absent in ${SHIM_ABSENT_UUIDS:-}; do
@@ -139,11 +139,13 @@ run_preclean "$data" "$log" --confirm >"$out" 2>&1
 status=$?
 [[ $status == 0 ]] || fail "expected exit 0, got $status"
 assert_contains "$out" "result=performed"
-assert_contains "$out" "destructive_commands_run=12"
+assert_contains "$out" "destructive_commands_run=13"
 assert_line_count "$log" "delete-container" 2
 assert_line_count "$log" "erase-volume" 8
 assert_line_count "$log" "clear-app-support" 1
-assert_line_count "$log" "remove-old-app" 1
+assert_line_count "$log" "remove-old-app" 2
+assert_contains "$log" "/Applications/$INSTALLER_APP_NAME.app"
+assert_contains "$log" "/Applications/$INSTALLER_LEGACY_APP_NAME.app"
 assert_contains "$log" "deleteContainer CUUID-STUB-A"
 assert_contains "$log" "deleteContainer CUUID-STUB-B"
 for uuid in UUID-STUB-0003 UUID-ESP-0004 UUID-BOOT-0005 UUID-ROOT-0006 \
@@ -171,7 +173,7 @@ assert_line_count "$log" "delete-container" 2
 assert_line_count "$log" "erase-volume" 6
 assert_not_contains "$log" "UUID-STUB-0003"
 assert_not_contains "$log" "UUID-STUB-0008"
-assert_contains "$out" "destructive_commands_run=10"
+assert_contains "$out" "destructive_commands_run=11"
 
 # ---------------------------------------------------------------------------
 # 3. A container holding both Omarchy and Macintosh HD: hard abort

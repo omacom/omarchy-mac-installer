@@ -14,11 +14,11 @@ struct ConfirmationSheet: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       Text(title)
-        .font(.system(size: 19, weight: .semibold))
+        .font(OmarchyTheme.title)
         .fixedSize(horizontal: false, vertical: true)
         .padding(.bottom, 14)
       Text(message)
-        .font(.system(size: 14))
+        .font(OmarchyTheme.body)
         .foregroundStyle(OmarchyTheme.secondaryText)
         .fixedSize(horizontal: false, vertical: true)
         .padding(.bottom, 34)
@@ -34,6 +34,7 @@ struct ConfirmationSheet: View {
     }
     .padding(32)
     .frame(width: 520)
+    .omarchyTypography()
     .foregroundStyle(OmarchyTheme.text)
     .background(OmarchyTheme.window)
   }

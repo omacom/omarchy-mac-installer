@@ -33,13 +33,15 @@ while IFS= read -r line || [[ -n $line ]]; do
   seen[$name]=1
 done <"$config"
 source "$config"
-for name in INSTALLER_APP_NAME INSTALLER_FILE_STEM INSTALLER_APP_IDENTIFIER \
+for name in INSTALLER_APP_NAME INSTALLER_LEGACY_APP_NAME INSTALLER_FILE_STEM INSTALLER_APP_IDENTIFIER \
   INSTALLER_HELPER_IDENTIFIER INSTALLER_PKG_IDENTIFIER INSTALLER_TEAM_ID \
   INSTALLER_APP_SIGNING_IDENTITY INSTALLER_PKG_SIGNING_IDENTITY INSTALLER_TRUST_ROOT_FINGERPRINT \
   INSTALLER_CATALOG_KEY_SERVICE INSTALLER_PUBLIC_BASE INSTALLER_R2_BUCKET \
   INSTALLER_R2_ENDPOINT INSTALLER_GITHUB_RELEASE_REPO INSTALLER_GITHUB_RELEASE_LOGIN; do
   [[ -n ${seen[$name]:-} ]] || fail "identity.conf defines $name"
 done
+[[ $INSTALLER_LEGACY_APP_NAME != "$INSTALLER_APP_NAME" ]] ||
+  fail "the legacy app name differs from the current one"
 [[ $INSTALLER_TEAM_ID =~ ^[A-Z0-9]{10}$ ]] || fail "the team identifier has ten characters"
 [[ $INSTALLER_APP_SIGNING_IDENTITY == "Developer ID Application: "*" ($INSTALLER_TEAM_ID)" ]] ||
   fail "the app signing identity belongs to the configured team"
@@ -82,7 +84,7 @@ pass "release inputs are derived from identity.conf"
 # Values set here must not be repeated in code, scripts or tests. Docs,
 # recorded evidence and the derived release inputs checked above may name them.
 guarded=(
-  "$INSTALLER_APP_NAME" "$INSTALLER_FILE_STEM" "$INSTALLER_APP_IDENTIFIER"
+  "$INSTALLER_APP_NAME" "$INSTALLER_LEGACY_APP_NAME" "$INSTALLER_FILE_STEM" "$INSTALLER_APP_IDENTIFIER"
   "$INSTALLER_HELPER_IDENTIFIER" "$INSTALLER_PKG_IDENTIFIER" "$INSTALLER_TEAM_ID"
   "$INSTALLER_CATALOG_KEY_SERVICE" "${INSTALLER_PUBLIC_BASE#https://}"
   "$INSTALLER_R2_BUCKET" "${INSTALLER_R2_ENDPOINT#https://}"
