@@ -338,17 +338,23 @@
       XCTAssertEqual(PlainLanguage.bytes(512), "512 bytes")
     }
 
+    func testPlanAcknowledgementOnlyMentionsAResizeWhenMacOSShrinks() {
+      XCTAssertTrue(PlainLanguage.planAcknowledgement(resizesMacOS: true).contains("resize"))
+      XCTAssertFalse(PlainLanguage.planAcknowledgement(resizesMacOS: false).contains("resize"))
+      XCTAssertTrue(PlainLanguage.planAcknowledgement(resizesMacOS: false).contains("backup"))
+    }
+
     func testEncryptionCopyNamesTheCheckboxAndDefaultOnFailure() {
       XCTAssertEqual(
         PlainLanguage.encryptLinuxDiskTitle, "Encrypt the Omarchy disk")
       XCTAssertEqual(
         PlainLanguage.encryptLinuxDiskPassword,
-        "The Omarchy password you select at first boot will unlock the encrypted disk after installation."
+        "The Omarchy password you create at first boot will unlock the encrypted disk after installation."
       )
       XCTAssertFalse(PlainLanguage.encryptLinuxDiskPassword.lowercased().contains("macos"))
       XCTAssertEqual(
         PlainLanguage.encryptionChoiceNotRecorded,
-        "The encryption choice wasn’t saved, so Omarchy will encrypt its disk when it first starts."
+        "The encryption choice wasn’t saved, so Omarchy will encrypt its disk at first boot."
       )
       XCTAssertTrue(
         PlainLanguage.nextActionMessage(.enterRecovery, installConf: .notRecorded)

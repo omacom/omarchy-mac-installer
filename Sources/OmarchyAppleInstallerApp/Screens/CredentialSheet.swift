@@ -36,7 +36,7 @@ struct CredentialSheet: View {
       Text(
         isSimulation
           ? "This simulation uses a test account. No real password is needed."
-          : "Use a macOS account that is allowed to install on this Mac. Your password approves the disk changes you reviewed and the Recovery setup."
+          : "Use a macOS account that is allowed to install on this Mac. Your password approves the disk changes you reviewed and the final setup."
       )
       .font(OmarchyTheme.body)
       .fixedSize(horizontal: false, vertical: true)

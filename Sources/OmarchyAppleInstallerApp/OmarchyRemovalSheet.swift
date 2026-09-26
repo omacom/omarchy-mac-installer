@@ -169,7 +169,7 @@ struct OmarchyRemovalSheet: View {
       message = reply.message
     } catch {
       message =
-        "The removal service isn’t available. Open the \(PlainLanguage.installerPackage) again, then try again. No disk changes were made."
+        "The removal service isn’t available. Run the downloaded \(PlainLanguage.installerPackage) again, then try again. No disk changes were made."
     }
   }
 
@@ -240,7 +240,7 @@ struct OmarchyRemovalSheet: View {
       case .ambiguous:
         "The installation or disk layout could not be identified safely. Partial installations need a separate review. Nothing was changed."
       case .helperUnavailable:
-        "The removal service isn’t available. Open the \(PlainLanguage.installerPackage) again, then try again. No disk changes were made."
+        "The removal service isn’t available. Run the downloaded \(PlainLanguage.installerPackage) again, then try again. No disk changes were made."
       case .credentials:
         "The macOS account or password was not accepted. No disk changes were made."
       case .changed:

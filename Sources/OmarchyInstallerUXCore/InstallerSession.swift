@@ -617,10 +617,10 @@
         isSimulation
         ? (accepted
           ? "Simulation complete: shutdown would begin now. Your Mac stays on."
-          : "Simulated shutdown failed. You can still use the Recovery steps below.")
+          : "Simulated shutdown failed. You can still use the setup steps below.")
         : (accepted
           ? "Shutdown requested. If another app stops it, save your work and choose Apple menu → Shut Down."
-          : "Your Mac couldn’t shut down. Save your work, then choose Apple menu → Shut Down. Keep the Recovery steps handy.")
+          : "Your Mac couldn’t shut down. Save your work, then choose Apple menu → Shut Down. Keep the setup steps handy.")
       return accepted
     }
 

@@ -228,7 +228,7 @@ struct OnePageInstallerView: View {
       if let notice = session.allocationNotice {
         Text(notice).font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
       }
-      acknowledgement(acknowledged)
+      acknowledgement(acknowledged, resizesMacOS: plan.fixedMacOSBytes == nil)
 
     case .awaitingInstall(let plan, let helper, _):
       DiskSplitPanel(plan: plan, editable: false, isBusy: false, onSizeChosen: { _ in })
@@ -405,7 +405,7 @@ struct OnePageInstallerView: View {
         }
         if session.hasExecutionStarted {
           Text(
-            "Check the previous installation’s result before starting again. Keep this Mac plugged in."
+            "This installation can’t be started again yet. Review the installation record below, and keep this Mac plugged in."
           )
           .font(OmarchyTheme.body)
           DisclosureGroup("Last verified steps") {
@@ -447,8 +447,9 @@ struct OnePageInstallerView: View {
 
   /// The tick and its text. Both are inert while a re-plan runs so a tick
   /// cannot land between the drag and the new plan.
-  private func acknowledgement(_ acknowledged: Bool) -> some View {
-    HStack(alignment: .center, spacing: 12) {
+  private func acknowledgement(_ acknowledged: Bool, resizesMacOS: Bool) -> some View {
+    let text = PlainLanguage.planAcknowledgement(resizesMacOS: resizesMacOS)
+    return HStack(alignment: .center, spacing: 12) {
       Toggle(
         "",
         isOn: Binding(get: { acknowledged }, set: { session.setAcknowledged($0) })
@@ -457,8 +458,8 @@ struct OnePageInstallerView: View {
       .toggleStyle(.checkbox)
       .controlSize(.large)
       .tint(OmarchyTheme.accent)
-      .accessibilityLabel(PlainLanguage.planAcknowledgement)
-      Text(PlainLanguage.planAcknowledgement)
+      .accessibilityLabel(text)
+      Text(text)
         .font(OmarchyTheme.heading)
         .foregroundStyle(OmarchyTheme.accent)
         .fixedSize(horizontal: false, vertical: true)

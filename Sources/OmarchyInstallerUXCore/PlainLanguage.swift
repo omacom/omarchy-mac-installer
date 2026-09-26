@@ -8,8 +8,9 @@
     // MARK: Chrome
 
     public static let windowTitle = InstallerProductIdentity.appName
-    /// What people open again to repair the installation service.
-    public static let installerPackage = InstallerProductIdentity.appName + " package"
+    /// The downloaded package people run again to repair the installation
+    /// service, named as it is saved so it can't be mistaken for this app.
+    public static let installerPackage = InstallerProductIdentity.appName + ".pkg"
 
     // MARK: Screen A — Check
 
@@ -39,17 +40,22 @@
     }
 
     public static let replanning = "Checking the new size…"
-    public static let planAcknowledgement =
-      "I have a current backup and approve the disk resize above."
+    /// A free-space plan leaves macOS its current size, so only a plan that
+    /// shrinks macOS asks to approve a resize.
+    public static func planAcknowledgement(resizesMacOS: Bool) -> String {
+      resizesMacOS
+        ? "I have a current backup and approve the disk resize above."
+        : "I have a current backup and approve the disk layout above."
+    }
     public static let planInstall = "Install"
     public static let downloadingPackagesTitle = "Downloading Omarchy"
     public static let encryptLinuxDiskTitle = "Encrypt the Omarchy disk"
     public static let encryptLinuxDiskPassword =
-      "The Omarchy password you select at first boot will unlock the encrypted disk after installation."
+      "The Omarchy password you create at first boot will unlock the encrypted disk after installation."
     public static let encryptLinuxDiskRecovery =
-      "A recovery key will also be shown in case you ever are unable to use the password. Write it down."
+      "A recovery key is also shown then, only once, in case you’re ever unable to use the password. Write it down."
     public static let encryptionChoiceNotRecorded =
-      "The encryption choice wasn’t saved, so Omarchy will encrypt its disk when it first starts."
+      "The encryption choice wasn’t saved, so Omarchy will encrypt its disk at first boot."
     public static let encryptionOptOutRecorded =
       "Disk encryption is off, and that choice was saved."
     public static let encryptionChoiceUnconfirmed =
@@ -124,7 +130,7 @@
     public static let installVerifyingOwner = "Checking your macOS account…"
     public static let installStageLabels = [
       "Preparing disk space", "Installing boot files",
-      "Preparing the Recovery step",
+      "Preparing final setup",
     ]
 
     public static func installPhaseTitle(forPhase phase: String?) -> String {
@@ -133,7 +139,7 @@
       case "existing_removal": "Removing the previous Omarchy installation…"
       case "apfs_preparation": "Preparing disk space…"
       case "stub_and_esp": "Writing boot files…"
-      case "awaiting_recovery": "Preparing the Recovery step…"
+      case "awaiting_recovery": "Preparing final setup…"
       case "boot_policy": "Authorizing startup…"
       case "media_handoff": "Preparing installation media…"
       case "omarchy_install": "Installing Omarchy…"
@@ -146,7 +152,7 @@
       case "existing_removal_started": "Removing the previous Omarchy installation…"
       case "apfs_preparation_started": "Preparing disk space…"
       case "stub_and_esp_started": "Writing boot files…"
-      case "recovery_handoff_started": "Preparing the Recovery step…"
+      case "recovery_handoff_started": "Preparing final setup…"
       default: nil
       }
     }
@@ -156,7 +162,7 @@
       case "existing-install-removed": "Previous Omarchy installation removed"
       case "apfs-target-prepared": "Disk space reserved for Omarchy"
       case "stub-and-esp-installed": "Boot files written"
-      case "recovery-handoff-prepared": "Ready for Recovery"
+      case "recovery-handoff-prepared": "Ready to finish setup"
       default: "Additional installation activity (\(identifier))"
       }
     }
@@ -166,14 +172,14 @@
       case "existing_removal_started": "Started removing the previous Omarchy installation"
       case "apfs_preparation_started": "Started preparing disk space"
       case "stub_and_esp_started": "Started writing boot files"
-      case "recovery_handoff_started": "Started preparing the Recovery step"
+      case "recovery_handoff_started": "Started preparing final setup"
       default: "Additional installation activity (\(name))"
       }
     }
 
     // MARK: Screen E — Recovery
 
-    public static let recoveryHeadline = "Finish setup in Recovery"
+    public static let recoveryHeadline = "Finish setup"
     public static let recoveryShutDown = "Shut down"
     public static let shutdownConfirmationTitle = "Shut down this Mac now?"
     public static let shutdownConfirmationBody =
@@ -275,7 +281,7 @@
         base = "Your approved plan was accepted. Installation is continuing."
       case .enterRecovery:
         base =
-          "Omarchy’s files are in place. Finish setup in Recovery so this Mac can start Omarchy."
+          "Omarchy’s files are in place. Finish setup at startup so this Mac can start Omarchy."
       case .attachInstallationMedia:
         base = "Preparation is complete. Connect the verified installation media to continue."
       case .verifyInstalledSystem:
@@ -428,7 +434,7 @@
     /// Shown when the pre-installed system daemon is missing. The remedy is to
     /// run the installer package again — never to open Login Items.
     public static let helperNotInstalled =
-      "The installation service is missing. Open the \(installerPackage) again, then reopen this app."
+      "The installation service is missing. Run the downloaded \(installerPackage) again, then reopen this app."
 
     public static let engineUnavailable =
       "This build is missing the required validation engine. Installation is unavailable."
@@ -491,7 +497,7 @@
             plainDetail:
               "The app couldn’t get a response from the installation service. Installation has not started.",
             technicalDetail: technical,
-            remedy: "Open the \(installerPackage) again, then reopen this app."
+            remedy: "Run the downloaded \(installerPackage) again, then reopen this app."
           )
         case .connectionFailed:
           return FailureDisplay(
