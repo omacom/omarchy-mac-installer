@@ -213,6 +213,9 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       AssetProgressUpdate(stage: .inspectingEngine, rows: collector.rows())
     )
 
+    // Sampled before the engine reads free space, so a download that moves on
+    // during inspection only makes the reserve more cautious.
+    let payloadBytesOnDisk = prefetch.bytesOnDisk(for: release.assets.payload)
     let stagedEngine = release.assets.engine
     let archive = try PinnedAsahiEngineArchive(
       fileURL: stagedEngine.fileURL,
@@ -242,7 +245,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     let recommendation = try InstallerAllocationRecommendation(
       inventory: inventory,
       targetBytes: omarchyBytes ?? InstallerAllocationRecommendation.balancedTargetBytes,
-      reservedBytes: release.assets.additionalHandoffBytes,
+      reservedBytes: release.assets.planningReserveBytes(payloadBytesOnDisk: payloadBytesOnDisk),
       snapshotConstraint: {
         APFSSnapshotInspector().constraint(in: host.storage)
       }

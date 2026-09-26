@@ -691,6 +691,25 @@
       }
     }
 
+    /// Payload bytes already on the staging volume: the promoted file, or
+    /// what this orchestrator's downloads hold so far.
+    public func bytesOnDisk(for payload: StagedInstallerArtifact) -> UInt64 {
+      let size = payload.artifact.expectedSizeBytes
+      if let attributes = try? FileManager.default.attributesOfItem(
+        atPath: payload.fileURL.path),
+        attributes[.type] as? FileAttributeType == .typeRegular,
+        (attributes[.size] as? NSNumber)?.uint64Value == size
+      {
+        return size
+      }
+      let owned = lock.withLock { ownedWorkDirectories }
+      var total: UInt64 = 0
+      for directory in owned {
+        total &+= Self.regularFileBytes(in: directory)
+      }
+      return min(size, total)
+    }
+
     public func waitUntilVerified(
       progress: @escaping @Sendable (PayloadPrefetchState) -> Void
     ) async throws {
@@ -760,19 +779,19 @@
       let observers = Array(self.observers.values)
       // Backing out leaves no partial download behind. Only directories taken
       // here are removed, so a download begun after this cancel keeps its own.
+      // Removal is immediate because quitting also cancels, and the process
+      // may exit before a deferred task runs.
       let abandoned = ownedWorkDirectories
       ownedWorkDirectories.removeAll()
       lock.unlock()
       for waiter in pending {
         waiter.resume(throwing: PayloadPrefetchError.cancelled)
       }
-      if existing != nil || !abandoned.isEmpty {
-        Task {
-          await existing?.cancel()
-          for directory in abandoned {
-            try? FileManager.default.removeItem(at: directory)
-          }
-        }
+      if let existing {
+        Task { await existing.cancel() }
+      }
+      for directory in abandoned {
+        try? FileManager.default.removeItem(at: directory)
       }
       for observer in observers {
         observer(.idle)

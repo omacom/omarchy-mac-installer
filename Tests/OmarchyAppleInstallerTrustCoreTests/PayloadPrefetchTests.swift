@@ -339,14 +339,37 @@
         try await Task.sleep(for: .milliseconds(10))
       }
       let partial = try XCTUnwrap(directories.values.first)
+      let payload = StagedInstallerArtifact(
+        artifact: artifact, fileURL: root.appendingPathComponent(artifact.fileName),
+        reusedExistingFile: false)
+      XCTAssertEqual(orchestrator.bytesOnDisk(for: payload), 4)
 
       orchestrator.cancel()
 
-      for _ in 0..<200 where FileManager.default.fileExists(atPath: partial.path) {
-        try await Task.sleep(for: .milliseconds(10))
-      }
+      // Synchronous, because quitting cancels and then exits.
       XCTAssertFalse(FileManager.default.fileExists(atPath: partial.path))
+      XCTAssertEqual(orchestrator.bytesOnDisk(for: payload), 0)
       XCTAssertEqual(orchestrator.currentState(), .idle)
+    }
+
+    func testAPromotedPayloadCountsAsFullyOnDisk() throws {
+      let data = Data("promoted-payload".utf8)
+      let artifact = try pinnedPayload(data)
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "prefetch-ondisk-\(UUID().uuidString)", isDirectory: true)
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let canonical = root.appendingPathComponent(artifact.fileName)
+      let payload = StagedInstallerArtifact(
+        artifact: artifact, fileURL: canonical, reusedExistingFile: false)
+      let orchestrator = PayloadPrefetchOrchestrator()
+      XCTAssertEqual(orchestrator.bytesOnDisk(for: payload), 0)
+
+      try Data("short".utf8).write(to: canonical)
+      XCTAssertEqual(orchestrator.bytesOnDisk(for: payload), 0)
+
+      try data.write(to: canonical)
+      XCTAssertEqual(orchestrator.bytesOnDisk(for: payload), UInt64(data.count))
     }
 
     func testFailureReasonsNameTheCheck() {
