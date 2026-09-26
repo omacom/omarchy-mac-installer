@@ -4,13 +4,16 @@
   @testable import OmarchyInstallerUXCore
 
   final class InstallerBuildProfileTests: XCTestCase {
-    func testStandardProfileRemainsUnchanged() {
+    func testStandardProfileBootsLimine() {
       let profile = InstallerBuildProfile.resolve(infoDictionary: [:])
       XCTAssertEqual(profile, .standard)
       XCTAssertTrue(profile.allowsEncryption)
       XCTAssertTrue(profile.showsReleaseChannels)
       XCTAssertEqual(profile.workspaceName, InstallerProductIdentity.appIdentifier)
-      XCTAssertTrue(profile.startupSequence.contains("GRUB"))
+      // Stable images and the images this repository builds boot Limine.
+      XCTAssertEqual(profile.startupSequence, "m1n1 → U-Boot → Limine → Omarchy")
+      XCTAssertEqual(
+        PlainLanguage.doneVerifiedRows(profile: profile).first?.value, profile.startupSequence)
     }
 
     func testLegacyPlainProfileRemainsIsolatedAndCannotEncrypt() {
