@@ -257,6 +257,8 @@
       XCTAssertTrue(FileManager.default.fileExists(atPath: abandoned.path))
 
       orchestrator.begin(payload: payload)
+      // Gone before begin returns, so planning never counts the failed parts.
+      XCTAssertFalse(FileManager.default.fileExists(atPath: abandoned.path))
       try await orchestrator.waitUntilVerified { _ in }
       XCTAssertEqual(orchestrator.currentState(), .verified)
       XCTAssertEqual(attempts.values.count, 2)
