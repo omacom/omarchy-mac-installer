@@ -604,26 +604,24 @@
       generation = UUID()
       self.generation = generation
       latest = .idle
+      // Earlier generations are superseded under this lock hold and nothing
+      // they produce is published any more, so their directories are
+      // reclaimed now: before the space check, so Try again does not count a
+      // failed run's parts as used, and before planning samples bytesOnDisk.
+      // A successor appends its directory only while still current, so this
+      // snapshot never holds it.
+      let abandoned = ownedWorkDirectories
+      ownedWorkDirectories.removeAll()
       lock.unlock()
+      for directory in abandoned {
+        try? FileManager.default.removeItem(at: directory)
+      }
 
       Task {
         if let predecessor {
           await predecessor.cancel()
         }
-        // Earlier generations of this orchestrator have been told to stop and
-        // nothing they produce is published any more, so their directories
-        // are reclaimed before the space check; otherwise every Try again
-        // would count a failed run's parts as used. The generation check and
-        // the removal share one lock hold, so a replaced task can never
-        // delete its successor's directory.
-        let stillCurrent = self.lock.withLock { () -> Bool in
-          guard self.generation == generation else { return false }
-          for directory in self.ownedWorkDirectories {
-            try? FileManager.default.removeItem(at: directory)
-          }
-          self.ownedWorkDirectories.removeAll()
-          return true
-        }
+        let stillCurrent = self.lock.withLock { self.generation == generation }
         guard stillCurrent else { return }
         self.publish(.verifying, generation: generation)
         if self.matchesPinned(artifact, canonical) {
@@ -689,6 +687,25 @@
           try? FileManager.default.removeItem(at: work)
         }
       }
+    }
+
+    /// Payload bytes already on the staging volume: the promoted file, or
+    /// what this orchestrator's downloads hold so far.
+    public func bytesOnDisk(for payload: StagedInstallerArtifact) -> UInt64 {
+      let size = payload.artifact.expectedSizeBytes
+      if let attributes = try? FileManager.default.attributesOfItem(
+        atPath: payload.fileURL.path),
+        attributes[.type] as? FileAttributeType == .typeRegular,
+        (attributes[.size] as? NSNumber)?.uint64Value == size
+      {
+        return size
+      }
+      let owned = lock.withLock { ownedWorkDirectories }
+      var total: UInt64 = 0
+      for directory in owned {
+        total &+= Self.regularFileBytes(in: directory)
+      }
+      return min(size, total)
     }
 
     public func waitUntilVerified(
@@ -758,12 +775,21 @@
       let pending = Array(waiters.values)
       waiters.removeAll()
       let observers = Array(self.observers.values)
+      // Backing out leaves no partial download behind. Only directories taken
+      // here are removed, so a download begun after this cancel keeps its own.
+      // Removal is immediate because quitting also cancels, and the process
+      // may exit before a deferred task runs.
+      let abandoned = ownedWorkDirectories
+      ownedWorkDirectories.removeAll()
       lock.unlock()
       for waiter in pending {
         waiter.resume(throwing: PayloadPrefetchError.cancelled)
       }
       if let existing {
         Task { await existing.cancel() }
+      }
+      for directory in abandoned {
+        try? FileManager.default.removeItem(at: directory)
       }
       for observer in observers {
         observer(.idle)

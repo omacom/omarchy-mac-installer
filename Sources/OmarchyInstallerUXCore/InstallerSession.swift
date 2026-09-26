@@ -285,6 +285,7 @@
         case .existingInstallChoice(let options):
           // Never replace, never install alongside: say what was found and
           // stop. The only way forward is to remove the existing copy first.
+          stopPrefetch()
           guard let host, !options.isEmpty else {
             // A choice without the host context (or without options) has no
             // safe way forward; require a fresh inspection.
@@ -299,6 +300,11 @@
           phase = .existingInstallRefused(host: host)
         }
       } catch {
+        // Even after a size change: the failed page only offers a fresh
+        // check, which starts over, so nothing would use this download.
+        if operationID == currentOperation {
+          stopPrefetch()
+        }
         phase = .failed(PlainLanguage.failure(for: error))
       }
     }
