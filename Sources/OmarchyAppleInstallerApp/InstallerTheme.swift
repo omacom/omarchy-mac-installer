@@ -44,6 +44,9 @@ enum OmarchyTheme {
   static let buttonRadius: CGFloat = 6
   static let buttonHeight: CGFloat = 32
   static let buttonTracking: CGFloat = 0.35
+  /// Extra leading for small help text, which often wraps: about 1.4 times
+  /// its size instead of SF Mono's default 1.2.
+  static let helpLineSpacing: CGFloat = 2
 
   // MARK: Type
 
@@ -78,6 +81,14 @@ enum OmarchyTheme {
 }
 
 extension View {
+  /// Small secondary help text that may wrap onto several lines.
+  func omarchyHelpText() -> some View {
+    font(OmarchyTheme.detail)
+      .foregroundStyle(OmarchyTheme.secondaryText)
+      .lineSpacing(OmarchyTheme.helpLineSpacing)
+      .fixedSize(horizontal: false, vertical: true)
+  }
+
   /// The default type for a window or sheet, so text and controls without a
   /// role of their own are monospaced too.
   func omarchyTypography() -> some View {

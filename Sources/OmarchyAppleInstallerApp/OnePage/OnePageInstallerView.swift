@@ -476,9 +476,7 @@ struct OnePageInstallerView: View {
       Image(systemName: "lock.shield")
         .foregroundStyle(OmarchyTheme.caution)
       Text(PlainLanguage.helperNotInstalled)
-        .font(OmarchyTheme.detail)
-        .foregroundStyle(OmarchyTheme.secondaryText)
-        .fixedSize(horizontal: false, vertical: true)
+        .omarchyHelpText()
       Spacer(minLength: 0)
     }
     .padding(.horizontal, 4)
@@ -581,10 +579,8 @@ private struct PrefetchStrip: View {
           }
           if case .failed(let reason) = state {
             Text(reason)
-              .font(OmarchyTheme.detail)
-              .foregroundStyle(OmarchyTheme.secondaryText)
+              .omarchyHelpText()
               .textSelection(.enabled)
-              .fixedSize(horizontal: false, vertical: true)
             if let onRetry {
               Button(PlainLanguage.prefetchRetry, action: onRetry)
             }
@@ -646,9 +642,7 @@ private struct EncryptDiskToggle: View {
       .disabled(!enabled)
       // One help paragraph: the password, then the recovery key.
       Text(PlainLanguage.encryptLinuxDiskPassword + " " + PlainLanguage.encryptLinuxDiskRecovery)
-        .font(OmarchyTheme.detail)
-        .foregroundStyle(OmarchyTheme.secondaryText)
-        .fixedSize(horizontal: false, vertical: true)
+        .omarchyHelpText()
     }
     .padding(.horizontal, 4)
     .padding(.top, 4)
@@ -816,12 +810,10 @@ private struct DiskSplitPanel: View {
           Text(
             "\(PlainLanguage.bytes(plan.unallocatedBytes(for: displayedOmarchyBytes))) remains unallocated. macOS keeps its current size."
           )
-          .font(OmarchyTheme.detail)
-          .foregroundStyle(OmarchyTheme.secondaryText)
+          .omarchyHelpText()
         }
         Text("Omarchy will use the space selected above.")
-          .font(OmarchyTheme.detail)
-          .foregroundStyle(OmarchyTheme.secondaryText)
+          .omarchyHelpText()
         if isBusy {
           // A released divider re-plans through the engine, which takes a
           // moment; say so instead of leaving the bar and the tick inert.
@@ -951,9 +943,7 @@ private struct InstallPanel: View {
         }
         if progress.degraded {
           Text(PlainLanguage.installDegraded)
-            .font(OmarchyTheme.detail)
-            .foregroundStyle(OmarchyTheme.secondaryText)
-            .fixedSize(horizontal: false, vertical: true)
+            .omarchyHelpText()
         }
       }
       .padding(.vertical, 4)

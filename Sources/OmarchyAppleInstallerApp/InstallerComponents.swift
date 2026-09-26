@@ -224,9 +224,7 @@ struct RecoveryStepRow: View {
           .font(OmarchyTheme.heading)
         if let detail = step.detail {
           Text(detail)
-            .font(OmarchyTheme.detail)
-            .foregroundStyle(OmarchyTheme.secondaryText)
-            .fixedSize(horizontal: false, vertical: true)
+            .omarchyHelpText()
         }
       }
       Spacer(minLength: 0)

@@ -86,6 +86,7 @@ struct CredentialSheet: View {
         }
         .font(OmarchyTheme.detail)
         .foregroundStyle(OmarchyTheme.secondaryText)
+        .lineSpacing(OmarchyTheme.helpLineSpacing)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
