@@ -2,7 +2,7 @@
 
 Development source for the Apple Silicon macOS installer, extracted from [maralcbr/omarchy-mx-mac](https://github.com/maralcbr/omarchy-mx-mac) into [omacom/omarchy-mac-installer](https://github.com/omacom/omarchy-mac-installer).
 
-This first extraction preserves the installer behavior and Git attribution. The app still carries its original **Omarchy MX Mac Installer** identity and release configuration. Integration with the shared Omarchy packages and Linux installation image is the next, separate change. This candidate is not an installation release.
+This first extraction preserves the installer behavior and Git attribution. The app is now named **Omarchy Installer**; it keeps the original `com.omarchy.mx.*` identifiers, download keys and release configuration, and the package removes a copy left under the old name, Omarchy MX Mac Installer. Integration with the shared Omarchy packages and Linux installation image is the next, separate change. This candidate is not an installation release.
 
 ## Source layout
 

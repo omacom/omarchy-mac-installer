@@ -13,7 +13,7 @@ Moving to another identity or host is an edit to `identity.conf` followed by `sc
 
 ## Bundle layout
 
-The generated `Omarchy MX Mac Installer.app` contains:
+The generated `Omarchy Installer.app` contains:
 
 - the SwiftUI application in `Contents/MacOS`;
 - the root helper in `Contents/Resources`;
@@ -64,7 +64,7 @@ preconfigured keychain profile:
 
 ```sh
 OMARCHY_NOTARY_PROFILE="omarchy-notary" \
-Packaging/notarize-app.sh "/absolute/path/Omarchy MX Mac Installer.app"
+Packaging/notarize-app.sh "/absolute/path/Omarchy Installer.app"
 ```
 
 Notarization is deliberately separate from the assembler. The script rejects

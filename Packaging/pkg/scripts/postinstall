@@ -7,6 +7,27 @@ set -u
 source "$(dirname "$0")/identity.conf" || exit 1
 PLIST="/Library/LaunchDaemons/$INSTALLER_HELPER_IDENTIFIER.plist"
 LABEL="$INSTALLER_HELPER_IDENTIFIER"
+PLIST_BUDDY=/usr/libexec/PlistBuddy
+PGREP=/usr/bin/pgrep
+
+# Remove a copy installed under the app's old name, so an upgrade leaves one
+# installer. Only a real bundle carrying this app's identifier that nothing is
+# running from is removed; every refusal or failure is logged and the package
+# still succeeds.
+remove_legacy_app() {
+  local legacy=$1 identifier
+  [[ -d $legacy && ! -L $legacy ]] || return 0
+  identifier=$("$PLIST_BUDDY" -c 'Print :CFBundleIdentifier' "$legacy/Contents/Info.plist" 2>/dev/null) || identifier=""
+  if [[ $identifier != "$INSTALLER_APP_IDENTIFIER" ]]; then
+    echo "postinstall: leaving $legacy: bundle identifier is '${identifier:-unknown}'" >&2
+  elif "$PGREP" -f "$legacy/Contents/" >/dev/null 2>&1; then
+    echo "postinstall: leaving $legacy: it is running" >&2
+  elif ! /bin/rm -rf "$legacy"; then
+    echo "postinstall: could not remove $legacy" >&2
+    /usr/bin/logger -t omarchy-installer-pkg "could not remove $legacy" || true
+  fi
+  return 0
+}
 
 if [[ -f "$PLIST" ]]; then
   /usr/sbin/chown root:wheel "$PLIST"
@@ -31,6 +52,7 @@ else
 fi
 
 APP="/Applications/$INSTALLER_APP_NAME.app"
+remove_legacy_app "/Applications/$INSTALLER_LEGACY_APP_NAME.app"
 
 # Pre-run Gatekeeper's one-time inspection of the new app now, while the
 # installer's own progress UI is still on screen. Without this, the first

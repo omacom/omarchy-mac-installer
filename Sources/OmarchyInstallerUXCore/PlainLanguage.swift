@@ -7,7 +7,7 @@
   public enum PlainLanguage {
     // MARK: Chrome
 
-    public static let windowTitle = "Omarchy Installer"
+    public static let windowTitle = InstallerProductIdentity.appName
 
     // MARK: Screen A — Check
 

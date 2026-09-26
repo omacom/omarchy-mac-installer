@@ -42,6 +42,8 @@ readonly OMARCHY_VOLUME_NAME="Omarchy"
 readonly MACOS_VOLUME_NAME="Macintosh HD"
 readonly APP_SUPPORT_ID="$INSTALLER_APP_IDENTIFIER"
 readonly APP_BUNDLE_NAME="$INSTALLER_APP_NAME.app"
+# Test Macs may still carry a copy installed before the rename.
+readonly LEGACY_APP_BUNDLE_NAME="$INSTALLER_LEGACY_APP_NAME.app"
 readonly APP_ARCHIVE_STEM="$INSTALLER_FILE_STEM"
 
 # Volume names and partition types that must never appear in a deletion plan.
@@ -216,11 +218,14 @@ REMOTE
 
 old_apps_command() {
   printf 'app_bundle_name=%q\n' "$APP_BUNDLE_NAME"
+  printf 'legacy_app_bundle_name=%q\n' "$LEGACY_APP_BUNDLE_NAME"
   printf 'app_archive_stem=%q\n' "$APP_ARCHIVE_STEM"
   cat <<'REMOTE'
 for candidate in \
   "/Applications/$app_bundle_name" \
   "$HOME/Downloads/$app_bundle_name" \
+  "/Applications/$legacy_app_bundle_name" \
+  "$HOME/Downloads/$legacy_app_bundle_name" \
   "$HOME/Downloads/__MACOSX"
 do
   if [ -e "$candidate" ] && [ ! -L "$candidate" ]; then
@@ -580,7 +585,7 @@ clean_macos_state() {
     while IFS= read -r path; do
       [[ -n $path ]] || continue
       case $path in
-        */"$APP_BUNDLE_NAME"|*/"$APP_ARCHIVE_STEM"-*.zip|*/__MACOSX) ;;
+        */"$APP_BUNDLE_NAME"|*/"$LEGACY_APP_BUNDLE_NAME"|*/"$APP_ARCHIVE_STEM"-*.zip|*/__MACOSX) ;;
         *) die "refusing to remove an unexpected path: $path" ;;
       esac
       # The installer package installs the app root-owned in /Applications;

@@ -1,7 +1,7 @@
 # Installer release inputs
 
 Production packaging reads this directory and copies its contents into
-`Omarchy MX Mac Installer.app/Contents/Resources/Release/`:
+`Omarchy Installer.app/Contents/Resources/Release/`:
 
 - `release.json` — schema version 3 descriptor naming the stable and rc
   channel catalog URLs, the default channel, the expected Ed25519 trust-root

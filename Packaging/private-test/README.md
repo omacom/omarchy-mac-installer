@@ -36,7 +36,7 @@ The macOS Installer asks for administrator approval. The package installs the ap
 
 ## 4. Open the app and review the plan
 
-Open **Omarchy MX Mac Installer** from Applications. If macOS blocks the app too, use the same per-item **Open Anyway** process for the app. This package's Gatekeeper approval and helper installation are part of the private test; their end-to-end behavior on a downloaded copy has not yet been physically validated.
+Open **Omarchy Installer** from Applications. If macOS blocks the app too, use the same per-item **Open Anyway** process for the app. This package's Gatekeeper approval and helper installation are part of the private test; their end-to-end behavior on a downloaded copy has not yet been physically validated.
 
 Check the model, available space and proposed Linux size. The app must say that this private test installs Linux **without disk encryption**. Keep the default Asahi image; this build does not offer a channel switch. If the helper cannot be reached or any check fails, stop and send Scott the exact error instead of using sudo or an older installer.
 
