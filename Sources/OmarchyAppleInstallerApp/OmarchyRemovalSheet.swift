@@ -57,9 +57,11 @@ struct OmarchyRemovalSheet: View {
         }
         .padding(14)
         .background(OmarchyTheme.card, in: RoundedRectangle(cornerRadius: 8))
-        Text("macOS, your files, and Apple Recovery stay as they are. Removal can’t be undone.")
-          .font(OmarchyTheme.body)
-          .fixedSize(horizontal: false, vertical: true)
+        Text(
+          "macOS, your macOS files, and Apple Recovery stay as they are. All Omarchy data will be deleted. Removal can’t be undone."
+        )
+        .font(OmarchyTheme.body)
+        .fixedSize(horizontal: false, vertical: true)
         VStack(alignment: .leading, spacing: 7) {
           Text("Type this to confirm:")
             .foregroundStyle(OmarchyTheme.secondaryText)

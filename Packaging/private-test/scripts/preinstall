@@ -11,7 +11,7 @@ esac
 version=$(/usr/bin/sw_vers -productVersion)
 major=${version%%.*}
 [[ $major =~ ^[0-9]+$ ]] && (( major >= 15 )) || { echo 'macOS 15 or later is required.' >&2; exit 1; }
-for path in "/Applications/@APP_NAME@.app" "/Library/LaunchDaemons/@HELPER_IDENTIFIER@.plist" "/Library/PrivilegedHelperTools/@HELPER_IDENTIFIER@" "/var/db/@APP_IDENTIFIER@"; do
+for path in "/Applications/@APP_NAME@.app" "/Applications/@LEGACY_APP_NAME@.app" "/Library/LaunchDaemons/@HELPER_IDENTIFIER@.plist" "/Library/PrivilegedHelperTools/@HELPER_IDENTIFIER@" "/var/db/@APP_IDENTIFIER@"; do
   if [[ -e $path || -L $path ]]; then
     echo "Private package will not replace existing installer state: $path" >&2
     echo 'Ask the maintainer to review the existing installation first.' >&2
