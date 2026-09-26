@@ -254,6 +254,61 @@
       XCTAssertTrue(session.canStartInstallation)
     }
 
+    func testAFirstPreparationThatFailsStopsTheDownloadItStarted() async {
+      let environment = MockInstallerEnvironment()
+      environment.payloadPrefetchRequired = true
+      environment.prepareError = InstallerReleaseConfigurationError.releaseResourcesUnavailable
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+
+      await session.continueToPlan()
+
+      guard case .failed = session.phase else {
+        return XCTFail("Expected failed, got \(session.phase)")
+      }
+      XCTAssertGreaterThan(environment.prefetchCancelCount, environment.cancelsBeforePrepare)
+      XCTAssertEqual(environment.prefetchStartCount, 0)
+    }
+
+    func testAnExistingInstallFoundWhilePlanningStopsTheDownload() async {
+      let environment = MockInstallerEnvironment()
+      environment.payloadPrefetchRequired = true
+      environment.existingInstalls = [
+        ExistingInstallDisplay(sourceIdentifier: "disk0s3", sizeDescription: "128 GB")
+      ]
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+
+      await session.continueToPlan()
+
+      guard case .existingInstallRefused = session.phase else {
+        return XCTFail("Expected existingInstallRefused, got \(session.phase)")
+      }
+      XCTAssertGreaterThan(environment.prefetchCancelCount, environment.cancelsBeforePrepare)
+    }
+
+    func testAFailedSizeChangeStopsTheDownload() async {
+      let environment = MockInstallerEnvironment()
+      environment.payloadPrefetchRequired = true
+      let gate = OperationGate()
+      environment.prefetchGate = gate
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      await session.continueToPlan()
+      await gate.waitUntilEntered()
+      session.continueToPlanReview()
+      let cancelsBefore = environment.prefetchCancelCount
+      environment.prepareError = InstallerReleaseConfigurationError.releaseResourcesUnavailable
+
+      await session.replan(omarchyBytes: 200_000_000_000)
+
+      guard case .failed = session.phase else {
+        return XCTFail("Expected failed, got \(session.phase)")
+      }
+      XCTAssertGreaterThan(environment.prefetchCancelCount, cancelsBefore)
+      await gate.release()
+    }
+
     func testReplanWaitsForAPayloadTheCatalogReplaced() async throws {
       let environment = MockInstallerEnvironment()
       environment.payloadPrefetchRequired = true
@@ -1075,6 +1130,9 @@
     var prefetchGate: OperationGate?
     private(set) var prefetchStartCount = 0
     private(set) var prefetchCancelCount = 0
+    /// The live environment begins the download inside preparation, so a
+    /// cancel after this count stops a download the preparation started.
+    private(set) var cancelsBeforePrepare = 0
     var prefetchFailure = false
     var payloadPrefetchState: PayloadPrefetchState = .idle
 
@@ -1085,6 +1143,7 @@
       savedProgress = progress
       await prepareGate?.wait()
       prepareCount += 1
+      cancelsBeforePrepare = prefetchCancelCount
       lastOmarchyBytes = omarchyBytes
       approved = false
       for update in progressUpdates {

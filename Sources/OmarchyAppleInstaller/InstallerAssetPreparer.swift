@@ -41,9 +41,9 @@
     public let repairManifest: StagedInstallerArtifact?
     public let installerCompatibility: InstallerCompatibility?
 
-    /// Downloads are already staged when the disk is inspected. Leave room
-    /// for the app handoff's full-copy fallback and the helper's verified copy,
-    /// both of which remain on macOS while the engine checks resize limits.
+    /// Room beyond the staged downloads for the app handoff's full-copy
+    /// fallback and the helper's verified copy, both of which remain on macOS
+    /// while the engine checks resize limits.
     public var additionalHandoffBytes: UInt64 {
       let artifacts = [engine, metadata, payload] + (repairManifest.map { [$0] } ?? [])
       var total: UInt64 = 0
@@ -57,6 +57,16 @@
         total = sum
       }
       return total
+    }
+
+    /// What planning withholds from Linux. The payload downloads while the
+    /// engine inspects the disk, so the part not yet on the volume is reserved
+    /// too; otherwise the ceiling would depend on how far the download got.
+    public func planningReserveBytes(payloadBytesOnDisk: UInt64) -> UInt64 {
+      let size = payload.artifact.expectedSizeBytes
+      let outstanding = size - min(size, payloadBytesOnDisk)
+      let (total, overflow) = additionalHandoffBytes.addingReportingOverflow(outstanding)
+      return overflow ? UInt64.max : total
     }
 
     public init(

@@ -91,6 +91,22 @@
       )
     }
 
+    func testPlanningReservesThePayloadBytesNotYetDownloaded() async throws {
+      let fixture = try makeFixture(schemaVersion: 2)
+      let directory = temporaryDirectory()
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let assets = try await fixture.preparer.prepare(fixture.request(stagingDirectory: directory))
+      let payload = UInt64(fixture.payload.count)
+      let handoff = assets.additionalHandoffBytes
+
+      XCTAssertEqual(assets.planningReserveBytes(payloadBytesOnDisk: 0), handoff + payload)
+      XCTAssertEqual(
+        assets.planningReserveBytes(payloadBytesOnDisk: payload / 2),
+        handoff + payload - payload / 2)
+      XCTAssertEqual(assets.planningReserveBytes(payloadBytesOnDisk: payload), handoff)
+      XCTAssertEqual(assets.planningReserveBytes(payloadBytesOnDisk: payload * 4), handoff)
+    }
+
     func testHandoffReserveOverflowCannotAdvertiseUsableSpace() async throws {
       let fixture = try makeFixture(schemaVersion: 2)
       let directory = temporaryDirectory()
@@ -112,6 +128,7 @@
           )
         )
         XCTAssertEqual(oversized.additionalHandoffBytes, UInt64.max)
+        XCTAssertEqual(oversized.planningReserveBytes(payloadBytesOnDisk: 0), UInt64.max)
       }
     }
 
