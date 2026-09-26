@@ -311,6 +311,44 @@
       windowA.cancel()
     }
 
+    func testCancellingRemovesThePartialDownload() async throws {
+      let artifact = try pinnedPayload(Data("backed-out-payload".utf8))
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "prefetch-cancel-\(UUID().uuidString)", isDirectory: true)
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let directories = RecordingBox<URL>()
+      let orchestrator = PayloadPrefetchOrchestrator(
+        makeNetwork: { MockNetworkPath(Self.unmetered) },
+        makeKeepAwake: { MockKeepAwake() },
+        makeFreeSpace: { _ in MockFreeSpace(bytes: 8_000_000_000) },
+        matchesPinned: { _, _ in false },
+        requiredFreeBytes: { VerifiedArtifactStager.requiredFreeBytes(forPayloadSize: $0) },
+        stage: { _, directory, _ in
+          try Data("part".utf8).write(to: directory.appendingPathComponent("part-1"))
+          directories.append(directory)
+          try await Task.sleep(for: .seconds(30))
+          throw CancellationError()
+        }
+      )
+      orchestrator.begin(
+        payload: StagedInstallerArtifact(
+          artifact: artifact, fileURL: root.appendingPathComponent(artifact.fileName),
+          reusedExistingFile: false))
+      for _ in 0..<200 where directories.values.isEmpty {
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      let partial = try XCTUnwrap(directories.values.first)
+
+      orchestrator.cancel()
+
+      for _ in 0..<200 where FileManager.default.fileExists(atPath: partial.path) {
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      XCTAssertFalse(FileManager.default.fileExists(atPath: partial.path))
+      XCTAssertEqual(orchestrator.currentState(), .idle)
+    }
+
     func testFailureReasonsNameTheCheck() {
       XCTAssertTrue(
         PayloadPrefetchFailure.reason(

@@ -285,6 +285,7 @@
         case .existingInstallChoice(let options):
           // Never replace, never install alongside: say what was found and
           // stop. The only way forward is to remove the existing copy first.
+          stopPrefetchUnlessReplanning()
           guard let host, !options.isEmpty else {
             // A choice without the host context (or without options) has no
             // safe way forward; require a fresh inspection.
@@ -299,7 +300,20 @@
           phase = .existingInstallRefused(host: host)
         }
       } catch {
+        if operationID == currentOperation {
+          stopPrefetchUnlessReplanning()
+        }
         phase = .failed(PlainLanguage.failure(for: error))
+      }
+    }
+
+    /// The environment starts the payload download as soon as the release is
+    /// verified, before the plan exists. A first preparation that ends without
+    /// a plan stops it; a failed size change keeps the download the approved
+    /// size already started.
+    private func stopPrefetchUnlessReplanning() {
+      if !isReplanning {
+        stopPrefetch()
       }
     }
 

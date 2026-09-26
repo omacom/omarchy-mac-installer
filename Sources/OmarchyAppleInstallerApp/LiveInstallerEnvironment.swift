@@ -204,6 +204,10 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       selectedLane = channel.rawValue
     }
     try catalogStore.store(release.assets.catalogIdentity)
+    // The payload is pinned by the verified catalog and does not depend on the
+    // plan, so it downloads while the engine checks the Mac and the owner picks
+    // a size. The session cancels it if this preparation fails.
+    beginPayloadPrefetch(release.assets.payload)
 
     progress(
       AssetProgressUpdate(stage: .inspectingEngine, rows: collector.rows())
@@ -266,7 +270,6 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       planReview = prepared.review
       releaseConfiguration = configuration
     }
-    beginPayloadPrefetch(release.assets.payload)
 
     return .plan(
       Self.planDisplay(

@@ -758,12 +758,21 @@
       let pending = Array(waiters.values)
       waiters.removeAll()
       let observers = Array(self.observers.values)
+      // Backing out leaves no partial download behind. Only directories taken
+      // here are removed, so a download begun after this cancel keeps its own.
+      let abandoned = ownedWorkDirectories
+      ownedWorkDirectories.removeAll()
       lock.unlock()
       for waiter in pending {
         waiter.resume(throwing: PayloadPrefetchError.cancelled)
       }
-      if let existing {
-        Task { await existing.cancel() }
+      if existing != nil || !abandoned.isEmpty {
+        Task {
+          await existing?.cancel()
+          for directory in abandoned {
+            try? FileManager.default.removeItem(at: directory)
+          }
+        }
       }
       for observer in observers {
         observer(.idle)
