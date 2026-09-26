@@ -48,10 +48,10 @@ CANDIDATE_KEY=E11E851AF82E02AEF54C8794599A6024E3D35379
 # pacman platform guard is resident before any platform package arrives.
 BOOTSTRAP=(base sudo btrfs-progs dosfstools e2fsprogs archlinuxarm-keyring asahi-alarm-keyring
   networkmanager iwd curl gnupg jq gum)
-# The Apple boot chain beside the set's packages: GRUB stays for
-# /etc/default/grub, the kernel command line's source, and as the image's own
-# bootable state until Limine is activated.
-PLATFORM_PACKAGES=(mkinitcpio grub limine limine-snapper-sync asahi-scripts asahi-fwextract)
+# The Apple boot chain beside the set's packages. The Mac boots Limine only:
+# GRUB is not installed, and /etc/default/grub, which the finalizer writes, is
+# just the file the Limine command line is derived from.
+PLATFORM_PACKAGES=(mkinitcpio limine limine-snapper-sync asahi-scripts asahi-fwextract)
 # The speaker stack's model profiles and DSP chain. Without alsa-ucm-conf-asahi
 # the default sink is stereo-fallback, not the model's convolver; the runtime's
 # audio leaf, deferred to first boot, may find no network to fetch them.
@@ -548,8 +548,8 @@ prepare_isolated_api() {
   # systemd-tmpfiles never runs here: the installer takes its lock under /run/lock.
   mkdir -m 0755 -p "$root/run/lock"
   _isolated_mount "$root/tmp" -t tmpfs -o mode=1777,strictatime,nodev,nosuid tmpfs
-  # udev never runs here either: grub-mkconfig names the root by UUID only when
-  # /dev/disk/by-uuid has it, so the image's root loop device gets that link.
+  # udev never runs here either: tools that name the root by UUID find it only
+  # when /dev/disk/by-uuid has it, so the image's root loop device gets that link.
   local root_device
   root_device=$(findmnt -n -o SOURCE --target "$root" 2>/dev/null | sed 's/\[.*//')
   if [[ $root_device =~ ^/dev/loop[0-9]+$ && -n ${ROOT_UUID:-} ]]; then
@@ -955,11 +955,10 @@ configure_image() {
   write_fstab
   finalize_root
   # System setup expects a bootable system: a kernel in /boot (the Apple set's
-  # initcpio hook built it) and a GRUB configuration. Both are regenerated
-  # below once every package is in place.
+  # initcpio hook built it). It is regenerated below once every package is in
+  # place.
   [[ -s $target/boot/vmlinuz-$KERNEL && -s $target/boot/initramfs-$KERNEL.img ]] ||
     fail "/boot has no $KERNEL kernel and initramfs after the Apple set"
-  generate_grub
   prepare_target_keyring
   run_system_setup
   verify_synced_databases
@@ -975,7 +974,6 @@ configure_image() {
   isolated_chroot "$target" mkinitcpio -P >"$logs/mkinitcpio.log" 2>&1 || fail "mkinitcpio failed (logs/mkinitcpio.log)"
   [[ -s $target/boot/vmlinuz-$KERNEL && -s $target/boot/initramfs-$KERNEL.img ]] ||
     fail "/boot has no $KERNEL kernel and initramfs"
-  generate_grub
   # The device trees go into m1n1's stage 2 in glob order: C collation keeps
   # that order the same on every builder.
   isolated_chroot "$target" env LC_ALL=C update-m1n1 >"$logs/update-m1n1.log" 2>&1 ||
@@ -996,35 +994,12 @@ configure_image() {
   find "$target/var/cache/pacman/pkg" -mindepth 1 -delete
 }
 
-# grub-mkconfig names root=UUID= only when /dev/disk/by-uuid has it, so the
-# root loop device gets that link meanwhile.
-generate_grub() {
-  local root_device
-  root_device=$(findmnt -n -o SOURCE --target "$target" | sed 's/\[.*//')
-  [[ $root_device =~ ^/dev/loop[0-9]+$ ]] || fail "unexpected root device $root_device"
-  mkdir -p "$target/boot/grub" "$target/boot/efi/EFI/BOOT"
-  isolated_chroot "$target" /bin/bash -s -- "$root_device" "$ROOT_UUID" >"$logs/update-grub.log" 2>&1 <<'SCRIPT' ||
-set -euo pipefail
-link=/dev/disk/by-uuid/$2
-mkdir -p /dev/disk/by-uuid
-[[ ! -e $link ]] || [[ $(readlink -f "$link") == "$(readlink -f "$1")" ]] || { echo "$link names another device" >&2; exit 1; }
-ln -sfn "$1" "$link"
-trap 'rm -f "$link"' EXIT
-if [[ -f /etc/default/update-grub ]]; then
-  BOOT_PART=/boot EFI_PART=/boot/efi /usr/bin/update-grub
-else
-  BOOT_PART=/boot EFI_PART=/boot/efi TARGET=/boot/efi/EFI/BOOT/BOOTAA64.EFI /usr/bin/update-grub
-fi
-SCRIPT
-    fail "update-grub failed (logs/update-grub.log)"
-}
-
 # The Mac boots Limine from the moment the install finishes. The runtime's
-# GRUB compatibility leaf runs first, then the Limine gate is armed and the
-# Limine leaf activates it: the same activation an installed Mac runs, here
-# once, in the image, with OMARCHY_MAC_IMAGE_BUILD cleared for these two
-# leaves only. GRUB stays installed for /etc/default/grub, where the kernel
-# command line lives, and its image goes to /boot/grub/grub-aa64.efi, unused.
+# console leaf runs first (it adds the root-device wait to the command line in
+# /etc/default/grub, which the Limine line is derived from), then the Limine
+# gate is armed and the Limine leaf activates it: the same activation an
+# installed Mac runs, here once, in the image, with OMARCHY_MAC_IMAGE_BUILD
+# cleared for these two leaves only. No GRUB is installed or run.
 activate_limine() {
   local root_device identity leaf
   for leaf in grub-console.sh limine-boot.sh; do

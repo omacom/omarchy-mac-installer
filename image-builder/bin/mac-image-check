@@ -76,7 +76,7 @@ IMAGE_LINKS = {
 }
 SYSTEM_USERS = {"nobody", "nfsnobody"}
 IMAGE_PACKAGES = (
-    "base", "sudo", "mkinitcpio", "grub", "asahi-scripts", "asahi-fwextract", "btrfs-progs",
+    "base", "sudo", "mkinitcpio", "asahi-scripts", "asahi-fwextract", "btrfs-progs",
     "archlinuxarm-keyring", "asahi-alarm-keyring", "networkmanager", "iwd", "curl", "gnupg", "jq", "gum",
     "omarchy", "omarchy-settings", "omarchy-mac", "omarchy-mac-boot",
     "linux-aurora", "linux-aurora-headers", "m1n1-aurora", "uboot-asahi",
@@ -274,41 +274,22 @@ def installed_packages(root: Path) -> set[str]:
     return names
 
 
-def grub_entries(grub: str) -> list[tuple[str, list[str], list[str]]]:
-    """(kernel, arguments, initrd images) for each linux line, in order."""
-    entries: list[tuple[str, list[str], list[str] | None]] = []
-    for line in grub.splitlines():
-        words = line.split()
-        if not words:
-            continue
-        if words[0] == "menuentry" or words[0] == "submenu":
-            entries.append(("", [], None))
-        elif words[0] == "linux" and len(words) > 1:
-            entries.append((words[1], words[2:], None))
-        elif words[0] == "initrd" and entries and entries[-1][0] and entries[-1][2] is None:
-            entries[-1] = (entries[-1][0], entries[-1][1], words[1:])
-    return [(kernel, arguments, initrd or []) for kernel, arguments, initrd in entries if kernel]
-
-
 def check_boot(root: Path) -> None:
     boot = root / "boot"
-    for name in (f"vmlinuz-{KERNEL}", f"initramfs-{KERNEL}.img", "grub/grub.cfg"):
+    for name in (f"vmlinuz-{KERNEL}", f"initramfs-{KERNEL}.img"):
         require((boot / name).is_file() and (boot / name).stat().st_size > 0, f"/boot/{name} is missing or empty")
-    grub = (boot / "grub/grub.cfg").read_text()
-    entries = grub_entries(grub)
-    require(entries, "grub.cfg boots nothing")
-    for image, arguments, initrd in entries:
-        require(image == f"/vmlinuz-{KERNEL}", f"grub.cfg boots {image}, not /vmlinuz-{KERNEL}")
-        for argument in (f"root=UUID={ROOT_UUID}", "rootfstype=btrfs"):
-            require(argument in arguments, f"grub.cfg boots {image} without {argument}")
-        require(any(a.startswith("rootflags=") and "subvol=@" in a.split("=", 1)[1].split(",") for a in arguments),
-                f"grub.cfg boots {image} without rootflags=subvol=@")
-        for name in initrd:
-            require((boot / name.lstrip("/")).is_file(), f"grub.cfg loads {name}, which /boot does not have")
+    # The Mac boots Limine only: no GRUB configuration, image or retarget.
+    for name in ("boot/grub", "etc/default/update-grub"):
+        require(not (root / name).exists(), f"/{name} exists on an image without GRUB")
+    # The UKI's command line is derived from these defaults.
+    cmdline = re.findall(r'^KERNEL_CMDLINE\[default\]="([^"]*)"$', (root / "etc/default/limine").read_text(), re.M)
+    require(len(cmdline) == 1, "/etc/default/limine does not set one KERNEL_CMDLINE[default]")
+    arguments = cmdline[0].split()
+    for argument in (f"root=UUID={ROOT_UUID}", "rootfstype=btrfs"):
+        require(argument in arguments, f"the Limine command line lacks {argument}")
+    require(any(a.startswith("rootflags=") and "subvol=@" in a.split("=", 1)[1].split(",") for a in arguments),
+            "the Limine command line lacks rootflags=subvol=@")
     esp = boot / "efi"
-    # GRUB's own image is kept, unused, off the U-Boot slot: /etc/default/grub
-    # is where the kernel command line lives.
-    require((boot / "grub/grub-aa64.efi").is_file(), "/boot/grub/grub-aa64.efi is missing")
     for name in ("EFI/BOOT/BOOTAA64.EFI", "m1n1/boot.bin", "limine.conf", f"EFI/Linux/omarchy_{KERNEL}.efi"):
         require((esp / name).is_file() and (esp / name).stat().st_size > 0, f"the ESP has no {name}")
     require(not (esp / ".builder").exists(), "the ESP keeps the builder marker")

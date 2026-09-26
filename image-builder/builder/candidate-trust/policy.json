@@ -8,7 +8,7 @@
   "runtime_packages": ["omarchy", "omarchy-settings", "omarchy-mac", "omarchy-mac-boot"],
   "boot_packages": ["linux-aurora", "linux-aurora-headers", "m1n1-aurora", "uboot-asahi", "limine-mkinitcpio-hook"],
   "channel_runtime_packages": ["omarchy-mac-boot"],
-  "refused_packages": ["omarchy-apple-boot", "omarchy-first-boot", "linux-asahi", "m1n1"],
+  "refused_packages": ["omarchy-apple-boot", "omarchy-first-boot", "linux-asahi", "m1n1", "grub"],
   "minimum_versions": {
     "omarchy-mac-boot": "20260921-10",
     "limine-mkinitcpio-hook": "1.39.0-2"

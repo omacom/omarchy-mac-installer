@@ -180,5 +180,41 @@ class SubvolumeTest(unittest.TestCase):
                 check.check_subvolumes(listed)
 
 
+
+class BootTreeTest(unittest.TestCase):
+    """The installed /boot and ESP of a fresh image: Limine only, no GRUB."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root)
+        boot = self.root / "boot"
+        for name in (f"vmlinuz-{check.KERNEL}", f"initramfs-{check.KERNEL}.img", "efi/EFI/BOOT/BOOTAA64.EFI",
+                     "efi/m1n1/boot.bin", "efi/limine.conf", f"efi/EFI/Linux/omarchy_{check.KERNEL}.efi"):
+            (boot / name).parent.mkdir(parents=True, exist_ok=True)
+            (boot / name).write_bytes(b"x")
+        (boot / "efi/omarchy").mkdir()
+        (boot / "omarchy").mkdir()
+        (self.root / "etc/default").mkdir(parents=True)
+        (self.root / "etc/default/limine").write_text(
+            f'ESP_PATH="/boot/efi"\nKERNEL_CMDLINE[default]="root=UUID={check.ROOT_UUID} rw '
+            'rootflags=subvol=@,x-systemd.device-timeout=0 zswap.enabled=0 rootfstype=btrfs quiet splash"\n')
+
+    def test_limine_only(self):
+        check.check_boot(self.root)
+
+    def test_grub_leftovers_fail(self):
+        for name in ("boot/grub", "etc/default/update-grub"):
+            with self.subTest(name=name):
+                path = self.root / name
+                path.mkdir() if name == "boot/grub" else path.write_text('TARGET="/boot/grub/grub-aa64.efi"\n')
+                with self.assertRaisesRegex(check.CheckError, "without GRUB"):
+                    check.check_boot(self.root)
+                path.rmdir() if path.is_dir() else path.unlink()
+
+    def test_command_line_without_the_root_fails(self):
+        (self.root / "etc/default/limine").write_text('KERNEL_CMDLINE[default]="quiet splash"\n')
+        with self.assertRaisesRegex(check.CheckError, "lacks root=UUID="):
+            check.check_boot(self.root)
+
 if __name__ == "__main__":
     unittest.main()
