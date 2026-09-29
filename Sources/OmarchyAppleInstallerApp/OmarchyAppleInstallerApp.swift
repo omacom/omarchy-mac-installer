@@ -6,9 +6,10 @@ import SwiftUI
 @MainActor
 private final class InstallerApplicationDelegate: NSObject, NSApplicationDelegate {
   static var removalInProgress = false
+  static weak var session: InstallerSession?
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-    if Self.removalInProgress {
+    if Self.removalInProgress || Self.session?.isExecutionInProgress == true {
       NSSound.beep()
       return .terminateCancel
     }
@@ -70,6 +71,7 @@ struct OmarchyAppleInstallerApp: App {
   /// nothing planned against one channel is installed from the other.
   @State private var liveSession: InstallerSession?
   @State private var showsRemoval = false
+  @State private var removalInProgress = false
   @State private var removalNeedsReview = false
   @State private var simulationDark = true
   @State private var generation = UUID()
@@ -87,7 +89,7 @@ struct OmarchyAppleInstallerApp: App {
     #if DEBUG
       if isSimulation {
         SimulationDashboard(
-          onSessionAvailable: { liveSession = $0 }, onColorSchemeChange: { simulationDark = $0 })
+          onSessionAvailable: rememberSession, onColorSchemeChange: { simulationDark = $0 })
       } else {
         liveContent
       }
@@ -104,13 +106,18 @@ struct OmarchyAppleInstallerApp: App {
   private var liveContent: some View {
     OnePageInstallerView(
       environment: InstallerEnvironmentFactory.make(), channel: channel,
-      onSessionAvailable: { liveSession = $0 })
+      onSessionAvailable: rememberSession)
+  }
+
+  private func rememberSession(_ session: InstallerSession) {
+    liveSession = session
+    InstallerApplicationDelegate.session = session
   }
 
   @State private var channel = ReleaseChannelPreference().resolveFromMainBundle()
 
   var body: some Scene {
-    WindowGroup(PlainLanguage.windowTitle) {
+    Window(PlainLanguage.windowTitle, id: "installer") {
       Group {
         if removalNeedsReview {
           VStack {
@@ -139,14 +146,15 @@ struct OmarchyAppleInstallerApp: App {
         liveSession?.cancelPrefetchOnQuit()
       }
       .disabled(showsRemoval)
+      .windowDismissBehavior(
+        removalInProgress || liveSession?.isExecutionInProgress == true ? .disabled : .enabled
+      )
       .sheet(isPresented: $showsRemoval, onDismiss: { generation = UUID() }) {
         OmarchyRemovalSheet(
           isSimulation: isSimulation,
           onBusyChanged: { busy in
+            removalInProgress = busy
             InstallerApplicationDelegate.removalInProgress = busy
-            for window in NSApp.windows where window.sheetParent == nil {
-              window.standardWindowButton(.closeButton)?.isEnabled = !busy
-            }
           }, onClose: { showsRemoval = false }, onRequiresReview: { removalNeedsReview = true })
       }
       .preferredColorScheme(isSimulation ? (simulationDark ? .dark : .light) : nil)

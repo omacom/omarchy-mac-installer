@@ -477,12 +477,13 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     journal: @escaping @Sendable (Data) -> Void
   ) async throws -> CompletionDisplay {
     guard buildProfile.allowsEncryption || !encryptLinuxDisk else {
-      throw NSError(
-        domain: "OmarchyPrivateTest", code: 1,
-        userInfo: [
-          NSLocalizedDescriptionKey: "This private M3 test supports plain installation only."
-        ]
-      )
+      throw InstallerPreSubmissionFailure(
+        NSError(
+          domain: "OmarchyPrivateTest", code: 1,
+          userInfo: [
+            NSLocalizedDescriptionKey: "This private M3 test supports plain installation only."
+          ]
+        ))
     }
     let executionStarted = ProcessInfo.processInfo.systemUptime
     let (prepared, approval, configuration, host) = lock.withLock {
@@ -490,19 +491,22 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     }
 
     guard let prepared, let approval, let configuration, let host else {
-      throw InstallerAppError.approvalUnavailable
+      throw InstallerPreSubmissionFailure(InstallerAppError.approvalUnavailable)
     }
 
     // Re-inspection identity match: the Mac that is about to be written to
     // must still be the Mac the plan was bound to.
-    let currentHost = try AppleSiliconHostInspector().inspect()
-    guard
-      currentHost.identity.deviceIdentifier == host.identity.deviceIdentifier
-    else {
-      throw InstallerAppError.hostChanged
+    let handoffDirectory: URL
+    do {
+      let currentHost = try AppleSiliconHostInspector().inspect()
+      guard currentHost.identity.deviceIdentifier == host.identity.deviceIdentifier else {
+        throw InstallerAppError.hostChanged
+      }
+      handoffDirectory = try installerWorkspace().handoff
+    } catch {
+      throw InstallerPreSubmissionFailure(error)
     }
 
-    let workspace = try installerWorkspace()
     let coordinator = InstallerExecutionCoordinator()
     let progress: InstallerExecutionProgress
     do {
@@ -512,7 +516,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
           prepared,
           approval: approval,
           configuration: configuration,
-          handoffDirectory: workspace.handoff,
+          handoffDirectory: handoffDirectory,
           machineOwnerAuthorization: authorization,
           journalProgress: journal
         )
@@ -521,7 +525,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
           prepared,
           approval: approval,
           configuration: configuration,
-          handoffDirectory: workspace.handoff,
+          handoffDirectory: handoffDirectory,
           machineOwnerAuthorization: authorization,
           journalProgress: journal
         )

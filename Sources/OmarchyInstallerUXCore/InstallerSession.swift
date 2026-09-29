@@ -75,6 +75,10 @@
     }
 
     public var isSimulation: Bool { environment.isSimulation }
+    /// Covers helper credential verification, execution, and final app handoff.
+    /// Waiting for the payload never prevents closing or quitting the app.
+    /// Unlike hasExecutionStarted, it clears on terminal outcomes so shutdown works.
+    public private(set) var isExecutionInProgress = false
     public var canInspect: Bool { !isBusy && !isExecuting && !hasExecutionStarted }
     public var canChangeChannel: Bool {
       canInspect && !isEditingSize && credentialSheet.context == nil
@@ -519,13 +523,23 @@
       journal.reset()
       installStartedAt = Date()
       isExecuting = true
-      defer { isExecuting = false }
+      defer {
+        isExecuting = false
+        isExecutionInProgress = false
+      }
 
       do {
-        if prefetchState != .verified {
+        do {
+          // The environment is authoritative; a verified payload returns immediately.
           try await environment.waitUntilPayloadVerified()
           prefetchState = .verified
+        } catch {
+          throw InstallerPreSubmissionFailure(error)
         }
+        guard operationID == currentOperation else {
+          throw InstallerPreSubmissionFailure(PayloadPrefetchError.cancelled)
+        }
+        isExecutionInProgress = true
         let completion = try await environment.execute(
           operation: context.kind,
           authorization: authorization,
@@ -567,6 +581,17 @@
       plan: PlanDisplay?,
       helper: HelperDisplay
     ) {
+      if error is InstallerPreSubmissionFailure {
+        if context.kind == .install {
+          hasExecutionStarted = false
+          environment.discardApproval()
+          recoveryRetryAvailable = false
+        }
+        retrySheet = .hidden
+        phase = .failed(
+          PlainLanguage.failure(for: error, retryRecoveryAvailable: recoveryRetryAvailable))
+        return
+      }
       if let submission = error as? EngineXPCSubmissionError,
         submission == .machineOwnerCredentialsRejected
       {
@@ -685,6 +710,9 @@
     }
 
     public func cancelPrefetchOnQuit() {
+      if isExecuting && !isExecutionInProgress {
+        operationID = UUID()
+      }
       environment.cancelPayloadPrefetch()
       if prefetchState != .verified {
         prefetchState = .cancelled

@@ -281,6 +281,7 @@ public struct VerifiedArtifactStager: Sendable {
     in stagingDirectory: URL,
     progress: ArtifactStagingProgressHandler? = nil
   ) async throws -> StagedInstallerArtifact {
+    try Task.checkCancellation()
     let fileManager = FileManager.default
     try ensureSafeDirectory(stagingDirectory, fileManager: fileManager)
     let destination = stagingDirectory.appendingPathComponent(
@@ -291,6 +292,8 @@ public struct VerifiedArtifactStager: Sendable {
     if fileManager.fileExists(atPath: destination.path) {
       do {
         try verify(artifact, at: destination)
+      } catch is CancellationError {
+        throw CancellationError()
       } catch {
         throw ArtifactStageError.destinationConflict(artifact.fileName)
       }
@@ -320,6 +323,7 @@ public struct VerifiedArtifactStager: Sendable {
       try fileManager.copyItem(at: source, to: pending)
       try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: pending.path)
       try verify(artifact, at: pending)
+      try Task.checkCancellation()
       try fileManager.moveItem(at: pending, to: destination)
       report(
         progress, artifact: artifact, phase: .verified, bytesCompleted: artifact.expectedSizeBytes)
@@ -373,6 +377,7 @@ public struct VerifiedArtifactStager: Sendable {
     destination: URL,
     progress: ArtifactStagingProgressHandler?
   ) async throws -> StagedInstallerArtifact {
+    try Task.checkCancellation()
     let fileManager = FileManager.default
     var partFileURLs = [URL]()
     var completedBytes: UInt64 = 0
@@ -424,6 +429,7 @@ public struct VerifiedArtifactStager: Sendable {
       expectedSizeBytes: artifact.expectedSizeBytes
     )
 
+    try Task.checkCancellation()
     do {
       try fileManager.moveItem(at: pending, to: destination)
     } catch {
@@ -432,6 +438,8 @@ public struct VerifiedArtifactStager: Sendable {
       }
       do {
         try verify(artifact, at: destination)
+      } catch is CancellationError {
+        throw CancellationError()
       } catch {
         throw ArtifactStageError.destinationConflict(artifact.fileName)
       }
@@ -479,6 +487,8 @@ public struct VerifiedArtifactStager: Sendable {
           expectedSizeBytes: expectedSizeBytes,
           at: destination
         )
+      } catch is CancellationError {
+        throw CancellationError()
       } catch {
         throw ArtifactStageError.destinationConflict(fileName)
       }
@@ -498,6 +508,7 @@ public struct VerifiedArtifactStager: Sendable {
     )
     defer { try? fileManager.removeItem(at: pending) }
 
+    try Task.checkCancellation()
     let materialization = try promoter.promote(
       source: downloaded,
       pending: pending
@@ -509,6 +520,7 @@ public struct VerifiedArtifactStager: Sendable {
       at: pending
     )
 
+    try Task.checkCancellation()
     do {
       try fileManager.moveItem(at: pending, to: destination)
     } catch {
@@ -522,6 +534,8 @@ public struct VerifiedArtifactStager: Sendable {
           expectedSizeBytes: expectedSizeBytes,
           at: destination
         )
+      } catch is CancellationError {
+        throw CancellationError()
       } catch {
         throw ArtifactStageError.destinationConflict(fileName)
       }
@@ -536,6 +550,7 @@ public struct VerifiedArtifactStager: Sendable {
     expectedDigest: String,
     expectedSizeBytes: UInt64
   ) throws {
+    try Task.checkCancellation()
     let fileManager = FileManager.default
     guard
       fileManager.createFile(
@@ -558,6 +573,7 @@ public struct VerifiedArtifactStager: Sendable {
         while let chunk = try reader.read(upToCount: Self.chunkBytes),
           !chunk.isEmpty
         {
+          try Task.checkCancellation()
           try writer.write(contentsOf: chunk)
           hasher.update(data: chunk)
           let total = size.addingReportingOverflow(UInt64(chunk.count))
@@ -732,6 +748,7 @@ public struct VerifiedArtifactStager: Sendable {
   private func digestAndSize(
     of fileURL: URL
   ) throws -> (digest: String, size: UInt64) {
+    try Task.checkCancellation()
     let handle = try FileHandle(forReadingFrom: fileURL)
     defer { try? handle.close() }
     var hasher = SHA256()
@@ -740,6 +757,7 @@ public struct VerifiedArtifactStager: Sendable {
     while let chunk = try handle.read(upToCount: Self.chunkBytes),
       !chunk.isEmpty
     {
+      try Task.checkCancellation()
       let addition = UInt64(chunk.count)
       guard !size.addingReportingOverflow(addition).overflow else {
         throw ArtifactStageError.invalidExpectedSize

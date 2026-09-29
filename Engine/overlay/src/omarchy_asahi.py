@@ -75,6 +75,9 @@ class AsahiInPlaceRepairAdapter:
             names = payload.namelist()
             if len(names) != len(set(names)):
                 raise AsahiAdapterError("ambiguous repair payload")
+            replacements = []
+            # Validate the entire member table before opening any disk for write.
+            # A missing later image must not leave earlier partitions replaced.
             for role in ("stub", "efi", "boot", "root"):
                 expected = self.manifest["replacement_content"][role]
                 member = expected["payload_member"]
@@ -97,6 +100,15 @@ class AsahiInPlaceRepairAdapter:
                 info = payload.getinfo(member)
                 if info.file_size != expected["size_bytes"]:
                     raise AsahiAdapterError("repair payload size changed")
+                try:
+                    # Check local headers, encryption and decoder availability
+                    # without decompressing multi-gigabyte images twice.
+                    with payload.open(info):
+                        pass
+                except (RuntimeError, NotImplementedError, zipfile.BadZipFile) as error:
+                    raise AsahiAdapterError("unsupported repair payload member") from error
+                replacements.append((role, expected, info))
+            for role, expected, info in replacements:
                 identifier = self._partition_identifier(role)
                 digest = hashlib.sha256()
                 written = 0
@@ -453,6 +465,12 @@ class AsahiStage1Adapter:
                 name=plan.source_identifier,
                 free=False,
             )
+            if (
+                source.offset + source.size != plan.offset_bytes + plan.length_bytes
+                or source.offset >= plan.offset_bytes
+                or source.type != "Apple_APFS"
+            ):
+                raise AsahiAdapterError("approved source partition changed")
             new_size = source.size - plan.length_bytes
             if new_size < plan.minimum_container_bytes:
                 raise AsahiAdapterError(
@@ -502,13 +520,8 @@ class AsahiStage1Adapter:
             )
         return self._installed_evidence(plan)
 
-    def validate_installed_checkpoint(
-        self,
-        plan,
-        target_evidence,
-        installed_evidence,
-    ):
-        """Re-read the exact completed stage-one state without mutation."""
+    def validate_prepared_checkpoint(self, plan, target_evidence):
+        """Reconcile the recorded APFS identity before resuming any mutation."""
         self._require_preflight()
         target = self._parse_checkpoint_evidence(
             target_evidence,
@@ -520,6 +533,36 @@ class AsahiStage1Adapter:
                 "uuid",
             },
         )
+        if target["plan_digest"] != plan.plan_digest:
+            raise AsahiAdapterError("installed checkpoint plan changed")
+        self._refresh_parts()
+        try:
+            prepared = self._find_prepared_target(plan)
+        except AsahiAdapterError as error:
+            raise AsahiAdapterError(
+                "prepared resume target does not match checkpoint"
+            ) from error
+        # Bind the adapter only after every recorded identity field matches.
+        actual = {
+            "plan_digest": plan.plan_digest,
+            "partition_identifier": prepared.name,
+            "offset_bytes": prepared.offset,
+            "size_bytes": prepared.size,
+            "uuid": prepared.uuid,
+        }
+        if actual != target:
+            raise AsahiAdapterError("prepared resume target does not match checkpoint")
+        self.target_part = prepared
+        self.installer.part = prepared
+
+    def validate_installed_checkpoint(
+        self,
+        plan,
+        target_evidence,
+        installed_evidence,
+    ):
+        """Re-read the exact completed stage-one state without mutation."""
+        self.validate_prepared_checkpoint(plan, target_evidence)
         installed = self._parse_checkpoint_evidence(
             installed_evidence,
             {
@@ -531,17 +574,8 @@ class AsahiStage1Adapter:
                 "populated_partitions",
             },
         )
-        if (
-            target["plan_digest"] != plan.plan_digest
-            or installed["plan_digest"] != plan.plan_digest
-        ):
+        if installed["plan_digest"] != plan.plan_digest:
             raise AsahiAdapterError("installed checkpoint plan changed")
-
-        self._refresh_parts()
-        self.target_part = self._find_prepared_target(plan)
-        self.installer.part = self.target_part
-        if self._target_evidence(plan) != target_evidence:
-            raise AsahiAdapterError("prepared target identity changed")
 
         recorded = installed["populated_partitions"]
         if (

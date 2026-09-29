@@ -8,7 +8,7 @@
     case noMacRelease, modelNotOnChannel, channelUnreachable
     case allocationClamped, allocationAligned, approvalChanged, credentialsRejected, connectionLost
     case emptyReply, helperFailure, degradedProgress, recoveryRetry, manualRecovery
-    case shutdownFailure, completed, installationMedia, spaceChanged
+    case shutdownFailure, completed, installationMedia, spaceChanged, preparedResumeMismatch
 
     public var id: String { rawValue }
     public var title: String {
@@ -40,6 +40,7 @@
       case .completed: "Installation complete → first-boot check"
       case .installationMedia: "Installation media required"
       case .spaceChanged: "Space shrinks before install · engine refuses plan"
+      case .preparedResumeMismatch: "Prepared resume target changed"
       }
     }
 
@@ -51,6 +52,8 @@
         "Approve the plan. Install must remain unavailable. Use Edit disk size to return to review."
       case .credentialsRejected:
         "Submit the test account. The first attempt is rejected; the next succeeds."
+      case .preparedResumeMismatch:
+        "The saved APFS target no longer matches. Confirm the failure explains prior preparation, preserves Last verified activity, and offers no fresh installation or blind retry."
       case .connectionLost, .emptyReply, .helperFailure:
         "Check the last verified activity. Starting another installation must remain unavailable."
       case .recoveryRetry:
@@ -249,6 +252,14 @@
       for (index, line) in Self.journalLines.enumerated() {
         try await tick()
         journal(scenario == .degradedProgress && index == 5 ? Data("broken\n".utf8) : line)
+        if index == 4 && scenario == .preparedResumeMismatch {
+          throw EngineXPCSubmissionError.engineFailed(
+            EngineFailureNotice(
+              reason: .preparedResumeMismatch, exitStatus: 1, diskUnchanged: false,
+              summary:
+                "prepared resume target does not match checkpoint")
+          )
+        }
         if index == 5 {
           if scenario == .connectionLost { throw EngineXPCSubmissionError.connectionFailed }
           if scenario == .helperFailure {
