@@ -58,6 +58,94 @@ os_name="${system_dir##*/}"
 BOLD="$(printf '\\033[1m')"
 RST="$(printf '\\033[m')"
 
+LOGS="/tmp/bp.txt /tmp/bless.log /tmp/bputil.log /tmp/bputil.status
+/tmp/kmutil.log /tmp/kmutil.status /tmp/kmutil.pid /tmp/kmutil.done"
+spinner_pid=""
+
+# Stop the process whose ID is in file $1, and wait until it is gone.
+stop_pid_in() {
+    [ -s "$1" ] || return 0
+    pid="$(cat "$1")"
+    kill "$pid" 2>/dev/null || return 0
+    waited=0
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$waited" -eq 20 ]; then
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+}
+
+# On any exit: stop what this script started, restore the terminal, and
+# forget the password and the logs.
+cleanup() {
+    if [ -n "$spinner_pid" ]; then
+        kill "$spinner_pid" 2>/dev/null || true
+        spinner_pid=""
+    fi
+    stop_pid_in /tmp/kmutil.pid
+    stty echo 2>/dev/null || true
+    PASSWORD=""
+    rm -f $LOGS
+}
+trap cleanup EXIT
+# bputil and kmutil run in the foreground, so Ctrl-C reaches them too.
+trap 'echo; echo "Stopped. Run this again to finish setting up $os_name."; exit 130' INT TERM HUP
+
+# Spin after the current line until file $1 exists. After $2 seconds, stop
+# the process whose ID is in file $3, if one is given. Runs in the background.
+spin_until() {
+    spun=0
+    printf ' '
+    while [ ! -e "$1" ]; do
+        if [ "$spun" -eq $(($2 * 4)) ] && [ -n "$3" ]; then
+            stop_pid_in "$3"
+        fi
+        case $((spun % 4)) in
+            0) c='|' ;;
+            1) c='/' ;;
+            2) c='-' ;;
+            *) c='\\' ;;
+        esac
+        printf '\\b%s' "$c"
+        sleep 0.25
+        spun=$((spun + 1))
+    done
+    printf '\\b '
+}
+
+# Run the rest of the line with a spinner after the current line, which the
+# caller ends. Its exit status lands in file $1; after $2 seconds the process
+# in file $3 is stopped.
+run_with_spinner() {
+    status_file=$1
+    deadline=$2
+    pid_file=$3
+    shift 3
+    rm -f "$status_file"
+    spin_until "$status_file" "$deadline" "$pid_file" &
+    spinner_pid=$!
+    status=0
+    "$@" || status=$?
+    echo "$status" >"$status_file"
+    wait "$spinner_pid" 2>/dev/null || true
+    spinner_pid=""
+    return "$status"
+}
+
+bputil_now() {
+    bputil -nc -v "$VGID" -u "$OWNER" -p "$PASSWORD" >/tmp/bputil.log 2>&1
+}
+
+read_password() {
+    printf "Password for %s: " "$OWNER"
+    stty -echo
+    IFS= read -r PASSWORD
+    stty echo
+    echo
+}
+
 printf '\\033[2J\\033[H'
 echo "${BOLD}##TITLE##${RST}"
 echo
@@ -69,35 +157,51 @@ if [ -z "$OWNER" ]; then
     read -r OWNER
 fi
 
+# Whether the startup disk is this Omarchy: bless names a volume of its group.
+omarchy_is_startup() {
+    boot="$(bless --getBoot 2>/dev/null)" || return 1
+    [ -n "$boot" ] || return 1
+    diskutil info "$boot" 2>/dev/null | grep -q "$VGID" && return 0
+    [ "$boot" = "$(diskutil info "$system_dir" 2>/dev/null | sed -n 's/^ *Device Node: *//p')" ]
+}
+
 if ! grep -q ': Paired' /tmp/bp.txt; then
-    echo "This step needs $os_name's own Recovery. Making $os_name the startup"
-    echo "disk so that the next start opens it."
-    echo
-    # bless takes the known owner and the password on stdin, so it asks for
-    # neither itself. After three failures, let bless ask on its own.
-    tries=0
-    while :; do
-        printf "Password for %s: " "$OWNER"
-        stty -echo
-        read -r PASSWORD
-        stty echo
+    if omarchy_is_startup; then
+        echo "This step needs $os_name's own Recovery. $os_name is already the"
+        echo "startup disk, so the next start opens it."
+    else
+        echo "This step needs $os_name's own Recovery. Making $os_name the startup"
+        echo "disk so that the next start opens it."
+        # After the Recovery login, recoveryOS's bless has set the startup disk
+        # without checking the password (macOS 26.6.2), so try that first.
+        printf '\\n' | bless --setBoot --mount "$system_dir" --user "$OWNER" --stdinpass >/tmp/bless.log 2>&1 || true
+    fi
+    if ! omarchy_is_startup; then
         echo
-        if printf '%s\\n' "$PASSWORD" | bless --setBoot --mount "$system_dir" --user "$OWNER" --stdinpass >/tmp/bless.log 2>&1; then
-            break
-        fi
-        tries=$((tries + 1))
-        if [ "$tries" -ge 3 ]; then
-            echo "macOS asks itself now. Type your user name and password."
-            while ! bless --setBoot --mount "$system_dir"; do
-                echo "That didn't work. Press Enter to try again."
-                read
-            done
-            break
-        fi
-        echo "That password didn't work for $OWNER. Try again."
-        echo
-    done
-    PASSWORD=""
+        # bless takes the known owner and the password on stdin. It exits 0
+        # even when it rejects the password, so check the startup disk instead.
+        # After three failures, let bless ask on its own.
+        tries=0
+        while :; do
+            read_password
+            printf '%s\\n' "$PASSWORD" | bless --setBoot --mount "$system_dir" --user "$OWNER" --stdinpass >/tmp/bless.log 2>&1 || true
+            if omarchy_is_startup; then
+                break
+            fi
+            tries=$((tries + 1))
+            if [ "$tries" -ge 3 ]; then
+                echo "macOS asks itself now. Type your user name and password."
+                until bless --setBoot --mount "$system_dir" && omarchy_is_startup; do
+                    echo "That didn't work. Press Enter to try again."
+                    read
+                done
+                break
+            fi
+            echo "That password didn't work for $OWNER. Try again."
+            echo
+        done
+        PASSWORD=""
+    fi
     echo
     echo "Press Enter to shut down. Then hold the power button until you see"
     echo "'Loading startup options', choose $os_name, and log in."
@@ -119,51 +223,39 @@ fi
 echo "This lets $os_name start Linux by lowering the security level of"
 echo "$os_name only. ${BOLD}macOS keeps Full Security.${RST}"
 echo
-
-# Spin after the current line until the file $1 exists, at most $2 seconds.
-spin_until() {
-    spun=0
-    printf ' '
-    while [ ! -e "$1" ] && [ "$spun" -lt $(($2 * 4)) ]; do
-        case $((spun % 4)) in
-            0) c='|' ;;
-            1) c='/' ;;
-            2) c='-' ;;
-            *) c='\\' ;;
-        esac
-        printf '\\b%s' "$c"
-        sleep 0.25
-        spun=$((spun + 1))
-    done
-    printf '\\b \\n'
-}
+# Ask before anything changes: bputil lowers the security level at once.
+printf "Are you sure you want to do this? (y or n) "
+read -r answer
+case "$answer" in
+    y|Y|yes|Yes|YES) ;;
+    *)
+        echo "Nothing was changed. Run this again when you're ready."
+        exit 1
+        ;;
+esac
+echo
 
 tries=0
 while :; do
-    printf "Password for %s: " "$OWNER"
-    stty -echo
-    read -r PASSWORD
-    stty echo
-    echo
+    read_password
     printf "Updating %s's security settings..." "$os_name"
-    rm -f /tmp/bputil.status
-    {
-        # set -e would end this block before it records a failure.
-        status=0
-        bputil -nc -v "$VGID" -u "$OWNER" -p "$PASSWORD" >/tmp/bputil.log 2>&1 || status=$?
-        echo "$status" >/tmp/bputil.status.new
-        mv /tmp/bputil.status.new /tmp/bputil.status
-    } &
-    spin_until /tmp/bputil.status 600
-    if [ "$(cat /tmp/bputil.status 2>/dev/null)" = 0 ]; then
+    if run_with_spinner /tmp/bputil.status 0 "" bputil_now; then
+        echo
         break
     fi
-    # bputil's log opens with its own disclaimer, so don't show it here.
+    # Nothing was updated: replace that line. bputil's log opens with its own
+    # disclaimer, so don't show it here.
+    printf '\\r\\033[K'
     tries=$((tries + 1))
-    echo "That password didn't work for $OWNER. Try again."
     if [ "$tries" -ge 3 ]; then
-        echo "If the password is right, /tmp/bputil.log says what went wrong."
+        echo "macOS asks itself now. Type your user name and password."
+        while ! bputil -nc -v "$VGID"; do
+            echo "That didn't work. Press Enter to try again."
+            read
+        done
+        break
     fi
+    echo "That password didn't work for $OWNER. Try again."
     echo
 done
 
@@ -175,65 +267,55 @@ if [ -e "/System/Volumes/iSCPreboot/$VGID/boot" ]; then
     cp -R "$preboot/$VGID/var" "/System/Volumes/iSCPreboot/$VGID/"
 fi
 
-echo
-printf "Are you sure you want to do this? (y or n) "
-read -r answer
-case "$answer" in
-    y|Y|yes|Yes|YES) ;;
-    *)
-        echo "Omarchy's boot loader was not installed. Run this again when you're ready."
-        exit 1
-        ;;
-esac
-echo
 printf "Installing Omarchy's boot loader..."
 # kmutil asks "are you sure" on stdin, then reads a user name and password
 # from its terminal, discarding anything typed ahead. So run it on a hidden
 # terminal (script) and type each answer once its prompt appears. The
-# password is typed with echo off, so the log never holds it. If kmutil
-# fails or asks again, stop it after a minute and let the owner answer it.
-# Nothing waits on the background jobs: kmutil's status lands in a file.
-# (A background job's input is /dev/null unless redirected, hence <&0.)
+# password is typed with echo off, so the log never holds it. A small
+# wrapper records kmutil's own process ID, so that if kmutil fails or is
+# still running after a minute, it is stopped and the owner answers it.
 kmutil_log=/tmp/kmutil.log
 kmutil_status=/tmp/kmutil.status
 kmutil_wait_for() {
     tries=0
     while ! grep -q "$1" "$kmutil_log" 2>/dev/null; do
-        [ ! -e "$kmutil_status" ] && [ "$tries" -lt 600 ] || return 1
+        [ ! -e /tmp/kmutil.done ] && [ "$tries" -lt 600 ] || return 1
         sleep 0.1
         tries=$((tries + 1))
     done
 }
+kmutil_answers() {
+    kmutil_wait_for 'enter y or n' && printf 'y\\n' &&
+        kmutil_wait_for 'Username:' && printf '%s\\n' "$OWNER" &&
+        kmutil_wait_for 'Password:' && printf '%s\\n' "$PASSWORD"
+    # Keep kmutil's input open until it exits.
+    while [ ! -e /tmp/kmutil.done ]; do
+        sleep 0.1
+    done
+}
+hidden_kmutil() {
+    rm -f /tmp/kmutil.done
+    kmutil_answers 2>/dev/null | {
+        status=0
+        script -q -t 0 "$kmutil_log" \\
+            /bin/sh -c 'echo $$ >/tmp/kmutil.pid; exec kmutil configure-boot -c boot.bin --raw --entry-point 2048 --lowest-virtual-address 0 -v "$1"' \\
+            sh "$system_dir" >/dev/null 2>&1 || status=$?
+        # kmutil has exited: never signal its process ID again.
+        rm -f /tmp/kmutil.pid
+        touch /tmp/kmutil.done
+        exit "$status"
+    }
+}
 kmutil_ok=no
 if command -v script >/dev/null 2>&1; then
-    rm -f "$kmutil_log" "$kmutil_status" /tmp/kmutil.pid
-    {
-        kmutil_wait_for 'enter y or n' && printf 'y\\n' &&
-            kmutil_wait_for 'Username:' && printf '%s\\n' "$OWNER" &&
-            kmutil_wait_for 'Password:' && printf '%s\\n' "$PASSWORD"
-        # Keep kmutil's input open until it exits.
-        tries=0
-        while [ ! -e "$kmutil_status" ] && [ "$tries" -lt 700 ]; do
-            sleep 0.1
-            tries=$((tries + 1))
-        done
-    } 2>/dev/null | {
-        script -q -t 0 "$kmutil_log" kmutil configure-boot -c boot.bin --raw --entry-point 2048 --lowest-virtual-address 0 -v "$system_dir" <&0 >/dev/null 2>&1 &
-        echo $! >/tmp/kmutil.pid
-        status=0
-        wait $! || status=$?
-        echo "$status" >"$kmutil_status.new"
-        mv "$kmutil_status.new" "$kmutil_status"
-    } &
-    spin_until "$kmutil_status" 60
-    if [ -e "$kmutil_status" ]; then
-        [ "$(cat "$kmutil_status")" = 0 ] && kmutil_ok=yes
-    else
-        kill "$(cat /tmp/kmutil.pid)" 2>/dev/null || true
-        sleep 1
-        kill -9 "$(cat /tmp/kmutil.pid)" 2>/dev/null || true
+    rm -f "$kmutil_log" /tmp/kmutil.pid
+    if run_with_spinner "$kmutil_status" 60 /tmp/kmutil.pid hidden_kmutil; then
+        kmutil_ok=yes
     fi
+    echo
+    stop_pid_in /tmp/kmutil.pid
 fi
+PASSWORD=""
 if [ "$kmutil_ok" != yes ]; then
     echo
     echo "macOS asks once more. Type y, then your user name and password."
@@ -242,7 +324,6 @@ if [ "$kmutil_ok" != yes ]; then
         read
     done
 fi
-PASSWORD=""
 
 mount -u -w "$system_dir"
 if [ -e "$system_dir/.IAPhysicalMedia" ]; then
@@ -251,6 +332,7 @@ fi
 if [ -e "$system_dir/System/Library/CoreServices/SystemVersion-disabled.plist" ]; then
     mv -f "$system_dir/System/Library/CoreServices/SystemVersion"{-disabled,}".plist"
 fi
+cleanup
 
 echo
 echo "${BOLD}Done.${RST} Press Enter to restart into $os_name."

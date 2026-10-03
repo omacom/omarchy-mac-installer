@@ -70,12 +70,22 @@ class EngineRuntimeTests(unittest.TestCase):
                 }
             )
 
+    def test_a_released_app_without_the_installer_name_still_runs(self):
+        # Apps released before OMARCHY_INSTALLER_NAME must keep working with
+        # a newer engine; the Recovery setup then takes its title from DISTRO.
+        for mode in ("install", "retry-recovery-authorization"):
+            environment = self._install_environment()
+            environment["OMARCHY_ENGINE_MODE"] = mode
+            del environment["OMARCHY_INSTALLER_NAME"]
+            with self.subTest(mode=mode):
+                runtime = EngineRuntime.from_environment(environment)
+                self.assertEqual(runtime.mode, mode)
+
     def test_install_requires_owner_and_recovery_branding(self):
         for key in (
             "OMARCHY_MACHINE_OWNER",
             "DISTRO",
             "DISTRO_DOCS",
-            "OMARCHY_INSTALLER_NAME",
         ):
             environment = self._install_environment()
             del environment[key]

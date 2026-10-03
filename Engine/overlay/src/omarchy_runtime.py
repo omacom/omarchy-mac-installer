@@ -27,6 +27,14 @@ ENVIRONMENT_KEYS = {
     "OMARCHY_INSTALLER_NAME",
 }
 
+# Released apps predate OMARCHY_INSTALLER_NAME; without it the Recovery
+# setup is titled from DISTRO.
+OPTIONAL_INSTALL_KEYS = {
+    "OMARCHY_ENGINE_MODE",
+    "OMARCHY_ENGINE_REPAIR_MANIFEST",
+    "OMARCHY_INSTALLER_NAME",
+}
+
 
 class EngineRuntimeError(omarchy_contract.ContractError):
     pass
@@ -71,16 +79,8 @@ class EngineRuntime:
                 "OMARCHY_ENGINE_REQUEST",
                 "OMARCHY_ENGINE_IDENTITY",
             },
-            "install": ENVIRONMENT_KEYS
-            - {
-                "OMARCHY_ENGINE_MODE",
-                "OMARCHY_ENGINE_REPAIR_MANIFEST",
-            },
-            "retry-recovery-authorization": ENVIRONMENT_KEYS
-            - {
-                "OMARCHY_ENGINE_MODE",
-                "OMARCHY_ENGINE_REPAIR_MANIFEST",
-            },
+            "install": ENVIRONMENT_KEYS - OPTIONAL_INSTALL_KEYS,
+            "retry-recovery-authorization": ENVIRONMENT_KEYS - OPTIONAL_INSTALL_KEYS,
         }[mode]
         missing = sorted(required - set(values))
         if missing:

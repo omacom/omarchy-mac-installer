@@ -796,11 +796,18 @@ class FakeInstaller:
         self.check_cur_os_calls += 1
 
 
-# A kmutil that prints each prompt before reading its answer.
-PROMPTING_KMUTIL = """printf 'Are you sure you want to do this? (enter y or n) '; read a
-echo 'updating local machine policy...'; printf 'Username: '; read u; printf 'Password: '; read p
-printf '%s %s %s' "$a" "$u" "$p" >"$PIPED"
-[ "$a $u $p" = "y scott secret" ]"""
+# A kmutil that prints each prompt before reading its answer, and echoes what
+# a terminal would show: the confirmation and the user name, but never the
+# password, which a real terminal reads with echo off.
+PROMPTING_KMUTIL = """printf 'Are you sure you want to do this? (enter y or n) '; IFS= read -r a; echo "$a"
+echo 'updating local machine policy...'; printf 'Username: '; IFS= read -r u; echo "$u"
+printf 'Password: '; IFS= read -r p; echo
+printf '%s|%s|%s' "$a" "$u" "$p" >"$PIPED"
+[ "$a|$u|$p" = "y|scott|$EXPECTED_PASSWORD" ]"""
+
+# Files step2.sh may leave in /tmp while it runs; none may outlive it.
+STEP2_LOGS = ("bp.txt", "bless.log", "bputil.log", "bputil.status", "kmutil.log",
+              "kmutil.status", "kmutil.pid", "kmutil.done")
 
 
 class Step2ScriptTests(unittest.TestCase):
@@ -845,23 +852,24 @@ class Step2ScriptTests(unittest.TestCase):
         self.assertIn('VGID="VG-1"', text)
         self.assertIn('PREBOOT="PB-1"', text)
         self.assertIn('OWNER="scott"', text)
-        # One prompt on each path: the not-paired path shuts down after its own.
-        self.assertEqual(text.count("read -r PASSWORD"), 2)
+        # One prompt, kept whole: leading and trailing spaces are part of it.
+        self.assertEqual(text.count("read -r PASSWORD"), 1)
+        self.assertIn("IFS= read -r PASSWORD", text)
         self.assertIn('bputil -nc -v "$VGID" -u "$OWNER" -p "$PASSWORD"', text)
-        # kmutil runs on a hidden terminal and gets each answer at its prompt.
-        self.assertIn('script -q -t 0 "$kmutil_log" kmutil configure-boot -c boot.bin --raw --entry-point 2048', text)
-        self.assertIn("kmutil_wait_for 'Password:' && printf '%s\\n' \"$PASSWORD\"", text)
+        # kmutil runs on a hidden terminal, recording its own process ID.
+        self.assertIn('script -q -t 0 "$kmutil_log"', text)
+        self.assertIn("echo $$ >/tmp/kmutil.pid; exec kmutil configure-boot -c boot.bin --raw --entry-point 2048", text)
+        self.assertIn('run_with_spinner "$kmutil_status" 60 /tmp/kmutil.pid hidden_kmutil', text)
         self.assertEqual(text.count("Are you sure you want to do this? (y or n)"), 1)
-        # A healthy run takes under a minute; a stalled one is stopped then.
-        self.assertIn('spin_until "$kmutil_status" 60', text)
         # The recoveryOS checks stay.
         self.assertIn("': Paired'", text)
         self.assertIn("'one true recoveryOS'", text)
         result = subprocess.run(["bash", "-n", str(step2)])
         self.assertEqual(result.returncode, 0)
 
-    def run_step2(self, kmutil_body, answer="y", bputil_fails_once=False, paired=True, stdin=None):
-        """Run step2.sh in place against fake recoveryOS tools."""
+    def step2_with_fakes(self, kmutil_body, paired=True, bputil_mode="ok", password="secret",
+                         startup="macos", bless_checks=True):
+        """step2.sh in place, with fake recoveryOS tools first on PATH."""
         step2 = self.make("scott")
         root = Path(step2).parent
         resources = root / "Omarchy" / "Finish Installation.app" / "Contents" / "Resources"
@@ -871,72 +879,217 @@ class Step2ScriptTests(unittest.TestCase):
         script.chmod(0o755)
         bin_dir = root / "bin"
         bin_dir.mkdir()
+        sleep = shutil.which("sleep")
         fakes = {
-            "bputil": f"[ \"$1\" = -d ] && echo 'OS Pairing Status: {'Paired' if paired else 'Not Paired'}'"
-                       " && echo 'OS Type: one true recoveryOS' && exit 0\n"
-                       "echo 'It should only be used to understand how the security works.'\necho 'Use at your own risk!'\n"
-                       + ('[ -e \"$CALLS.bp\" ] && exit 0; touch \"$CALLS.bp\"; exit 1' if bputil_fails_once else "exit 0"),
+            "bputil": "\n".join((
+                f"[ \"$1\" = -d ] && echo 'OS Pairing Status: {'Paired' if paired else 'Not Paired'}'"
+                " && echo 'OS Type: one true recoveryOS' && exit 0",
+                'echo "$*" >>"$CALLS.bputil"',
+                # Without -u, bputil asks the owner itself: the fallback.
+                '[ "$4" = -u ] || exit 0',
+                "echo 'It should only be used to understand how the security works.'",
+                "echo 'Use at your own risk!'",
+                '[ "$7" = "$EXPECTED_PASSWORD" ] || exit 1',
+                f'[ "$BPUTIL_MODE" = hang ] && echo $$ >"$CALLS.bputil-pid" && exec {sleep} 30',
+                '[ "$BPUTIL_MODE" = fail ] && exit 1',
+                "exit 0",
+            )),
             "stty": "exit 0",
             "mount": "exit 0",
             "reboot": "exit 0",
-            # script -q -t 0 log command...: the command's output goes to the log.
-            "script": 'log=$4; shift 4; exec "$@" >"$log" 2>&1',
-            # Every sleep lasts 50 ms, so the one-minute deadline is twelve seconds.
-            "sleep": f"exec {shutil.which('sleep')} 0.05",
-            "bless": 'echo "$*" >"$CALLS.bless"; cat >>"$CALLS.bless"',
             "shutdown": "exit 0",
+            # script -q -t 0 log command...: the command's output goes to the
+            # log, which is kept for the test because step2.sh deletes it.
+            "script": 'log=$4; shift 4; "$@" >"$log" 2>&1; s=$?; cp "$log" "$CALLS.kmutil-log"; exit $s',
+            # Every sleep lasts 50 ms, so the one-minute deadline is twelve seconds.
+            "sleep": f"exec {sleep} 0.05",
+            # Like macOS's bless, it exits 0 whatever the password, and only
+            # a right one changes the startup disk.
+            "bless": "\n".join((
+                '[ "$1" = --getBoot ] && { cat "$CALLS.boot"; exit 0; }',
+                'echo "$*" >>"$CALLS.bless"',
+                'case "$*" in',
+                '*--stdinpass) IFS= read -r pw; echo "$pw" >>"$CALLS.bless"',
+                '    { [ "$BLESS_CHECKS" = no ] || [ "$pw" = "$EXPECTED_PASSWORD" ]; } &&'
+                '    echo /dev/omarchy >"$CALLS.boot" ;;',
+                # Without --stdinpass, bless asks the owner itself.
+                '*) echo /dev/omarchy >"$CALLS.boot" ;;',
+                'esac',
+                "exit 0",
+            )),
+            "diskutil": "\n".join((
+                '[ "$1" = info ] || exit 0',
+                'case "$2" in',
+                "/dev/omarchy|*/Omarchy) printf '   Device Node:  /dev/omarchy\\n   APFS Volume Group:  VG-1\\n' ;;",
+                "*) printf '   Device Node:  /dev/disk0s2\\n   APFS Volume Group:  MACOS-VG\\n' ;;",
+                'esac',
+            )),
             "kmutil": 'n=$(($(cat "$CALLS" 2>/dev/null || echo 0) + 1)); echo "$n" >"$CALLS"\n' + kmutil_body,
         }
         for name, body in fakes.items():
             (bin_dir / name).write_text("#!/bin/sh\n" + body + "\n")
             (bin_dir / name).chmod(0o755)
         calls = root / "kmutil-calls"
+        Path(f"{calls}.boot").write_text("/dev/omarchy\n" if startup == "omarchy" else "/dev/disk0s2\n")
         env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CALLS=str(calls),
-                   PIPED=str(root / "piped"))
-        result = subprocess.run(["/bin/sh", str(script)], input=stdin or ("wrong\n" if bputil_fails_once else "") + f"secret\n{answer}\n\n", env=env,
-                                capture_output=True, text=True, timeout=60)
-        if answer != "y" or not paired:
-            return result, calls, root
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        return result.stdout, int(calls.read_text()), root
+                   PIPED=str(root / "piped"), EXPECTED_PASSWORD=password, BPUTIL_MODE=bputil_mode,
+                   BLESS_CHECKS="yes" if bless_checks else "no")
+        return script, env, calls
 
-    def test_the_owner_can_decline(self):
-        result, calls, _ = self.run_step2("exit 0", answer="n")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("boot loader was not installed", result.stdout)
-        self.assertFalse(calls.exists())
+    def run_step2(self, kmutil_body, stdin="y\nsecret\n\n", **options):
+        script, env, calls = self.step2_with_fakes(kmutil_body, **options)
+        result = subprocess.run(["/bin/sh", str(script)], input=stdin, env=env,
+                                capture_output=True, text=True, timeout=60)
+        kmutil_calls = int(calls.read_text()) if calls.exists() else 0
+        return result, kmutil_calls, calls
+
+    def assert_nothing_left_in_tmp(self):
+        for name in STEP2_LOGS:
+            self.assertFalse(os.path.exists(f"/tmp/{name}"), name)
 
     def test_kmutil_is_answered_out_of_sight(self):
-        out, calls, root = self.run_step2(PROMPTING_KMUTIL)
-        self.assertEqual(calls, 1)
-        self.assertEqual((root / "piped").read_text(), "y scott secret")
+        result, kmutil_calls, calls = self.run_step2(PROMPTING_KMUTIL)
+        out = result.stdout
+        self.assertEqual(result.returncode, 0, out + result.stderr)
+        self.assertEqual(kmutil_calls, 1)
+        self.assertEqual(Path(calls.parent, "piped").read_text(), "y|scott|secret")
         self.assertNotIn("Username", out)
         self.assertNotIn("type y", out)
         self.assertEqual(out.count("Password for scott:"), 1)
-        # Our own question comes after the one password prompt.
-        self.assertLess(out.index("Password for scott:"), out.index("Are you sure you want to do this? (y or n)"))
+        # Nothing changes before the owner agrees.
+        self.assertLess(out.index("Are you sure you want to do this? (y or n)"), out.index("Password for scott:"))
+        # The terminal shows what is typed, so the password goes only after
+        # kmutil's own Password: prompt has turned echo off.
+        log = Path(f"{calls}.kmutil-log").read_text()
+        self.assertIn("scott", log)
+        self.assertNotIn("secret", log)
+        self.assert_nothing_left_in_tmp()
+
+    def test_a_password_with_spaces_reaches_every_tool_intact(self):
+        password = "  two words  "
+        result, kmutil_calls, calls = self.run_step2(
+            PROMPTING_KMUTIL, stdin=f"y\n{password}\n\n", password=password)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(kmutil_calls, 1)
+        self.assertEqual(Path(calls.parent, "piped").read_text(), f"y|scott|{password}")
+
+    def test_the_owner_can_decline_before_anything_changes(self):
+        result, kmutil_calls, calls = self.run_step2("exit 0", stdin="n\n")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Nothing was changed", result.stdout)
+        self.assertNotIn("Password for", result.stdout)
+        self.assertFalse(Path(f"{calls}.bputil").exists())
+        self.assertEqual(kmutil_calls, 0)
+        self.assert_nothing_left_in_tmp()
+
+    def test_a_wrong_password_is_named_without_bputils_disclaimer(self):
+        result, kmutil_calls, _ = self.run_step2(PROMPTING_KMUTIL, stdin="y\nwrong\nsecret\n\n")
+        out = result.stdout
+        self.assertEqual(result.returncode, 0, out + result.stderr)
+        self.assertIn("That password didn't work for scott. Try again.", out)
+        self.assertNotIn("Use at your own risk", out)
+        # Each attempt says what it is doing while bputil works, and a
+        # rejected one replaces that line with the reason.
+        self.assertEqual(out.count("Updating Omarchy's security settings..."), 2)
+        # (Text-mode capture turns the carriage return into a newline.)
+        self.assertIn("\x1b[KThat password didn't work for scott.", out)
+        self.assertEqual(kmutil_calls, 1)
+
+    def test_bputil_lets_macos_ask_after_three_failures(self):
+        result, _, calls = self.run_step2("exit 0", stdin="y\nw1\nw2\nw3\n\n", bputil_mode="fail")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("macOS asks itself now", result.stdout)
+        attempts = Path(f"{calls}.bputil").read_text().splitlines()
+        self.assertEqual(len(attempts), 4)
+        self.assertEqual(attempts[-1], "-nc -v VG-1")
 
     def test_a_kmutil_that_fails_is_handed_to_the_owner(self):
         started = time.monotonic()
-        out, calls, _ = self.run_step2('[ "$n" -gt 1 ] && exit 0\necho "Username: Password:"; exit 1')
-        self.assertEqual(calls, 2)
+        result, kmutil_calls, _ = self.run_step2('[ "$n" -gt 1 ] && exit 0\necho "Username: Password:"; exit 1')
+        out = result.stdout
+        self.assertEqual(result.returncode, 0, out + result.stderr)
+        self.assertEqual(kmutil_calls, 2)
         self.assertIn("Type y, then your user name and password", out)
         self.assertNotIn("Username:", out)
         # A failure is handed over at once, not after the one-minute deadline.
         self.assertLess(time.monotonic() - started, 8)
 
-    def test_a_kmutil_that_stalls_is_stopped_and_handed_to_the_owner(self):
-        out, calls, _ = self.run_step2('[ "$n" -gt 1 ] && exit 0\nexec ' + shutil.which('sleep') + ' 30')
-        self.assertEqual(calls, 2)
-        self.assertIn("Type y, then your user name and password", out)
+    def test_a_kmutil_that_stalls_is_stopped_before_the_owner_answers(self):
+        result, kmutil_calls, calls = self.run_step2(
+            '[ "$n" -gt 1 ] && exit 0\necho $$ >"$CALLS.stalled"\nexec ' + shutil.which("sleep") + " 30")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(kmutil_calls, 2)
+        self.assertIn("Type y, then your user name and password", result.stdout)
+        # The stalled kmutil itself, not only script, is gone before the
+        # second one starts.
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int(Path(f"{calls}.stalled").read_text()), 0)
 
-    def test_a_wrong_password_is_named_without_bputils_disclaimer(self):
-        out, calls, _ = self.run_step2(PROMPTING_KMUTIL, bputil_fails_once=True)
-        self.assertIn("That password didn't work for scott. Try again.", out)
-        self.assertNotIn("Use at your own risk", out)
-        # Each attempt says what it is doing while bputil works.
-        self.assertEqual(out.count("Updating Omarchy's security settings..."), 2)
-        self.assertEqual(calls, 1)
+    def test_ctrl_c_stops_everything_it_started(self):
+        import signal
+        script, env, calls = self.step2_with_fakes("exit 0", bputil_mode="hang")
+        process = subprocess.Popen(["/bin/sh", str(script)], env=env, stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   start_new_session=True)
+        process.stdin.write("y\nsecret\n")
+        process.stdin.flush()
+        hanging = Path(f"{calls}.bputil-pid")
+        deadline = time.monotonic() + 20
+        while not hanging.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(hanging.exists(), "bputil never started")
+        # Ctrl-C reaches the terminal's whole foreground process group.
+        os.killpg(process.pid, signal.SIGINT)
+        out, _ = process.communicate(timeout=20)
+        self.assertEqual(process.returncode, 130)
+        self.assertIn("Stopped.", out)
+        time.sleep(0.5)
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(process.pid, 0)
+        self.assert_nothing_left_in_tmp()
+
+    def test_an_unpaired_recovery_blesses_with_the_known_owner(self):
+        result, kmutil_calls, calls = self.run_step2(PROMPTING_KMUTIL, stdin="secret\n\n", paired=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Password for scott:", result.stdout)
+        root = calls.parent
+        # First without a password, then with the one typed.
+        attempt = f"--setBoot --mount {root / 'Omarchy'} --user scott --stdinpass"
+        self.assertEqual(Path(f"{calls}.bless").read_text().splitlines(), [attempt, "", attempt, "secret"])
+        self.assertEqual(Path(f"{calls}.boot").read_text(), "/dev/omarchy\n")
+        self.assertIn("choose Omarchy, and log in.", result.stdout)
+        self.assertEqual(kmutil_calls, 0)
+
+    def test_an_unpaired_recovery_checks_the_startup_disk_not_bless(self):
+        # bless exits 0 after a wrong password, so only the startup disk tells.
+        result, _, calls = self.run_step2("exit 0", stdin="wrong\nsecret\n\n", paired=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout.count("That password didn't work for scott. Try again."), 1)
+        self.assertEqual(Path(f"{calls}.boot").read_text(), "/dev/omarchy\n")
+
+    def test_an_unpaired_recovery_lets_bless_ask_after_three_failures(self):
+        result, _, calls = self.run_step2("exit 0", stdin="a\nb\nc\n\n", paired=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("macOS asks itself now", result.stdout)
+        self.assertEqual(Path(f"{calls}.bless").read_text().splitlines()[-1],
+                         f"--setBoot --mount {calls.parent / 'Omarchy'}")
+        self.assertEqual(Path(f"{calls}.boot").read_text(), "/dev/omarchy\n")
+
+    def test_an_unpaired_recovery_asks_nothing_when_bless_needs_no_password(self):
+        # recoveryOS's bless set the startup disk after a wrong password on
+        # macOS 26.6.2, so step2.sh tries it without one first.
+        result, _, calls = self.run_step2("exit 0", stdin="\n", paired=False, bless_checks=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("Password for", result.stdout)
+        self.assertEqual(Path(f"{calls}.boot").read_text(), "/dev/omarchy\n")
+        self.assertIn("choose Omarchy, and log in.", result.stdout)
+
+    def test_an_unpaired_recovery_already_starting_omarchy_asks_nothing(self):
+        result, _, calls = self.run_step2("exit 0", stdin="\n", paired=False, startup="omarchy")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("is already the", result.stdout)
+        self.assertNotIn("Password for", result.stdout)
+        self.assertFalse(Path(f"{calls}.bless").exists())
 
     def test_every_line_fits_an_80_column_terminal(self):
         text = self.make("scott").read_text()
@@ -947,17 +1100,6 @@ class Step2ScriptTests(unittest.TestCase):
             shown = re.sub(r"\$\{(BOLD|RST)\}", "", match.group(1))
             shown = shown.replace("$os_name", "Omarchy").replace("\\n", "")
             self.assertLessEqual(len(shown), 76, shown)
-
-    def test_an_unpaired_recovery_blesses_with_the_known_owner(self):
-        result, calls, root = self.run_step2(PROMPTING_KMUTIL, paired=False, stdin="secret\n\n")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("Password for scott:", result.stdout)
-        self.assertEqual(
-            Path(f"{calls}.bless").read_text().split("\n")[:2],
-            [f"--setBoot --mount {root / 'Omarchy'} --user scott --stdinpass", "secret"],
-        )
-        self.assertIn("choose Omarchy, and log in.", result.stdout)
-        self.assertFalse(calls.exists())
 
     def test_an_unknown_owner_is_asked_for(self):
         text = self.make("").read_text()

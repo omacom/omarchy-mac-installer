@@ -171,7 +171,7 @@
       {
         "path": "overlay/src/omarchy_asahi.py",
         "destination": "src/omarchy_asahi.py",
-        "sha256": "bda2d8849575fb9aadd551e5b572bf23fcedb5ad11546ecd4237035a90212a4e"
+        "sha256": "f3ade3373df37cebe28e85bcba2446a40ba378fe7ffaca11ac4d3580ac050421"
       },
       {
         "path": "overlay/src/omarchy_contract.py",
@@ -196,7 +196,7 @@
       {
         "path": "overlay/src/omarchy_runtime.py",
         "destination": "src/omarchy_runtime.py",
-        "sha256": "504cd07d9fa23a5036e898dc24964dd759a7a44bf74a7eb38d3ce9da8aba869d"
+        "sha256": "3392b2c9ca36c8a0333f0eaae749814bdada7a6a68aa071cc19bd20424f35ca2"
       },
       {
         "path": "overlay/src/omarchy_stage1.py",
@@ -206,7 +206,7 @@
       {
         "path": "overlay/tests/test_omarchy_asahi.py",
         "destination": "tests/test_omarchy_asahi.py",
-        "sha256": "785b59a98e726735da5a192bfbc500967f8c306dddec8304cef086cefcb4cfbd"
+        "sha256": "1aa8058f4cd439d156b6407de1bbc26afe2c7d864785293b9b6352c4ad70baa3"
       },
       {
         "path": "overlay/tests/test_omarchy_contract.py",
@@ -236,7 +236,7 @@
       {
         "path": "overlay/tests/test_omarchy_runtime.py",
         "destination": "tests/test_omarchy_runtime.py",
-        "sha256": "7a54e1553d339bf7b0f38dea35bbc5aa07d9eb694c1aa0d88f92aaf68b212531"
+        "sha256": "2721fc1559df06e66a88aa6808b1bcb57c5c1f8387125fc84c559334ef9fe920"
       },
       {
         "path": "overlay/tests/test_omarchy_stage1.py",
@@ -275,8 +275,8 @@
   ],
   "validation_artifact": {
     "filename": "installer-v0.9.2-omarchy.26.tar.gz",
-    "size_bytes": 17841053,
-    "sha256": "1133c9c7c12b7756e41c4b7e950c0ab13a9c59fe9dd38e942441e152bf7cbbb6",
+    "size_bytes": 17841883,
+    "sha256": "66dc0857ce0b66f60fce37960510bc59e8f8c6da8118bb7b861a8ec2bb86e574",
     "reproducibility_scope": "two-identical-python-overlay-repacks-authenticated-base",
     "signature": "absent",
     "metadata_sha256": "2e6181ce6b6e17c11039e04bfadade8d10ae0e11889885ad8c9960b68f179a5d"
