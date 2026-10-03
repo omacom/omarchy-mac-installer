@@ -75,6 +75,7 @@ class EngineRuntimeTests(unittest.TestCase):
             "OMARCHY_MACHINE_OWNER",
             "DISTRO",
             "DISTRO_DOCS",
+            "OMARCHY_INSTALLER_NAME",
         ):
             environment = self._install_environment()
             del environment[key]
@@ -371,7 +372,8 @@ class EngineRuntimeTests(unittest.TestCase):
             "OMARCHY_ENGINE_BINDING_DIGEST": "sha256:" + "b" * 64,
             "OMARCHY_ENGINE_PLAN_DIGEST": self.plan.plan_digest,
             "OMARCHY_MACHINE_OWNER": "mina",
-            "DISTRO": "Omarchy MX Mac",
+            "DISTRO": "Omarchy",
+            "OMARCHY_INSTALLER_NAME": "Probe Installer",
             "DISTRO_DOCS": "https://omarchy.org/manual/",
         }
 
