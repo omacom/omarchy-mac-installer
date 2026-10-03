@@ -125,6 +125,12 @@ class Journal:
                     recorded["minimum_container_bytes"],
                     current["minimum_container_bytes"],
                 )
+                for suffix in ("install_bytes", "container_bytes"):
+                    key = "recommended_" + suffix
+                    if key in candidate:
+                        candidate[key] = max(
+                            candidate[key], candidate["minimum_" + suffix]
+                        )
                 merged.append(candidate)
             self.inventory_payload = _inventory_payload(
                 system_store_identifier,
@@ -564,6 +570,15 @@ def _validate_candidate(candidate):
         "minimum_container_bytes",
     }
     keys = set(common_keys)
+    recommendation_keys = {
+        "recommended_install_bytes", "recommended_container_bytes"
+    }
+    if (
+        isinstance(candidate, dict)
+        and candidate.get("kind") in ("resize", "free", "replace")
+        and recommendation_keys & candidate.keys()
+    ):
+        keys.update(recommendation_keys)
     if isinstance(candidate, dict) and candidate.get("kind") in (
         "repair",
         "replace",
@@ -580,6 +595,13 @@ def _validate_candidate(candidate):
     for key in common_keys - {"kind", "source_identifier"}:
         if not _is_uint64(candidate[key]):
             raise ContractError("invalid candidate extent")
+    for key in recommendation_keys & keys:
+        minimum_key = key.replace("recommended_", "minimum_")
+        if (
+            not _is_uint64(candidate[key])
+            or candidate[key] < candidate[minimum_key]
+        ):
+            raise ContractError("invalid candidate recommendation")
     if candidate["kind"] in ("repair", "replace") and not SHA256_DIGEST.fullmatch(
         candidate["identity_digest"]
     ):

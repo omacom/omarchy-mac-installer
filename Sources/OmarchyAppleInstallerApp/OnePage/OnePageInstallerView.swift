@@ -750,103 +750,109 @@ private struct DiskSplitPanel: View {
   @FocusState private var sizeFocused: Bool
 
   var body: some View {
-    Panel {
-      VStack(alignment: .leading, spacing: 10) {
-        HStack(alignment: .firstTextBaseline) {
-          Text(plan.fixedMacOSBytes == nil ? "macOS" : "macOS + free space")
-            .font(OmarchyTheme.heading)
-            .foregroundStyle(OmarchyTheme.accent)
-          Spacer(minLength: 8)
-          Text("Omarchy")
-            .font(OmarchyTheme.heading)
-            .foregroundStyle(OmarchyTheme.accent)
-        }
-        DiskBar(
-          macOSBytes: plan.macOSBytes(for: displayedOmarchyBytes),
-          omarchyBytes: displayedOmarchyBytes,
-          unallocatedBytes: plan.unallocatedBytes(for: displayedOmarchyBytes),
-          onAdjustOmarchyFraction: editable ? { adjust($0) } : nil,
-          onCommitOmarchyFraction: editable ? { commit($0) } : nil,
-          isFrozen: isBusy || sizeInput.isEditing
-        )
-        .transaction { $0.animation = nil }
-        if editable {
-          VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-              Text("Space for Omarchy").font(OmarchyTheme.body)
-              TextField(
-                "Size",
-                text: Binding(
-                  get: {
-                    sizeInput.isEditing ? sizeInput.text : sizeInput.display(plan.omarchyBytes)
-                  },
-                  set: { value in
-                    beginSizeEdit()
-                    sizeInput.text = value
-                  }
-                )
-              )
-              .textFieldStyle(.roundedBorder)
-              .font(OmarchyTheme.control)
-              .frame(width: 62, height: 28)
-              .focused($sizeFocused)
-              .onTapGesture {
-                beginSizeEdit()
-                sizeFocused = true
-              }
-              .accessibilityLabel("Omarchy size in gigabytes")
-              .onSubmit(applySize)
-              .onExitCommand(perform: cancelSize)
-              Text("GB").font(OmarchyTheme.detail)
-              if sizeInput.isEditing {
-                Button(action: applySize) {
-                  Image(systemName: "checkmark")
-                    .font(OmarchyTheme.control)
-                    .frame(width: 28, height: 28)
-                }
-                .buttonStyle(SizeEditButtonStyle(tint: OmarchyTheme.success))
-                .accessibilityLabel("Apply size")
-                .help("Apply size (Return)")
-                .disabled(sizeInput.requestedBytes == nil)
-                Button(action: cancelSize) {
-                  Image(systemName: "xmark")
-                    .font(OmarchyTheme.control)
-                    .frame(width: 28, height: 28)
-                }
-                .buttonStyle(SizeEditButtonStyle(tint: OmarchyTheme.danger))
-                .accessibilityLabel("Cancel size edit")
-                .help("Cancel size edit (Escape)")
-              }
-              Spacer(minLength: 0)
-            }
-            if let message = sizeInput.validationMessage {
-              Text(message).font(OmarchyTheme.detail).foregroundStyle(OmarchyTheme.danger)
-            }
+    VStack(alignment: .leading, spacing: 12) {
+      Panel {
+        VStack(alignment: .leading, spacing: 10) {
+          HStack(alignment: .firstTextBaseline) {
+            Text(plan.fixedMacOSBytes == nil ? "macOS" : "macOS + free space")
+              .font(OmarchyTheme.heading)
+              .foregroundStyle(OmarchyTheme.accent)
+            Spacer(minLength: 8)
+            Text("Omarchy")
+              .font(OmarchyTheme.heading)
+              .foregroundStyle(OmarchyTheme.accent)
           }
-          .disabled(isBusy)
-
-        }
-        if plan.fixedMacOSBytes != nil {
-          Text(
-            "\(PlainLanguage.bytes(plan.unallocatedBytes(for: displayedOmarchyBytes))) remains unallocated. macOS keeps its current size."
+          DiskBar(
+            macOSBytes: plan.macOSBytes(for: displayedOmarchyBytes),
+            omarchyBytes: displayedOmarchyBytes,
+            unallocatedBytes: plan.unallocatedBytes(for: displayedOmarchyBytes),
+            macOSSpaceCaution: plan.macOSSpaceCaution(for: displayedOmarchyBytes),
+            onAdjustOmarchyFraction: editable ? { adjust($0) } : nil,
+            onCommitOmarchyFraction: editable ? { commit($0) } : nil,
+            isFrozen: isBusy || sizeInput.isEditing
           )
-          .omarchyHelpText()
-        }
-        Text("Omarchy will use the space selected above.")
-          .omarchyHelpText()
-        if isBusy {
-          // A released divider re-plans through the engine, which takes a
-          // moment; say so instead of leaving the bar and the tick inert.
-          HStack(spacing: 8) {
-            ProgressView()
-              .controlSize(.small)
-            Text(PlainLanguage.replanning)
-              .font(OmarchyTheme.detail)
-              .foregroundStyle(OmarchyTheme.secondaryText)
+          .transaction { $0.animation = nil }
+          if editable {
+            VStack(alignment: .leading, spacing: 6) {
+              HStack(spacing: 8) {
+                Text("Space for Omarchy").font(OmarchyTheme.body)
+                TextField(
+                  "Size",
+                  text: Binding(
+                    get: {
+                      sizeInput.isEditing ? sizeInput.text : sizeInput.display(plan.omarchyBytes)
+                    },
+                    set: { value in
+                      beginSizeEdit()
+                      sizeInput.text = value
+                    }
+                  )
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(OmarchyTheme.control)
+                .frame(width: 62, height: 28)
+                .focused($sizeFocused)
+                .onTapGesture {
+                  beginSizeEdit()
+                  sizeFocused = true
+                }
+                .accessibilityLabel("Omarchy size in gigabytes")
+                .onSubmit(applySize)
+                .onExitCommand(perform: cancelSize)
+                Text("GB").font(OmarchyTheme.detail)
+                if sizeInput.isEditing {
+                  Button(action: applySize) {
+                    Image(systemName: "checkmark")
+                      .font(OmarchyTheme.control)
+                      .frame(width: 28, height: 28)
+                  }
+                  .buttonStyle(SizeEditButtonStyle(tint: OmarchyTheme.success))
+                  .accessibilityLabel("Apply size")
+                  .help("Apply size (Return)")
+                  .disabled(sizeInput.requestedBytes == nil)
+                  Button(action: cancelSize) {
+                    Image(systemName: "xmark")
+                      .font(OmarchyTheme.control)
+                      .frame(width: 28, height: 28)
+                  }
+                  .buttonStyle(SizeEditButtonStyle(tint: OmarchyTheme.danger))
+                  .accessibilityLabel("Cancel size edit")
+                  .help("Cancel size edit (Escape)")
+                }
+                Spacer(minLength: 0)
+              }
+              if let message = sizeInput.validationMessage {
+                Text(message).font(OmarchyTheme.detail).foregroundStyle(OmarchyTheme.danger)
+              }
+            }
+            .disabled(isBusy)
+
+          }
+          if plan.fixedMacOSBytes != nil {
+            Text(
+              "\(PlainLanguage.bytes(plan.unallocatedBytes(for: displayedOmarchyBytes))) remains unallocated. macOS keeps its current size."
+            )
+            .omarchyHelpText()
+          }
+          Text("Omarchy will use the space selected above.")
+            .omarchyHelpText()
+          if isBusy {
+            // A released divider re-plans through the engine, which takes a
+            // moment; say so instead of leaving the bar and the tick inert.
+            HStack(spacing: 8) {
+              ProgressView()
+                .controlSize(.small)
+              Text(PlainLanguage.replanning)
+                .font(OmarchyTheme.detail)
+                .foregroundStyle(OmarchyTheme.secondaryText)
+            }
           }
         }
+        .padding(.vertical, 4)
       }
-      .padding(.vertical, 4)
+      ForEach(plan.spaceCautions(for: displayedOmarchyBytes), id: \.self) { caution in
+        Text(caution).font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
+      }
     }
     .onChange(of: plan.omarchyBytes) { _, _ in
       exploredOmarchyGB = nil

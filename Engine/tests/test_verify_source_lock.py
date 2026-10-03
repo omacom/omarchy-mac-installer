@@ -12,6 +12,19 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(VERIFY_SOURCE_LOCK)
 
 
+class RepositorySourceInputLockTests(unittest.TestCase):
+    def test_repository_inputs_match_the_recorded_digests(self):
+        lock = json.loads((ENGINE_ROOT / "source-lock.json").read_text())
+        records = (
+            lock["downstream_overlay"]["files"]
+            + lock["build_recipe"]
+            + [lock["downstream_overlay"]["patch"]]
+        )
+        for record in records:
+            with self.subTest(path=record["path"]):
+                VERIFY_SOURCE_LOCK.require_digest(ENGINE_ROOT, record, "repository input")
+
+
 class ValidationArtifactLockTests(unittest.TestCase):
     def test_complete_validation_artifact_is_accepted(self):
         VERIFY_SOURCE_LOCK.require_validation_artifact(

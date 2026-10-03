@@ -21,11 +21,13 @@
       XCTAssertLessThan(store.lowerBound, begin.lowerBound)
       XCTAssertLessThan(begin.lowerBound, inspection.lowerBound)
       XCTAssertLessThan(sample.lowerBound, inspection.lowerBound)
-      XCTAssertNotNil(
-        body.range(
-          of:
-            "reservedBytes: release.assets.planningReserveBytes(payloadBytesOnDisk: payloadBytesOnDisk)"
-        ))
+      let reserve = try XCTUnwrap(
+        body.range(of: "let planningReserve = release.assets.planningReserveBytes"))
+      let freshProbe = try XCTUnwrap(body.range(of: "try AppleSiliconHostInspector().inspect()"))
+      XCTAssertLessThan(sample.lowerBound, reserve.lowerBound)
+      XCTAssertLessThan(reserve.lowerBound, freshProbe.lowerBound)
+      XCTAssertLessThan(freshProbe.lowerBound, inspection.lowerBound)
+      XCTAssertNotNil(body.range(of: "reservedBytes: planningReserve"))
       XCTAssertEqual(source.components(separatedBy: "beginPayloadPrefetch(release").count, 2)
     }
 

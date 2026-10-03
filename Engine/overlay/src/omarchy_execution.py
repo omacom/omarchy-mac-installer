@@ -308,6 +308,15 @@ def _validate_inventory(inventory):
 
 def _validate_candidate(candidate):
     keys = set(COMMON_CANDIDATE_KEYS)
+    recommendation_keys = {
+        "recommended_install_bytes", "recommended_container_bytes"
+    }
+    if (
+        isinstance(candidate, dict)
+        and candidate.get("kind") in ("resize", "free", "replace")
+        and recommendation_keys & candidate.keys()
+    ):
+        keys.update(recommendation_keys)
     if isinstance(candidate, dict) and candidate.get("kind") in (
         "repair",
         "replace",
@@ -328,6 +337,13 @@ def _validate_candidate(candidate):
     ):
         if not _is_uint64(candidate[key]):
             raise ExecutionAdmissionError("invalid live candidate extent")
+    for key in recommendation_keys & keys:
+        minimum_key = key.replace("recommended_", "minimum_")
+        if (
+            not _is_uint64(candidate[key])
+            or candidate[key] < candidate[minimum_key]
+        ):
+            raise ExecutionAdmissionError("invalid live candidate recommendation")
     if (
         candidate["length_bytes"] == 0
         or candidate["minimum_install_bytes"] == 0

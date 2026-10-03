@@ -76,6 +76,7 @@ struct DiskBar: View {
   let macOSBytes: UInt64
   let omarchyBytes: UInt64
   var unallocatedBytes: UInt64 = 0
+  var macOSSpaceCaution: String?
   /// When set, the divider between the segments is draggable and reports the
   /// Omarchy share of the disk (0...1) as it moves.
   var onAdjustOmarchyFraction: ((Double) -> Void)?
@@ -96,8 +97,9 @@ struct DiskBar: View {
             name: unallocatedBytes > 0 ? "macOS and free space" : "macOS",
             bytes: macOSBytes + unallocatedBytes,
             width: width - omarchyWidth,
-            background: OmarchyTheme.track,
-            foreground: OmarchyTheme.secondaryText
+            background: macOSSpaceCaution == nil ? OmarchyTheme.track : OmarchyTheme.caution,
+            foreground: macOSSpaceCaution == nil
+              ? OmarchyTheme.secondaryText : OmarchyTheme.accentText
           )
           segment(
             name: "Omarchy",
@@ -141,6 +143,7 @@ struct DiskBar: View {
     .accessibilityLabel("Disk space")
     .accessibilityValue(
       "macOS \(PlainLanguage.bytes(macOSBytes)), Omarchy \(PlainLanguage.bytes(omarchyBytes)), unallocated \(PlainLanguage.bytes(unallocatedBytes))"
+        + (macOSSpaceCaution.map { ". " + $0 } ?? "")
     )
     .accessibilityAdjustableAction { direction in
       guard !isFrozen else { return }

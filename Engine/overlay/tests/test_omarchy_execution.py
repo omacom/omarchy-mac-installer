@@ -82,6 +82,14 @@ class ExecutionAdmissionTests(unittest.TestCase):
             320 * 1024**3,
         )
 
+        # A fallback remains safe even if live recommendations become
+        # stricter than the approved extent between planning and admission.
+        candidate["recommended_install_bytes"] = 192 * 1024**3
+        candidate["recommended_container_bytes"] = 450 * 1024**3
+        self.assertEqual(self._admit().length_bytes, requested)
+        candidate["minimum_container_bytes"] = 421 * 1024**3
+        self._assert_rejected("approved extent changed")
+
     def test_valid_repair_requires_exact_identity_extent_and_operation(self):
         self.inventory = self._inventory(kind="repair")
         self.request = self._request(

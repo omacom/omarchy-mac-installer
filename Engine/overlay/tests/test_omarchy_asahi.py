@@ -16,6 +16,7 @@ import zipfile
 class FakeOSInstaller:
     def __init__(self, dutil, data, template):
         self.min_recommended_size = template.get("minimum_size", 64 * GIB)
+        self.min_size = template.get("floor_size", self.min_recommended_size)
         self.name = template.get("default_os_name", "Omarchy")
         self.needs_firmware = False
         self.idata_targets = []
@@ -138,6 +139,31 @@ class AsahiStage1AdapterTests(unittest.TestCase):
 
     def tearDown(self):
         self.temporary.cleanup()
+
+    def test_preflight_accepts_the_partition_floor(self):
+        metadata = self._target_metadata()
+        metadata["floor_size"] = 40 * GIB
+        metadata["minimum_size"] = 64 * GIB
+        self._write_metadata([metadata])
+        self.plan.length_bytes = 50 * GIB
+        adapter = self._adapter(FakeInstaller(FakeDiskUtil([[self.free]])))
+
+        adapter.preflight(self.plan)
+
+        self.assertTrue(adapter.preflight_complete)
+
+    def test_preflight_rejects_an_extent_below_the_partition_floor(self):
+        metadata = self._target_metadata()
+        metadata["floor_size"] = 40 * GIB
+        self._write_metadata([metadata])
+        self.plan.length_bytes = 30 * GIB
+        adapter = self._adapter(FakeInstaller(FakeDiskUtil([[self.free]])))
+
+        with self.assertRaisesRegex(
+            AsahiAdapterError,
+            "smaller than Asahi minimum",
+        ):
+            adapter.preflight(self.plan)
 
     def test_free_extent_runs_exact_upstream_stage_one_primitives(self):
         dutil = FakeDiskUtil([[self.free]])

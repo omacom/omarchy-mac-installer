@@ -331,10 +331,13 @@ class AsahiStage1Adapter:
         self.osins.image_receipts = {}
         self.osins.image_opener = self.image_writer
         self.osins.image_flush = self.image_flush
-        if (
-            plan.length_bytes
-            < self.stub_size + self.osins.min_recommended_size
-        ):
+        # min_size is the partition floor the images fit in.
+        # min_recommended_size doubles an expandable root for later upgrades,
+        # and a tight disk is allowed to install at the floor instead.
+        partition_floor = getattr(
+            self.osins, "min_size", self.osins.min_recommended_size
+        )
+        if plan.length_bytes < self.stub_size + partition_floor:
             raise AsahiAdapterError(
                 "approved extent is smaller than Asahi minimum"
             )

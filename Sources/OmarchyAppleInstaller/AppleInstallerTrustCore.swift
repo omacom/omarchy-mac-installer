@@ -30,7 +30,9 @@ public struct AppleInstallerTrustCore: Sendable {
               lengthBytes: $0.lengthBytes,
               minimumInstallBytes: $0.minimumInstallBytes,
               minimumContainerBytes: $0.minimumContainerBytes,
-              identityDigest: $0.identityDigest
+              identityDigest: $0.identityDigest,
+              recommendedInstallBytes: $0.recommendedInstallBytes,
+              recommendedContainerBytes: $0.recommendedContainerBytes
             )
           }
         )
@@ -159,6 +161,8 @@ public struct ValidatedEngineCandidate: Equatable, Sendable {
   public let minimumInstallBytes: UInt64
   public let minimumContainerBytes: UInt64
   public let identityDigest: String?
+  public let recommendedInstallBytes: UInt64?
+  public let recommendedContainerBytes: UInt64?
 
   public init(
     kind: String,
@@ -167,7 +171,9 @@ public struct ValidatedEngineCandidate: Equatable, Sendable {
     lengthBytes: UInt64,
     minimumInstallBytes: UInt64,
     minimumContainerBytes: UInt64,
-    identityDigest: String? = nil
+    identityDigest: String? = nil,
+    recommendedInstallBytes: UInt64? = nil,
+    recommendedContainerBytes: UInt64? = nil
   ) {
     self.kind = kind
     self.sourceIdentifier = sourceIdentifier
@@ -176,6 +182,8 @@ public struct ValidatedEngineCandidate: Equatable, Sendable {
     self.minimumInstallBytes = minimumInstallBytes
     self.minimumContainerBytes = minimumContainerBytes
     self.identityDigest = identityDigest
+    self.recommendedInstallBytes = recommendedInstallBytes
+    self.recommendedContainerBytes = recommendedContainerBytes
   }
 }
 

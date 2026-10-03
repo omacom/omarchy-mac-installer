@@ -141,7 +141,7 @@
     }
   },
   "downstream_overlay": {
-    "version": "v0.9.2-omarchy.17",
+    "version": "v0.9.2-omarchy.20",
     "capability": "candidate_bound_full_os_stage_one_authenticated_recovery",
     "engine_modes": [
       "inspect",
@@ -171,22 +171,22 @@
       {
         "path": "overlay/src/omarchy_asahi.py",
         "destination": "src/omarchy_asahi.py",
-        "sha256": "9970fe43e9182b11cc4ea6669967575f8cb3a3df8f5f75a66f3c37786fd5b6be"
+        "sha256": "74bed0f998c906afc6fe72ef8c9f0d6fd6baac330e206e084d7ef2879840ab16"
       },
       {
         "path": "overlay/src/omarchy_contract.py",
         "destination": "src/omarchy_contract.py",
-        "sha256": "823819832b103f34a6221af3e775179bedba5dd04217202dbf08153359b4ed0f"
+        "sha256": "9b0ce46cc31f941828ecb5c2ef4b5f9aae17ed35af106aa285edb76d7f7106da"
       },
       {
         "path": "overlay/src/omarchy_execution.py",
         "destination": "src/omarchy_execution.py",
-        "sha256": "1f42d9017353d0ee0d069b97d9cdde0217b5e1b901e2e7b7384465a124461d23"
+        "sha256": "76c3d403c9496006a97687fc0db4b4070a027f469788b9b12f2b7a71e0d181fc"
       },
       {
         "path": "overlay/src/omarchy_planner.py",
         "destination": "src/omarchy_planner.py",
-        "sha256": "a3202243e26290d2dcd3cb421e922ea3c6edf36c152fe70945513c8cd3b64c88"
+        "sha256": "2611104e3c1c06475ae79d83792ede36960abaeee9f2d5ca718cd21734f34ca4"
       },
       {
         "path": "overlay/src/omarchy_repair.py",
@@ -196,7 +196,7 @@
       {
         "path": "overlay/src/omarchy_runtime.py",
         "destination": "src/omarchy_runtime.py",
-        "sha256": "0e4e141d26a86263a1348df94d665276f87dc3aaef27b55ab8eaa3b542e69f71"
+        "sha256": "bda8b7baa37052770da32a23b058da143b8b646aed1701866b3ee0338ff6729e"
       },
       {
         "path": "overlay/src/omarchy_stage1.py",
@@ -206,22 +206,22 @@
       {
         "path": "overlay/tests/test_omarchy_asahi.py",
         "destination": "tests/test_omarchy_asahi.py",
-        "sha256": "305afd9654feb32684959e047e3c757e9633ef72df368384e113482f7a290420"
+        "sha256": "b5c07f8a61273d25cfd1ef3fb76208241ebdb29ff2e2832ee16c2d63d01e9e00"
       },
       {
         "path": "overlay/tests/test_omarchy_contract.py",
         "destination": "tests/test_omarchy_contract.py",
-        "sha256": "5f7a31803653baf2ebe048a85ea761c1ec804d28c3a6e03d9adc44f0eb514154"
+        "sha256": "095382c3c596ac69989493dee5e49cbf73400381db8a19b533c46964b173aa1c"
       },
       {
         "path": "overlay/tests/test_omarchy_execution.py",
         "destination": "tests/test_omarchy_execution.py",
-        "sha256": "4f619afa84be43b50024fdf1e6031474bacb6cfbe6a3bbe007b59b94d8b468c6"
+        "sha256": "43206cbbe5dbd83f0e72bbf79d8ee21851f3388928bf2882a4ffed1f644e67b1"
       },
       {
         "path": "overlay/tests/test_omarchy_planner.py",
         "destination": "tests/test_omarchy_planner.py",
-        "sha256": "f569f256ccd8ebd519d138b80c0e3ad2c44f23939ff57bd7aafeecb53324eb07"
+        "sha256": "ce6495c605a986e3d31d23b64aa79e528dea736b619735de9f706dd3504b953b"
       },
       {
         "path": "overlay/tests/test_omarchy_repair.py",
@@ -236,7 +236,7 @@
       {
         "path": "overlay/tests/test_omarchy_runtime.py",
         "destination": "tests/test_omarchy_runtime.py",
-        "sha256": "aed2a085c03db9f4390ec4ddd9c37abbe0948a2570f5784dd53b8df20a177a5c"
+        "sha256": "d46c27fa44a74afcffdcbfa2ab64bc6ae470b8138760df181f28c013932d3cdc"
       },
       {
         "path": "overlay/tests/test_omarchy_stage1.py",
@@ -270,13 +270,13 @@
     },
     {
       "path": "rebuild-python-overlay.py",
-      "sha256": "5bacc4476d3dbc1d01fb8caf4a5aff9d8e9d2a189bb4ac3abaadcaf185189d9a"
+      "sha256": "f14f10690a2ae558ed8775e2c2ddb8e3ddc2f78f1d340f4899a18ecb47c3414a"
     }
   ],
   "validation_artifact": {
-    "filename": "installer-v0.9.2-omarchy.17.tar.gz",
-    "size_bytes": 17838045,
-    "sha256": "ecb61645a9c75ba733425fb300b8b53b09f9dbc297a86acce1e0ee41f36e32e5",
+    "filename": "installer-v0.9.2-omarchy.20.tar.gz",
+    "size_bytes": 17839374,
+    "sha256": "7d7d87a934c128e501f8f6287d259195238ed1ae7953336b91738ff63514ea93",
     "reproducibility_scope": "two-identical-python-overlay-repacks-authenticated-base",
     "signature": "absent",
     "metadata_sha256": "2e6181ce6b6e17c11039e04bfadade8d10ae0e11889885ad8c9960b68f179a5d"

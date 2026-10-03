@@ -43,6 +43,64 @@ class PlanningError(ValueError):
     pass
 
 
+def _install_bounds(stub_size, os_installer):
+    """Partition floor, then the larger size Asahi recommends for upgrades.
+
+    An expandable root reports min_recommended_size as twice min_size. The
+    floor is what the images actually fit in. Disks that cannot give up the
+    doubled size can still install at the floor.
+    """
+    recommended = stub_size + os_installer.min_recommended_size
+    floor = stub_size + getattr(
+        os_installer, "min_size", os_installer.min_recommended_size
+    )
+    if (
+        isinstance(floor, bool)
+        or not isinstance(floor, int)
+        or floor <= 0
+        or floor > recommended
+    ):
+        floor = recommended
+    return floor, recommended
+
+
+def _minimum_that_fits(length, floor, recommended):
+    if length >= recommended:
+        return recommended
+    return floor
+
+
+MACOS_REQUIRED_FREE_BYTES = 38_000_000_000
+
+
+def _resize_offer(installer, part, bounds, floor, part_align):
+    """Keep an explicit macOS reserve as well as diskutil's APFS limit."""
+    disk = installer.dutil.get_disk_size(installer.sys_disk)
+    total = bounds.get("total_bytes")
+    free = bounds.get("free_bytes")
+    preferred = bounds.get("diskutil_minimum_bytes")
+    values = (disk, total, free, preferred, part.size, part_align)
+    if any(type(value) is not int or not 0 <= value < 2**64 for value in values):
+        raise PlanningError("invalid macOS resize metrics")
+    if not (
+        0 < total == part.size <= disk
+        and free <= total
+        and 0 < preferred <= total
+        and part_align > 0
+    ):
+        raise PlanningError("inconsistent macOS resize metrics")
+    used = total - free
+    value = used + MACOS_REQUIRED_FREE_BYTES
+    aligned = (value + part_align - 1) // part_align * part_align
+    if aligned >= 2**64:
+        raise PlanningError("macOS resize floor overflow")
+    minimum = max(preferred, aligned)
+
+    # Report even an exhausted container: planning/admission will refuse it,
+    # while Swift can account for the full reserve deficit in its shortfall.
+    return floor, minimum, minimum
+
+
 def collect_inventory(
     installer,
     free_parts,
@@ -65,19 +123,23 @@ def collect_inventory(
         installer.data,
         templates[0],
     )
-    minimum_install = stub_size + os_installer.min_recommended_size
+    floor, recommended = _install_bounds(stub_size, os_installer)
     candidates = []
     for part in free_parts:
         length = align_down(part.size, part_align)
-        if length >= minimum_install:
+        if length >= floor:
             candidates.append(
                 {
                     "kind": "free",
                     "source_identifier": part.name,
                     "offset_bytes": part.offset,
                     "length_bytes": length,
-                    "minimum_install_bytes": minimum_install,
+                    "minimum_install_bytes": _minimum_that_fits(
+                        length, floor, recommended
+                    ),
                     "minimum_container_bytes": 0,
+                    "recommended_install_bytes": recommended,
+                    "recommended_container_bytes": 0,
                 }
             )
     for part in resizable_parts:
@@ -85,25 +147,28 @@ def collect_inventory(
         # A container that cannot give up enough space is still reported, so
         # the installer can say how much is missing before it downloads
         # anything. Planning and execution reject it by the same minimums.
-        if bounds["available_bytes"] > 0:
-            candidates.append(
-                {
-                    "kind": "resize",
-                    "source_identifier": part.name,
-                    "offset_bytes": part.offset,
-                    "length_bytes": part.size,
-                    "minimum_install_bytes": minimum_install,
-                    "minimum_container_bytes": bounds[
-                        "minimum_size_bytes"
-                    ],
-                }
-            )
+        minimum_install, minimum_container, recommended_container = _resize_offer(
+            installer, part, bounds, floor, part_align
+        )
+        candidates.append(
+            {
+                "kind": "resize",
+                "source_identifier": part.name,
+                "offset_bytes": part.offset,
+                "length_bytes": part.size,
+                "minimum_install_bytes": minimum_install,
+                "minimum_container_bytes": minimum_container,
+                "recommended_install_bytes": recommended,
+                "recommended_container_bytes": recommended_container,
+            }
+        )
     candidates.extend(
         collect_existing_installs(
             installer,
             templates[0].get("default_os_name"),
-            minimum_install,
+            floor,
             part_align,
+            recommended,
         )
     )
     candidates.sort(
@@ -118,7 +183,9 @@ def collect_inventory(
     }
 
 
-def collect_existing_installs(installer, os_label, minimum_install, part_align):
+def collect_existing_installs(
+    installer, os_label, minimum_install, part_align, recommended_install=None
+):
     """Detect complete existing Omarchy installs as replace candidates.
 
     A complete install is exactly four consecutive partitions: the Omarchy
@@ -131,6 +198,8 @@ def collect_existing_installs(installer, os_label, minimum_install, part_align):
     """
     if not isinstance(os_label, str) or not os_label:
         return []
+    if recommended_install is None:
+        recommended_install = minimum_install
     parts = list(getattr(installer, "parts", None) or [])
     candidates = []
     for index, part in enumerate(parts):
@@ -170,14 +239,19 @@ def collect_existing_installs(installer, os_label, minimum_install, part_align):
         length = align_down(end - start, part_align)
         if length < minimum_install:
             continue
+        replace_minimum = _minimum_that_fits(
+            length, minimum_install, recommended_install
+        )
         candidates.append(
             {
                 "kind": "replace",
                 "source_identifier": part.name,
                 "offset_bytes": start,
                 "length_bytes": length,
-                "minimum_install_bytes": minimum_install,
+                "minimum_install_bytes": replace_minimum,
                 "minimum_container_bytes": 0,
+                "recommended_install_bytes": recommended_install,
+                "recommended_container_bytes": 0,
                 "identity_digest": replace_identity_digest(
                     members,
                     os_label,

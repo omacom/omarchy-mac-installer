@@ -52,6 +52,8 @@ struct EngineInstallCandidate: Codable, Equatable, Sendable {
   let minimumInstallBytes: UInt64
   let minimumContainerBytes: UInt64
   let identityDigest: String?
+  let recommendedInstallBytes: UInt64?
+  let recommendedContainerBytes: UInt64?
 }
 
 struct EnginePlanMessage: Codable, Equatable, Sendable {
@@ -192,7 +194,7 @@ struct EngineTranscriptDecoder: Sendable {
           throw EngineContractError.invalidMessage(lineNumber)
         }
         for candidate in candidates {
-          let candidateKeys: Set<String> =
+          var candidateKeys: Set<String> =
             ["repair", "replace"].contains(candidate["kind"] as? String ?? "")
             ? [
               "kind", "source_identifier", "offset_bytes", "length_bytes",
@@ -203,6 +205,19 @@ struct EngineTranscriptDecoder: Sendable {
               "kind", "source_identifier", "offset_bytes", "length_bytes",
               "minimum_install_bytes", "minimum_container_bytes",
             ]
+          if ["resize", "free", "replace"].contains(candidate["kind"] as? String ?? ""),
+            candidate["recommended_install_bytes"] != nil
+              || candidate["recommended_container_bytes"] != nil
+          {
+            guard candidate["recommended_install_bytes"] is NSNumber,
+              candidate["recommended_container_bytes"] is NSNumber
+            else {
+              throw EngineContractError.invalidMessage(lineNumber)
+            }
+            candidateKeys.formUnion([
+              "recommended_install_bytes", "recommended_container_bytes",
+            ])
+          }
           try requireKeys(
             candidate,
             candidateKeys,
@@ -297,6 +312,13 @@ struct EngineTranscriptDecoder: Sendable {
             candidateIdentities.insert("\(candidate.kind):\(candidate.sourceIdentifier)").inserted,
             candidate.lengthBytes > 0,
             candidate.minimumInstallBytes > 0,
+            (candidate.recommendedInstallBytes == nil
+              && candidate.recommendedContainerBytes == nil)
+              || (["resize", "free", "replace"].contains(candidate.kind)
+                && candidate.recommendedInstallBytes.map { $0 >= candidate.minimumInstallBytes }
+                  == true
+                && candidate.recommendedContainerBytes.map { $0 >= candidate.minimumContainerBytes }
+                  == true),
             candidate.offsetBytes.addingReportingOverflow(candidate.lengthBytes).overflow == false,
             (candidate.kind == "free" && candidate.minimumContainerBytes == 0
               && candidate.identityDigest == nil)

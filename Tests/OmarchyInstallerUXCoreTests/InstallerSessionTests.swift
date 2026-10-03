@@ -188,10 +188,11 @@
       XCTAssertFalse(failure.isBlockedModel)
       XCTAssertEqual(failure.device, environment.host)
       XCTAssertEqual(
-        failure.headline, "Omarchy needs 77 GB; only 74 GB can be made available")
+        failure.headline, "Free up at least 4 GB to install Omarchy")
       XCTAssertEqual(
         failure.remedy,
-        "Free up at least 4 GB in macOS and empty the Trash, then choose Check again.")
+        "Remove files you no longer need in macOS and empty the Trash, then choose Check again. The installer will check the available space again before allowing installation."
+      )
 
       await session.continueToPlan()
       XCTAssertEqual(environment.prepareCount, 0)
@@ -1097,6 +1098,42 @@
       }
       XCTAssertEqual(failure.plainDetail, PlainLanguage.releaseResourcesUnavailable)
       XCTAssertNotNil(failure.technicalDetail)
+    }
+
+    func testSpaceShortfallRoundsUpAndRequiresAFreshPlanAfterRechecking() async {
+      let environment = MockInstallerEnvironment()
+      let session = InstallerSession(environment: environment)
+      // A fractional GB must not be rounded down, including just above a whole GB.
+      for (available, expectedGB): (UInt64, Int) in [
+        (34_500_000_000, 6), (34_000_000_000, 6), (33_999_999_999, 7),
+      ] {
+        environment.prepareError = InstallerAllocationRecommendationError.insufficientSpace(
+          requiredBytes: 40_000_000_000, availableBytes: available)
+        await session.inspect()
+        await session.continueToPlan()
+
+        guard case .failed(let failure) = session.phase else {
+          return XCTFail("Expected a space shortfall during planning.")
+        }
+        XCTAssertEqual(failure.headline, "Free up at least \(expectedGB) GB to install Omarchy")
+        XCTAssertTrue(session.canInspect)
+        XCTAssertFalse(session.canStartInstallation)
+        session.approve()
+        session.presentInstallCredentials()
+        XCTAssertNil(session.credentialSheet.context)
+        XCTAssertFalse(environment.hasApprovedPlan)
+        XCTAssertFalse(session.hasExecutionStarted)
+      }
+
+      environment.prepareError = nil
+      await session.inspect()
+      await session.continueToPlan()
+      session.continueToPlanReview()
+      guard case .planReview(_, let acknowledged) = session.phase else {
+        return XCTFail("A successful recheck should allow a fresh plan review.")
+      }
+      XCTAssertFalse(acknowledged)
+      XCTAssertFalse(session.canStartInstallation)
     }
 
     func testSnapshotFailureAllowsRecheckingWithoutAuthorizingInstallation() async {

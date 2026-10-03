@@ -696,14 +696,15 @@
             actionTitle: "Apple’s local-snapshot guidance"
           )
         case .insufficientSpace(let required, let available):
+          let shortfall = bytesRoundedUp(required - min(required, available))
           return FailureDisplay(
             headline:
-              "Omarchy needs \(bytes(required)); only \(bytes(available)) can be made available",
+              "Free up at least \(shortfall) to install Omarchy",
             plainDetail:
-              "That is the most macOS can give up after keeping the room it needs for itself, so it is less than the free space macOS shows. The disk has not been changed.",
+              "Omarchy needs \(bytes(required)); only \(bytes(available)) can be made available within the current safety limits. Free space shown in macOS is not necessarily space available for installation. The disk has not been changed.",
             technicalDetail: technical,
             remedy:
-              "Free up at least \(bytesRoundedUp(required - min(required, available))) in macOS and empty the Trash, then choose Check again."
+              "Remove files you no longer need in macOS and empty the Trash, then choose Check again. The installer will check the available space again before allowing installation."
           )
         case .noEligibleCandidate:
           return FailureDisplay(

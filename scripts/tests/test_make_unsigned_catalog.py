@@ -63,6 +63,10 @@ class CatalogGeneratorTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(fragment, result.stderr)
 
+    def test_recommendation_engine_rejects_old_installer_minimum(self):
+        self.inputs["installer"]["minimum_version"] = "2.0.10"
+        self.assertRejected(self.inputs, "requires installer.minimum_version >= 2.1.0")
+
     def test_emits_schema_four_without_an_expiry(self) -> None:
         result = self.generate()
         self.assertEqual(result.returncode, 0, result.stderr)

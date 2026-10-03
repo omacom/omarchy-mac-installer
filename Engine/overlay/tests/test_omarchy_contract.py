@@ -15,6 +15,7 @@ from omarchy_contract import (  # noqa: E402
     ContractError,
     Journal,
     normalize_device_identifier,
+    normalized_inventory,
 )
 
 
@@ -39,6 +40,45 @@ class ResumableJournalTests(unittest.TestCase):
 
     def tearDown(self):
         self.temporary.cleanup()
+
+    def test_resize_recommendations_are_optional_but_validated_as_a_pair(self):
+        candidate = dict(
+            self.candidate,
+            kind="resize",
+            minimum_container_bytes=20 * 1024**3,
+            recommended_install_bytes=80 * 1024**3,
+            recommended_container_bytes=30 * 1024**3,
+        )
+        normalized_inventory("disk0", [candidate])
+        for key in ("recommended_install_bytes", "recommended_container_bytes"):
+            for value in (None, True, -1, 1, "80"):
+                with self.subTest(key=key, value=value):
+                    with self.assertRaises(ContractError):
+                        normalized_inventory("disk0", [dict(candidate, **{key: value})])
+            incomplete = dict(candidate)
+            del incomplete[key]
+            with self.assertRaises(ContractError):
+                normalized_inventory("disk0", [incomplete])
+
+    def test_resume_keeps_recommendations_above_retained_safety_limits(self):
+        candidate = dict(
+            self.candidate,
+            kind="resize",
+            minimum_container_bytes=30 * 1024**3,
+            recommended_install_bytes=80 * 1024**3,
+            recommended_container_bytes=40 * 1024**3,
+        )
+        journal = Journal(str(self.path))
+        journal.inspection("apple,j314s", "supported")
+        layout = journal.inventory("disk0", [candidate])
+        candidate.update(
+            minimum_container_bytes=10 * 1024**3,
+            recommended_container_bytes=20 * 1024**3,
+        )
+        self.assertEqual(journal.inventory("disk0", [candidate]), layout)
+        retained = journal.inventory_payload["candidates"][0]
+        self.assertEqual(retained["minimum_container_bytes"], 30 * 1024**3)
+        self.assertEqual(retained["recommended_container_bytes"], 30 * 1024**3)
 
     def test_complete_journal_resumes_without_duplicate_records(self):
         journal = self._planned_journal()

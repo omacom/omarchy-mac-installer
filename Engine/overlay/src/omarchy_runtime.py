@@ -145,10 +145,25 @@ class EngineRuntime:
                 ),
             )
         else:
+            is_gpt = (
+                installer.dutil.disks[installer.cur_disk]["Content"]
+                == "GUID_partition_scheme"
+            )
             collected = omarchy_planner.collect_inventory(
                 installer,
                 free_parts,
-                resizable_parts,
+                # Also keep tight macOS containers for exact shortfalls.
+                # Do not probe unrelated stubs or data-only containers that
+                # upstream did not consider resizable.
+                [
+                    part for part in installer.parts
+                    if part in resizable_parts or (
+                        part.type == "Apple_APFS"
+                        and part.container is not None
+                        and part.os
+                        and any(os.version for os in part.os)
+                    )
+                ] if is_gpt else [],
                 stub_size,
                 part_align,
             )
