@@ -188,7 +188,7 @@ if ! grep -q ': Paired' /tmp/bp.txt; then
                 echo "macOS asks itself now. Type your user name and password."
                 until bless --setBoot --mount "$system_dir" && omarchy_is_startup; do
                     echo "That didn't work. Press Enter to try again."
-                    read
+                    read -r _
                 done
                 break
             fi
@@ -200,7 +200,7 @@ if ! grep -q ': Paired' /tmp/bp.txt; then
     echo
     echo "Press Enter to shut down. Then hold the power button until you see"
     echo "'Loading startup options', choose $os_name, and log in."
-    read
+    read -r _
     shutdown -h now
     exit 1
 fi
@@ -210,7 +210,7 @@ if ! grep -q 'one true recoveryOS' /tmp/bp.txt; then
     echo
     echo "Press Enter to shut down. Then hold the power button, without letting"
     echo "go, until you see 'Loading startup options', and choose $os_name."
-    read
+    read -r _
     shutdown -h now
     exit 1
 fi
@@ -246,7 +246,7 @@ while :; do
         echo "macOS asks itself now. Type your user name and password."
         while ! bputil -nc -v "$VGID"; do
             echo "That didn't work. Press Enter to try again."
-            read
+            read -r _
         done
         break
     fi
@@ -316,7 +316,7 @@ if [ "$kmutil_ok" != yes ]; then
     echo "macOS asks once more. Type y, then your user name and password."
     while ! kmutil configure-boot -c boot.bin --raw --entry-point 2048 --lowest-virtual-address 0 -v "$system_dir"; do
         echo "That didn't work. Press Enter to try again."
-        read
+        read -r _
     done
 fi
 
@@ -325,13 +325,14 @@ if [ -e "$system_dir/.IAPhysicalMedia" ]; then
     mv "$system_dir/.IAPhysicalMedia" "$system_dir/IAPhysicalMedia-disabled.plist"
 fi
 if [ -e "$system_dir/System/Library/CoreServices/SystemVersion-disabled.plist" ]; then
-    mv -f "$system_dir/System/Library/CoreServices/SystemVersion"{-disabled,}".plist"
+    mv -f "$system_dir/System/Library/CoreServices/SystemVersion-disabled.plist" \\
+        "$system_dir/System/Library/CoreServices/SystemVersion.plist"
 fi
 cleanup
 
 echo
 echo "${BOLD}Done.${RST} Press Enter to restart into $os_name."
-read
+read -r _
 reboot
 """
 

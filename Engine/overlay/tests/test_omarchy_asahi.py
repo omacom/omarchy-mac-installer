@@ -814,6 +814,9 @@ class Step2ScriptTests(unittest.TestCase):
     """The Recovery setup: the installer's own name and one password prompt."""
 
     title = "Probe Installer"
+    # How macOS and its recoveryOS run step2.sh's #!/bin/sh: bash in POSIX
+    # mode. (Linux's /bin/sh is often dash, which the class below covers.)
+    shell = [shutil.which("bash") or "/bin/bash", "--posix"]
 
     def make(self, owner):
         root = tempfile.TemporaryDirectory()
@@ -864,7 +867,7 @@ class Step2ScriptTests(unittest.TestCase):
         # The recoveryOS checks stay.
         self.assertIn("': Paired'", text)
         self.assertIn("'one true recoveryOS'", text)
-        result = subprocess.run(["bash", "-n", str(step2)])
+        result = subprocess.run([*self.shell, "-n", str(step2)])
         self.assertEqual(result.returncode, 0)
 
     def step2_with_fakes(self, kmutil_body, paired=True, bputil_mode="ok", password="secret",
@@ -936,7 +939,7 @@ class Step2ScriptTests(unittest.TestCase):
 
     def run_step2(self, kmutil_body, stdin="y\nsecret\n\n", **options):
         script, env, calls = self.step2_with_fakes(kmutil_body, **options)
-        result = subprocess.run(["/bin/sh", str(script)], input=stdin, env=env,
+        result = subprocess.run([*self.shell, str(script)], input=stdin, env=env,
                                 capture_output=True, text=True, timeout=60)
         kmutil_calls = int(calls.read_text()) if calls.exists() else 0
         return result, kmutil_calls, calls
@@ -1026,7 +1029,7 @@ class Step2ScriptTests(unittest.TestCase):
     def test_ctrl_c_stops_everything_it_started(self):
         import signal
         script, env, calls = self.step2_with_fakes("exit 0", bputil_mode="hang")
-        process = subprocess.Popen(["/bin/sh", str(script)], env=env, stdin=subprocess.PIPE,
+        process = subprocess.Popen([*self.shell, str(script)], env=env, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                    start_new_session=True)
         process.stdin.write("y\nsecret\n")
@@ -1112,6 +1115,13 @@ class Step2ScriptTests(unittest.TestCase):
             {"##TITLE##", "##VGID##", "##PREBOOT##", "##OWNER##"},
         )
 
+
+
+@unittest.skipUnless(shutil.which("dash"), "dash is not installed")
+class Step2ScriptDashTests(Step2ScriptTests):
+    """The same under dash: step2.sh is #!/bin/sh, so it must stay POSIX."""
+
+    shell = [shutil.which("dash") or "dash"]
 
 if __name__ == "__main__":
     unittest.main()
