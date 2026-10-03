@@ -306,7 +306,8 @@ hidden_kmutil() {
         script -q -t 0 "$kmutil_log" \\
             /bin/sh -c 'echo $$ >/tmp/kmutil.pid; exec kmutil configure-boot -c boot.bin --raw --entry-point 2048 --lowest-virtual-address 0 -v "$1"' \\
             sh "$system_dir" >/dev/null 2>&1 || status=$?
-        # kmutil has exited: never signal its process ID again.
+        # kmutil must not outlive script: stop it if it did, then forget its ID.
+        stop_pid_in /tmp/kmutil.pid
         rm -f /tmp/kmutil.pid
         touch /tmp/kmutil.done
         exit "$status"

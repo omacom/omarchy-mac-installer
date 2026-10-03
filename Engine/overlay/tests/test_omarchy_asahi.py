@@ -902,8 +902,17 @@ class Step2ScriptTests(unittest.TestCase):
             "reboot": "exit 0",
             "shutdown": "exit 0",
             # script -q -t 0 log command...: the command's output goes to the
-            # log, which is kept for the test because step2.sh deletes it.
-            "script": 'log=$4; shift 4; "$@" >"$log" 2>&1; s=$?; cp "$log" "$CALLS.kmutil-log"; exit $s',
+            # log, which is kept for the test because step2.sh deletes it. Like
+            # the real script, which gives kmutil its own session on a hidden
+            # terminal, Ctrl-C ends script but never reaches kmutil: here
+            # kmutil runs in the background, where SIGINT is ignored.
+            "script": "\n".join((
+                'log=$4; shift 4',
+                "trap 'exit 130' INT",
+                '"$@" <&0 >"$log" 2>&1 &',
+                'wait $!; s=$?',
+                'cp "$log" "$CALLS.kmutil-log"; exit $s',
+            )),
             # Every sleep lasts 50 ms, so the one-minute deadline is twelve seconds.
             "sleep": f"exec {sleep} 0.05",
             # Like macOS's bless, it exits 0 whatever the password, and only
