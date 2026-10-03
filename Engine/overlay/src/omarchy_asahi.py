@@ -172,11 +172,6 @@ if ! grep -q ': Paired' /tmp/bp.txt; then
     else
         echo "This step needs $os_name's own Recovery. Making $os_name the startup"
         echo "disk so that the next start opens it."
-        # After the Recovery login, recoveryOS's bless has set the startup disk
-        # without checking the password (macOS 26.6.2), so try that first.
-        printf '\\n' | bless --setBoot --mount "$system_dir" --user "$OWNER" --stdinpass >/tmp/bless.log 2>&1 || true
-    fi
-    if ! omarchy_is_startup; then
         echo
         # bless takes the known owner and the password on stdin. It exits 0
         # even when it rejects the password, so check the startup disk instead.

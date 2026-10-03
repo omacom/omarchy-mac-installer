@@ -868,7 +868,7 @@ class Step2ScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
 
     def step2_with_fakes(self, kmutil_body, paired=True, bputil_mode="ok", password="secret",
-                         startup="macos", bless_checks=True):
+                         startup="macos"):
         """step2.sh in place, with fake recoveryOS tools first on PATH."""
         step2 = self.make("scott")
         root = Path(step2).parent
@@ -910,8 +910,7 @@ class Step2ScriptTests(unittest.TestCase):
                 'echo "$*" >>"$CALLS.bless"',
                 'case "$*" in',
                 '*--stdinpass) IFS= read -r pw; echo "$pw" >>"$CALLS.bless"',
-                '    { [ "$BLESS_CHECKS" = no ] || [ "$pw" = "$EXPECTED_PASSWORD" ]; } &&'
-                '    echo /dev/omarchy >"$CALLS.boot" ;;',
+                '    [ "$pw" = "$EXPECTED_PASSWORD" ] && echo /dev/omarchy >"$CALLS.boot" ;;',
                 # Without --stdinpass, bless asks the owner itself.
                 '*) echo /dev/omarchy >"$CALLS.boot" ;;',
                 'esac',
@@ -932,8 +931,7 @@ class Step2ScriptTests(unittest.TestCase):
         calls = root / "kmutil-calls"
         Path(f"{calls}.boot").write_text("/dev/omarchy\n" if startup == "omarchy" else "/dev/disk0s2\n")
         env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", CALLS=str(calls),
-                   PIPED=str(root / "piped"), EXPECTED_PASSWORD=password, BPUTIL_MODE=bputil_mode,
-                   BLESS_CHECKS="yes" if bless_checks else "no")
+                   PIPED=str(root / "piped"), EXPECTED_PASSWORD=password, BPUTIL_MODE=bputil_mode)
         return script, env, calls
 
     def run_step2(self, kmutil_body, stdin="y\nsecret\n\n", **options):
@@ -1053,9 +1051,10 @@ class Step2ScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("Password for scott:", result.stdout)
         root = calls.parent
-        # First without a password, then with the one typed.
-        attempt = f"--setBoot --mount {root / 'Omarchy'} --user scott --stdinpass"
-        self.assertEqual(Path(f"{calls}.bless").read_text().splitlines(), [attempt, "", attempt, "secret"])
+        self.assertEqual(
+            Path(f"{calls}.bless").read_text().splitlines(),
+            [f"--setBoot --mount {root / 'Omarchy'} --user scott --stdinpass", "secret"],
+        )
         self.assertEqual(Path(f"{calls}.boot").read_text(), "/dev/omarchy\n")
         self.assertIn("choose Omarchy, and log in.", result.stdout)
         self.assertEqual(kmutil_calls, 0)
@@ -1074,15 +1073,6 @@ class Step2ScriptTests(unittest.TestCase):
         self.assertEqual(Path(f"{calls}.bless").read_text().splitlines()[-1],
                          f"--setBoot --mount {calls.parent / 'Omarchy'}")
         self.assertEqual(Path(f"{calls}.boot").read_text(), "/dev/omarchy\n")
-
-    def test_an_unpaired_recovery_asks_nothing_when_bless_needs_no_password(self):
-        # recoveryOS's bless set the startup disk after a wrong password on
-        # macOS 26.6.2, so step2.sh tries it without one first.
-        result, _, calls = self.run_step2("exit 0", stdin="\n", paired=False, bless_checks=False)
-        self.assertEqual(result.returncode, 1)
-        self.assertNotIn("Password for", result.stdout)
-        self.assertEqual(Path(f"{calls}.boot").read_text(), "/dev/omarchy\n")
-        self.assertIn("choose Omarchy, and log in.", result.stdout)
 
     def test_an_unpaired_recovery_already_starting_omarchy_asks_nothing(self):
         result, _, calls = self.run_step2("exit 0", stdin="\n", paired=False, startup="omarchy")
