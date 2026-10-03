@@ -565,7 +565,8 @@
             ;;
           install|retry-recovery-authorization)
             [ "$OMARCHY_ENGINE_MODE" = "\(expectedInstallMode)" ] || exit 64
-            [ "$DISTRO" = "Omarchy MX Mac" ] || exit 68
+            [ "$DISTRO" = "Omarchy" ] || exit 68
+            [ "$OMARCHY_INSTALLER_NAME" = "\(InstallerProductIdentity.appName)" ] || exit 83
             [ "$DISTRO_DOCS" = "https://omarchy.org/manual/" ] || exit 69
             [ "$OMARCHY_MACHINE_OWNER" = "mina" ] || exit 67
             IFS= read -r owner_password || exit 66

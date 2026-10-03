@@ -26,12 +26,365 @@ from omarchy_image import (
 TARGET = "apple-silicon-full-os"
 MAXIMUM_PASSWORD_BYTES = 1_024
 MACHINE_OWNER_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,255}$")
+INSTALLER_TITLE_PATTERN = re.compile(r"^[A-Za-z0-9 ._()-]{1,64}$")
+VOLUME_GROUP_PATTERN = re.compile(r"^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$")
 PARTITION_PATTERN = re.compile(r"^disk[0-9]+s[0-9]+$")
 READBACK_CHUNK_BYTES = 1024 * 1024
 
 
 class AsahiAdapterError(RuntimeError):
     pass
+
+
+# The Recovery setup that the stub's "Finish Installation" app opens in
+# Terminal, replacing asahi-installer's step2.sh: the installer's own name, one
+# password prompt and one confirmation. bputil and bless take the owner and
+# password as arguments; kmutil has no credential options, so the script
+# answers its prompts on a hidden terminal.
+STEP2_SCRIPT = """#!/bin/sh
+# SPDX-License-Identifier: MIT
+# ##TITLE##, second step. Runs in the new install's own recoveryOS.
+
+set -e
+
+VGID="##VGID##"
+PREBOOT="##PREBOOT##"
+OWNER="##OWNER##"
+
+self="$0"
+cd "${self%%step2.sh}"
+system_dir="$(cd ../../../; pwd)"
+os_name="${system_dir##*/}"
+
+BOLD="$(printf '\\033[1m')"
+RST="$(printf '\\033[m')"
+
+LOGS="/tmp/bp.txt /tmp/bless.log /tmp/bputil.log /tmp/bputil.status
+/tmp/kmutil.log /tmp/kmutil.status /tmp/kmutil.pid /tmp/kmutil.done"
+spinner_pid=""
+
+# Stop the kmutil whose ID is in file $1, and wait until it is gone. A process
+# that has since reused the ID is left alone.
+stop_pid_in() {
+    [ -s "$1" ] || return 0
+    pid="$(cat "$1")"
+    if command -v ps >/dev/null 2>&1; then
+        case "$(ps -p "$pid" -o args= 2>/dev/null)" in
+            *kmutil*configure-boot*) ;;
+            *) return 0 ;;
+        esac
+    fi
+    kill "$pid" 2>/dev/null || return 0
+    waited=0
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$waited" -eq 20 ]; then
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+}
+
+# On any exit: stop what this script started, restore the terminal, and
+# forget the password and the logs.
+cleanup() {
+    if [ -n "$spinner_pid" ]; then
+        kill "$spinner_pid" 2>/dev/null || true
+        spinner_pid=""
+    fi
+    stop_pid_in /tmp/kmutil.pid
+    stty echo 2>/dev/null || true
+    PASSWORD=""
+    rm -f $LOGS
+}
+trap cleanup EXIT
+# bputil runs in the foreground, so Ctrl-C reaches it. kmutil runs under
+# script on a hidden terminal; cleanup stops it through its PID file.
+trap 'echo; echo "Stopped. Run this again to finish setting up $os_name."; exit 130' INT TERM HUP
+
+# Spin after the current line until file $1 exists. After $2 seconds, stop
+# the process whose ID is in file $3, if one is given. Runs in the background.
+spin_until() {
+    spun=0
+    printf ' '
+    while [ ! -e "$1" ]; do
+        if [ "$spun" -eq $(($2 * 4)) ] && [ -n "$3" ]; then
+            stop_pid_in "$3"
+        fi
+        case $((spun % 4)) in
+            0) c='|' ;;
+            1) c='/' ;;
+            2) c='-' ;;
+            *) c='\\' ;;
+        esac
+        printf '\\b%s' "$c"
+        sleep 0.25
+        spun=$((spun + 1))
+    done
+    printf '\\b '
+}
+
+# Run the rest of the line with a spinner after the current line, which the
+# caller ends. Its exit status lands in file $1; after $2 seconds the process
+# in file $3 is stopped.
+run_with_spinner() {
+    status_file=$1
+    deadline=$2
+    pid_file=$3
+    shift 3
+    rm -f "$status_file"
+    spin_until "$status_file" "$deadline" "$pid_file" &
+    spinner_pid=$!
+    status=0
+    "$@" || status=$?
+    echo "$status" >"$status_file"
+    wait "$spinner_pid" 2>/dev/null || true
+    spinner_pid=""
+    return "$status"
+}
+
+bputil_now() {
+    bputil -nc -v "$VGID" -u "$OWNER" -p "$PASSWORD" >/tmp/bputil.log 2>&1
+}
+
+read_password() {
+    printf "Password for %s: " "$OWNER"
+    stty -echo
+    IFS= read -r PASSWORD
+    stty echo
+    echo
+}
+
+printf '\\033[2J\\033[H'
+echo "${BOLD}##TITLE##${RST}"
+echo
+
+bputil -d -v "$VGID" >/tmp/bp.txt
+
+if [ -z "$OWNER" ]; then
+    printf "Your macOS user name: "
+    read -r OWNER
+fi
+
+# Whether the startup disk is this Omarchy: bless names a volume of its group.
+omarchy_is_startup() {
+    boot="$(bless --getBoot 2>/dev/null)" || return 1
+    [ -n "$boot" ] || return 1
+    diskutil info "$boot" 2>/dev/null | grep -Eiq "^ *APFS Volume Group: +$VGID *\\$" && return 0
+    [ "$boot" = "$(diskutil info "$system_dir" 2>/dev/null | sed -n 's/^ *Device Node: *//p')" ]
+}
+
+if ! grep -q ': Paired' /tmp/bp.txt; then
+    if omarchy_is_startup; then
+        echo "This step needs $os_name's own Recovery. $os_name is already the"
+        echo "startup disk, so the next start opens it."
+    else
+        echo "This step needs $os_name's own Recovery. Making $os_name the startup"
+        echo "disk so that the next start opens it."
+        echo
+        # bless takes the known owner and the password on stdin. It exits 0
+        # even when it rejects the password, so check the startup disk instead.
+        # After three failures, let bless ask on its own.
+        tries=0
+        while :; do
+            read_password
+            printf '%s\\n' "$PASSWORD" | bless --setBoot --mount "$system_dir" --user "$OWNER" --stdinpass >/tmp/bless.log 2>&1 || true
+            if omarchy_is_startup; then
+                break
+            fi
+            tries=$((tries + 1))
+            if [ "$tries" -ge 3 ]; then
+                echo "macOS asks itself now. Type your user name and password."
+                until bless --setBoot --mount "$system_dir" && omarchy_is_startup; do
+                    echo "That didn't work. Press Enter to try again."
+                    read -r _
+                done
+                break
+            fi
+            echo "That password didn't work for $OWNER. Try again."
+            echo
+        done
+        PASSWORD=""
+    fi
+    echo
+    echo "Press Enter to shut down. Then hold the power button until you see"
+    echo "'Loading startup options', choose $os_name, and log in."
+    read -r _
+    shutdown -h now
+    exit 1
+fi
+
+if ! grep -q 'one true recoveryOS' /tmp/bp.txt; then
+    echo "The power button was released too early to finish setting up."
+    echo
+    echo "Press Enter to shut down. Then hold the power button, without letting"
+    echo "go, until you see 'Loading startup options', and choose $os_name."
+    read -r _
+    shutdown -h now
+    exit 1
+fi
+
+echo "This lets $os_name start Linux by lowering the security level of"
+echo "$os_name only. ${BOLD}macOS keeps Full Security.${RST}"
+echo
+# Ask before anything changes: bputil lowers the security level at once.
+printf "Are you sure you want to do this? (y or n) "
+read -r answer
+case "$answer" in
+    y|Y|yes|Yes|YES) ;;
+    *)
+        echo "Nothing was changed. Run this again when you're ready."
+        exit 1
+        ;;
+esac
+echo
+
+tries=0
+while :; do
+    read_password
+    printf "Updating %s's security settings..." "$os_name"
+    if run_with_spinner /tmp/bputil.status 0 "" bputil_now; then
+        echo
+        break
+    fi
+    # Nothing was updated: replace that line. bputil's log opens with its own
+    # disclaimer, so don't show it here.
+    printf '\\r\\033[K'
+    tries=$((tries + 1))
+    if [ "$tries" -ge 3 ]; then
+        echo "macOS asks itself now. Type your user name and password."
+        while ! bputil -nc -v "$VGID"; do
+            echo "That didn't work. Press Enter to try again."
+            read -r _
+        done
+        # The typed password was rejected: never offer it to kmutil.
+        PASSWORD=""
+        break
+    fi
+    echo "That password didn't work for $OWNER. Try again."
+    echo
+done
+
+if [ -e "/System/Volumes/iSCPreboot/$VGID/boot" ]; then
+    # An external volume: kmutil looks for AdminUserRecoveryInfo.plist in the
+    # wrong place.
+    diskutil mount "$PREBOOT"
+    preboot="$(diskutil info "$PREBOOT" | grep "Mount Point" | sed 's, *Mount Point: *,,')"
+    cp -R "$preboot/$VGID/var" "/System/Volumes/iSCPreboot/$VGID/"
+fi
+
+printf "Installing Omarchy's boot loader..."
+# kmutil asks "are you sure" on stdin, then reads a user name and password
+# from its terminal, discarding anything typed ahead. So run it on a hidden
+# terminal (script) and type each answer once its prompt appears. The
+# password is typed with echo off, so the log never holds it. A small
+# wrapper records kmutil's own process ID, so that if kmutil fails or is
+# still running after a minute, it is stopped and the owner answers it.
+kmutil_log=/tmp/kmutil.log
+kmutil_status=/tmp/kmutil.status
+kmutil_wait_for() {
+    tries=0
+    while ! grep -q "$1" "$kmutil_log" 2>/dev/null; do
+        [ ! -e /tmp/kmutil.done ] && [ "$tries" -lt 600 ] || return 1
+        sleep 0.1
+        tries=$((tries + 1))
+    done
+}
+kmutil_answers() {
+    kmutil_wait_for 'enter y or n' && printf 'y\\n' &&
+        kmutil_wait_for 'Username:' && printf '%s\\n' "$OWNER" &&
+        kmutil_wait_for 'Password:' && printf '%s\\n' "$PASSWORD"
+    # Keep kmutil's input open until it exits.
+    while [ ! -e /tmp/kmutil.done ]; do
+        sleep 0.1
+    done
+}
+hidden_kmutil() {
+    rm -f /tmp/kmutil.done
+    kmutil_answers 2>/dev/null | {
+        status=0
+        script -q -t 0 "$kmutil_log" \\
+            /bin/sh -c 'echo $$ >/tmp/kmutil.pid; exec kmutil configure-boot -c boot.bin --raw --entry-point 2048 --lowest-virtual-address 0 -v "$1"' \\
+            sh "$system_dir" >/dev/null 2>&1 || status=$?
+        # kmutil must not outlive script: stop it if it did, then forget its ID.
+        stop_pid_in /tmp/kmutil.pid
+        rm -f /tmp/kmutil.pid
+        touch /tmp/kmutil.done
+        exit "$status"
+    }
+}
+kmutil_ok=no
+if [ -n "$PASSWORD" ] && command -v script >/dev/null 2>&1; then
+    rm -f "$kmutil_log" /tmp/kmutil.pid
+    if run_with_spinner "$kmutil_status" 60 /tmp/kmutil.pid hidden_kmutil; then
+        kmutil_ok=yes
+    fi
+    echo
+    stop_pid_in /tmp/kmutil.pid
+fi
+PASSWORD=""
+if [ "$kmutil_ok" != yes ]; then
+    echo
+    echo "macOS asks once more. Type y, then your user name and password."
+    while ! kmutil configure-boot -c boot.bin --raw --entry-point 2048 --lowest-virtual-address 0 -v "$system_dir"; do
+        echo "That didn't work. Press Enter to try again."
+        read -r _
+    done
+fi
+
+mount -u -w "$system_dir"
+if [ -e "$system_dir/.IAPhysicalMedia" ]; then
+    mv "$system_dir/.IAPhysicalMedia" "$system_dir/IAPhysicalMedia-disabled.plist"
+fi
+if [ -e "$system_dir/System/Library/CoreServices/SystemVersion-disabled.plist" ]; then
+    mv -f "$system_dir/System/Library/CoreServices/SystemVersion-disabled.plist" \\
+        "$system_dir/System/Library/CoreServices/SystemVersion.plist"
+fi
+cleanup
+
+echo
+echo "${BOLD}Done.${RST} Press Enter to restart into $os_name."
+read -r _
+reboot
+"""
+
+
+def _write_step2(installer):
+    owner = os.environ.get("OMARCHY_MACHINE_OWNER", "")
+    if owner and MACHINE_OWNER_PATTERN.fullmatch(owner) is None:
+        raise AsahiAdapterError("machine owner name is invalid for the Recovery setup")
+    # The app passes its configured name (Packaging/identity.conf).
+    title = os.environ.get("OMARCHY_INSTALLER_NAME") or (
+        os.environ.get("DISTRO", "Omarchy") + " installer"
+    )
+    if INSTALLER_TITLE_PATTERN.fullmatch(title) is None:
+        raise AsahiAdapterError("installer name is invalid for the Recovery setup")
+    for name, value in (("volume group", installer.osi.vgid), ("Preboot volume group", installer.osi.preboot_vgid)):
+        if VOLUME_GROUP_PATTERN.fullmatch(value or "") is None:
+            raise AsahiAdapterError(f"{name} is invalid for the Recovery setup")
+    script = (
+        STEP2_SCRIPT.replace("##TITLE##", title)
+        .replace("##VGID##", installer.osi.vgid)
+        .replace("##PREBOOT##", installer.osi.preboot_vgid)
+        .replace("##OWNER##", owner)
+    )
+    with open(installer.step2_sh, "w") as fd:
+        fd.write(script)
+    os.chmod(installer.step2_sh, 0o755)
+
+
+def stub_installer(sysinfo, dutil, osinfo):
+    """A StubInstaller whose Recovery setup is Omarchy's own step2.sh."""
+    installer = stub.StubInstaller(sysinfo, dutil, osinfo)
+    install_files = installer.install_files
+
+    def install_files_with_omarchys_step2(cur_os):
+        result = install_files(cur_os)
+        _write_step2(installer)
+        return result
+
+    installer.install_files = install_files_with_omarchys_step2
+    return installer
 
 
 class AsahiInPlaceRepairAdapter:
@@ -238,7 +591,7 @@ class AsahiInPlaceRepairAdapter:
         if len(matches) != 1:
             raise AsahiAdapterError("repair stub identity changed")
         target = matches[0]
-        existing = stub.StubInstaller(
+        existing = stub_installer(
             self.installer.sysinfo,
             self.installer.dutil,
             self.installer.osinfo,
@@ -348,7 +701,7 @@ class AsahiStage1Adapter:
         ipsw = self.installer.choose_ipsw(
             self.template.get("supported_fw"),
         )
-        self.installer.ins = stub.StubInstaller(
+        self.installer.ins = stub_installer(
             self.installer.sysinfo,
             self.installer.dutil,
             self.installer.osinfo,

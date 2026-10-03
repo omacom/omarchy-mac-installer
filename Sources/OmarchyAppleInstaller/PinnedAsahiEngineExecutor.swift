@@ -423,7 +423,8 @@
         "OMARCHY_ENGINE_BINDING_DIGEST": package.bindingDigest,
         "OMARCHY_ENGINE_PLAN_DIGEST": package.planDigest,
         "OMARCHY_MACHINE_OWNER": authorization.username,
-        "DISTRO": "Omarchy MX Mac",
+        "DISTRO": "Omarchy",
+        "OMARCHY_INSTALLER_NAME": InstallerProductIdentity.appName,
         "DISTRO_DOCS": "https://omarchy.org/manual/",
       ]
       if let repairManifestURL = package.repairManifestURL {
