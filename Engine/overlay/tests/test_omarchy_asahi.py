@@ -817,6 +817,8 @@ class Step2ScriptTests(unittest.TestCase):
     # How macOS and its recoveryOS run step2.sh's #!/bin/sh: bash in POSIX
     # mode. (Linux's /bin/sh is often dash, which the class below covers.)
     shell = [shutil.which("bash") or "/bin/bash", "--posix"]
+    # The fake recoveryOS tools' interpreter.
+    fake_shell = "/bin/sh"
 
     def make(self, owner):
         root = tempfile.TemporaryDirectory()
@@ -905,11 +907,14 @@ class Step2ScriptTests(unittest.TestCase):
             # log, which is kept for the test because step2.sh deletes it. Like
             # the real script, which gives kmutil its own session on a hidden
             # terminal, Ctrl-C ends script but never reaches kmutil: here
-            # kmutil runs in the background, where SIGINT is ignored.
+            # kmutil runs in the background, where SIGINT is ignored. Its
+            # answers come through descriptor 3, since dash replaces a
+            # background job's stdin with /dev/null even after <&0.
             "script": "\n".join((
                 'log=$4; shift 4',
                 "trap 'exit 130' INT",
-                '"$@" <&0 >"$log" 2>&1 &',
+                'exec 3<&0',
+                '"$@" <&3 3<&- >"$log" 2>&1 &',
                 'wait $!; s=$?',
                 'cp "$log" "$CALLS.kmutil-log"; exit $s',
             )),
@@ -938,7 +943,7 @@ class Step2ScriptTests(unittest.TestCase):
             "kmutil": 'n=$(($(cat "$CALLS" 2>/dev/null || echo 0) + 1)); echo "$n" >"$CALLS"\n' + kmutil_body,
         }
         for name, body in fakes.items():
-            (bin_dir / name).write_text("#!/bin/sh\n" + body + "\n")
+            (bin_dir / name).write_text(f"#!{self.fake_shell}\n" + body + "\n")
             (bin_dir / name).chmod(0o755)
         calls = root / "kmutil-calls"
         Path(f"{calls}.boot").write_text("/dev/omarchy\n" if startup == "omarchy" else "/dev/disk0s2\n")
@@ -1199,6 +1204,8 @@ class Step2ScriptDashTests(Step2ScriptTests):
     """The same under dash: step2.sh is #!/bin/sh, so it must stay POSIX."""
 
     shell = [shutil.which("dash") or "dash"]
+    # Linux's /bin/sh is often dash, so the fakes run under it too.
+    fake_shell = shutil.which("dash") or "dash"
 
 if __name__ == "__main__":
     unittest.main()
