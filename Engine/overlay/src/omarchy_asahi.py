@@ -27,6 +27,7 @@ TARGET = "apple-silicon-full-os"
 MAXIMUM_PASSWORD_BYTES = 1_024
 MACHINE_OWNER_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,255}$")
 INSTALLER_TITLE_PATTERN = re.compile(r"^[A-Za-z0-9 ._()-]{1,64}$")
+VOLUME_GROUP_PATTERN = re.compile(r"^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$")
 PARTITION_PATTERN = re.compile(r"^disk[0-9]+s[0-9]+$")
 READBACK_CHUNK_BYTES = 1024 * 1024
 
@@ -62,10 +63,17 @@ LOGS="/tmp/bp.txt /tmp/bless.log /tmp/bputil.log /tmp/bputil.status
 /tmp/kmutil.log /tmp/kmutil.status /tmp/kmutil.pid /tmp/kmutil.done"
 spinner_pid=""
 
-# Stop the process whose ID is in file $1, and wait until it is gone.
+# Stop the kmutil whose ID is in file $1, and wait until it is gone. A process
+# that has since reused the ID is left alone.
 stop_pid_in() {
     [ -s "$1" ] || return 0
     pid="$(cat "$1")"
+    if command -v ps >/dev/null 2>&1; then
+        case "$(ps -p "$pid" -o args= 2>/dev/null)" in
+            *kmutil*configure-boot*) ;;
+            *) return 0 ;;
+        esac
+    fi
     kill "$pid" 2>/dev/null || return 0
     waited=0
     while kill -0 "$pid" 2>/dev/null; do
@@ -90,7 +98,8 @@ cleanup() {
     rm -f $LOGS
 }
 trap cleanup EXIT
-# bputil and kmutil run in the foreground, so Ctrl-C reaches them too.
+# bputil runs in the foreground, so Ctrl-C reaches it. kmutil runs under
+# script on a hidden terminal; cleanup stops it through its PID file.
 trap 'echo; echo "Stopped. Run this again to finish setting up $os_name."; exit 130' INT TERM HUP
 
 # Spin after the current line until file $1 exists. After $2 seconds, stop
@@ -161,7 +170,7 @@ fi
 omarchy_is_startup() {
     boot="$(bless --getBoot 2>/dev/null)" || return 1
     [ -n "$boot" ] || return 1
-    diskutil info "$boot" 2>/dev/null | grep -q "$VGID" && return 0
+    diskutil info "$boot" 2>/dev/null | grep -Eiq "^ *APFS Volume Group: +$VGID *\\$" && return 0
     [ "$boot" = "$(diskutil info "$system_dir" 2>/dev/null | sed -n 's/^ *Device Node: *//p')" ]
 }
 
@@ -248,6 +257,8 @@ while :; do
             echo "That didn't work. Press Enter to try again."
             read -r _
         done
+        # The typed password was rejected: never offer it to kmutil.
+        PASSWORD=""
         break
     fi
     echo "That password didn't work for $OWNER. Try again."
@@ -302,7 +313,7 @@ hidden_kmutil() {
     }
 }
 kmutil_ok=no
-if command -v script >/dev/null 2>&1; then
+if [ -n "$PASSWORD" ] && command -v script >/dev/null 2>&1; then
     rm -f "$kmutil_log" /tmp/kmutil.pid
     if run_with_spinner "$kmutil_status" 60 /tmp/kmutil.pid hidden_kmutil; then
         kmutil_ok=yes
@@ -347,6 +358,9 @@ def _write_step2(installer):
     )
     if INSTALLER_TITLE_PATTERN.fullmatch(title) is None:
         raise AsahiAdapterError("installer name is invalid for the Recovery setup")
+    for name, value in (("volume group", installer.osi.vgid), ("Preboot volume group", installer.osi.preboot_vgid)):
+        if VOLUME_GROUP_PATTERN.fullmatch(value or "") is None:
+            raise AsahiAdapterError(f"{name} is invalid for the Recovery setup")
     script = (
         STEP2_SCRIPT.replace("##TITLE##", title)
         .replace("##VGID##", installer.osi.vgid)

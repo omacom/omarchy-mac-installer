@@ -51,10 +51,10 @@ class FakeStubInstaller:
         self.calls = []
         self.recovery = tempfile.TemporaryDirectory()
         self.osi = SimpleNamespace(
-            vgid="vgid-1",
+            vgid="11111111-2222-3333-4444-555555555555",
             sys_volume="System",
             recovery=self.recovery.name,
-            preboot_vgid="preboot-1",
+            preboot_vgid="66666666-7777-8888-9999-AAAAAAAAAAAA",
         )
         # Where the real stub writes the Recovery setup that Omarchy replaces.
         self.step2_sh = os.path.join(self.recovery.name, "step2.sh")
@@ -186,7 +186,7 @@ class AsahiStage1AdapterTests(unittest.TestCase):
             target_evidence["partition_identifier"],
             "disk0s4",
         )
-        self.assertEqual(installed_evidence["apfs_vgid"], "vgid-1")
+        self.assertEqual(installed_evidence["apfs_vgid"], "11111111-2222-3333-4444-555555555555")
         self.assertEqual(installed_evidence["efi_partition"], "efi-uuid")
         self.assertEqual(
             installed_evidence["startup_volume_icon"],
@@ -826,7 +826,7 @@ class Step2ScriptTests(unittest.TestCase):
 
         class Stub:
             def __init__(self, *args):
-                self.osi = SimpleNamespace(vgid="VG-1", preboot_vgid="PB-1", recovery=root.name)
+                self.osi = SimpleNamespace(vgid="0B1C2D3E-4F50-6172-8394-A5B6C7D8E9F0", preboot_vgid="1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809", recovery=root.name)
                 self.step2_sh = str(step2)
 
             def load_identity(self):
@@ -852,8 +852,8 @@ class Step2ScriptTests(unittest.TestCase):
         self.assertIn("${BOLD}Probe Installer${RST}", text)
         self.assertNotIn("MX Mac", text)
         self.assertEqual(re.findall(r"##[A-Z]+##", text), [])
-        self.assertIn('VGID="VG-1"', text)
-        self.assertIn('PREBOOT="PB-1"', text)
+        self.assertIn('VGID="0B1C2D3E-4F50-6172-8394-A5B6C7D8E9F0"', text)
+        self.assertIn('PREBOOT="1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809"', text)
         self.assertIn('OWNER="scott"', text)
         # One prompt, kept whole: leading and trailing spaces are part of it.
         self.assertEqual(text.count("read -r PASSWORD"), 1)
@@ -897,7 +897,7 @@ class Step2ScriptTests(unittest.TestCase):
                 '[ "$BPUTIL_MODE" = fail ] && exit 1',
                 "exit 0",
             )),
-            "stty": "exit 0",
+            "stty": 'echo "$*" >>"$CALLS.stty"',
             "mount": "exit 0",
             "reboot": "exit 0",
             "shutdown": "exit 0",
@@ -922,7 +922,7 @@ class Step2ScriptTests(unittest.TestCase):
             "diskutil": "\n".join((
                 '[ "$1" = info ] || exit 0',
                 'case "$2" in',
-                "/dev/omarchy|*/Omarchy) printf '   Device Node:  /dev/omarchy\\n   APFS Volume Group:  VG-1\\n' ;;",
+                "/dev/omarchy|*/Omarchy) printf '   Device Node:  /dev/omarchy\\n   APFS Volume Group:  0B1C2D3E-4F50-6172-8394-A5B6C7D8E9F0\\n' ;;",
                 "*) printf '   Device Node:  /dev/disk0s2\\n   APFS Volume Group:  MACOS-VG\\n' ;;",
                 'esac',
             )),
@@ -1002,7 +1002,7 @@ class Step2ScriptTests(unittest.TestCase):
         self.assertIn("macOS asks itself now", result.stdout)
         attempts = Path(f"{calls}.bputil").read_text().splitlines()
         self.assertEqual(len(attempts), 4)
-        self.assertEqual(attempts[-1], "-nc -v VG-1")
+        self.assertEqual(attempts[-1], "-nc -v 0B1C2D3E-4F50-6172-8394-A5B6C7D8E9F0")
 
     def test_a_kmutil_that_fails_is_handed_to_the_owner(self):
         started = time.monotonic()
@@ -1016,8 +1016,9 @@ class Step2ScriptTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 8)
 
     def test_a_kmutil_that_stalls_is_stopped_before_the_owner_answers(self):
+        # It keeps its own command line, as kmutil does, so it can be recognized.
         result, kmutil_calls, calls = self.run_step2(
-            '[ "$n" -gt 1 ] && exit 0\necho $$ >"$CALLS.stalled"\nexec ' + shutil.which("sleep") + " 30")
+            '[ "$n" -gt 1 ] && exit 0\necho $$ >"$CALLS.stalled"\nwhile :; do sleep 1; done')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(kmutil_calls, 2)
         self.assertIn("Type y, then your user name and password", result.stdout)
@@ -1048,6 +1049,73 @@ class Step2ScriptTests(unittest.TestCase):
         with self.assertRaises(ProcessLookupError):
             os.killpg(process.pid, 0)
         self.assert_nothing_left_in_tmp()
+
+    def test_a_rejected_password_never_reaches_kmutil(self):
+        # After three rejected passwords bputil asks macOS itself; the third
+        # rejected one must not then be typed into kmutil.
+        started = time.monotonic()
+        result, kmutil_calls, calls = self.run_step2("exit 0", stdin="y\nw1\nw2\nw3\n\n", bputil_mode="fail")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(kmutil_calls, 1)
+        self.assertFalse(Path(f"{calls}.kmutil-log").exists(), "the hidden kmutil ran")
+        self.assertIn("Type y, then your user name and password", result.stdout)
+        self.assertLess(time.monotonic() - started, 8)
+
+    def interrupt(self, kmutil_body, started_file, stdin, **options):
+        """Run step2.sh, wait for `started_file`, then press Ctrl-C."""
+        import signal
+        script, env, calls = self.step2_with_fakes(kmutil_body, **options)
+        process = subprocess.Popen([*self.shell, str(script)], env=env, stdin=subprocess.PIPE,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   start_new_session=True)
+        process.stdin.write(stdin)
+        process.stdin.flush()
+        started = Path(f"{calls}.{started_file}")
+        deadline = time.monotonic() + 20
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(started.exists(), f"{started_file} never appeared")
+        os.killpg(process.pid, signal.SIGINT)
+        out, _ = process.communicate(timeout=20)
+        self.assertEqual(process.returncode, 130)
+        self.assertIn("Stopped.", out)
+        return calls
+
+    def test_ctrl_c_at_the_password_prompt_restores_echo(self):
+        # The fake stty's log appears when echo is turned off for the prompt.
+        calls = self.interrupt("exit 0", "stty", stdin="y\n")
+        self.assertEqual(Path(f"{calls}.stty").read_text().splitlines(), ["-echo", "echo"])
+        self.assertFalse(Path(f"{calls}.bputil").exists())
+        self.assert_nothing_left_in_tmp()
+
+    def test_ctrl_c_during_the_hidden_kmutil_stops_it(self):
+        # A kmutil that ignores Ctrl-C, as one on its own hidden terminal would.
+        calls = self.interrupt(
+            "trap '' INT\necho $$ >\"$CALLS.kmutil-pid\"\nwhile :; do sleep 1; done",
+            "kmutil-pid", stdin="y\nsecret\n")
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int(Path(f"{calls}.kmutil-pid").read_text()), 0)
+        self.assert_nothing_left_in_tmp()
+
+    def test_a_volume_group_that_is_not_a_uuid_is_refused(self):
+        for vgid in ("", "VG-1", '0B1C2D3E-4F50-6172-8394-A5B6C7D8E9F0"; reboot; "'):
+            root = tempfile.TemporaryDirectory()
+            self.addCleanup(root.cleanup)
+            step2 = Path(root.name) / "step2.sh"
+
+            class Stub:
+                def __init__(self, *args, vgid=vgid):
+                    self.osi = SimpleNamespace(vgid=vgid, preboot_vgid="1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809",
+                                               recovery=root.name)
+                    self.step2_sh = str(step2)
+
+                def install_files(self, cur_os):
+                    pass
+
+            with self.subTest(vgid=vgid), patch("omarchy_asahi.stub.StubInstaller", Stub), patch.dict(
+                os.environ, {"OMARCHY_MACHINE_OWNER": "scott", "OMARCHY_INSTALLER_NAME": self.title}
+            ), self.assertRaisesRegex(AsahiAdapterError, "volume group is invalid"):
+                stub_installer("sysinfo", "dutil", "osinfo").install_files("cur-os")
 
     def test_an_unpaired_recovery_blesses_with_the_known_owner(self):
         result, kmutil_calls, calls = self.run_step2(PROMPTING_KMUTIL, stdin="secret\n\n", paired=False)
