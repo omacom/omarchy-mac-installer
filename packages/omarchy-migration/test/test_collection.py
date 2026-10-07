@@ -303,11 +303,24 @@ class CollectionTests(unittest.TestCase):
                           [{"source": "Projects", "archive": "nested/notes"}],
                           [{"source": "Projects", "archive": ""}],
                           [{"source": "", "archive": ""}, {"source": "Projects", "archive": "projects"}],
-                          [{"source": "Projects", "archive": "notes"}, {"source": ".config", "archive": "notes"}]):
+                          [{"source": "Projects", "archive": "notes"}, {"source": ".config", "archive": "notes"}],
+                          # An ancestor that does not sort next to its descendant.
+                          [{"source": "a", "archive": "a"}, {"source": "a-b", "archive": "b"},
+                           {"source": "a/c", "archive": "c"}],
+                          [{"source": "a", "archive": "a"}, {"source": "a", "archive": "b"}],
+                          [{"source": f"entry-{index}", "archive": f"entry-{index}"} for index in range(1025)]):
             self.request["selection"] = selection
             with self.subTest(selection=selection), self.assertRaises(probe.Rejected):
                 with self.capture():
                     self.fail("invalid selection accepted")
+
+    def test_a_real_home_with_many_top_level_entries_is_one_selection(self):
+        names = [f"entry-{index:03}" for index in range(200)]
+        for name in names:
+            self.write(f"{name}/file", name.encode())
+        self.request["selection"] = [{"source": name, "archive": name} for name in names]
+        with self.capture() as snapshot:
+            self.assertEqual({path.split("/")[0] for path in snapshot.paths}, set(names))
 
     def test_policy_revision_overlap_rule_or_capability_mismatch_is_rejected(self):
         baseline = copy.deepcopy(self.policy)

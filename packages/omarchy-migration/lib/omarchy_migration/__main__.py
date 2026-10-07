@@ -6,6 +6,8 @@ USAGE = """usage: omarchy-migration COMMAND [ARGS]
 
 commands:
   survey     read-only summary of what a migration of this home would bring
+  export     export this home into an encrypted bundle (export-request/2 in, progress/1 out)
+  trial      export, restore into a private scratch folder and compare, without touching the home
   plan       review what importing an exported bundle would do
   apply      import a bundle according to a reviewed plan
   validate   check contract documents
@@ -24,6 +26,12 @@ def main(argv=None):
     if command == "survey":
         from . import survey
         return survey.main(rest)
+    if command == "export":
+        from . import export
+        return export.main(rest)
+    if command == "trial":
+        from . import trial
+        return trial.main(rest)
     if command in ("plan", "apply"):
         from . import review
         return review.main([command, *rest])

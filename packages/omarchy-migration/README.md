@@ -2,7 +2,7 @@
 
 Moves an Omarchy home from Try Omarchy to a native Omarchy installation on the same Mac: a read-only survey, a policy-driven encrypted export, and a reviewable import. Version: see `version` (experimental, `0.x`). The same pinned build runs on both sides, inside the Try VM as the exporter and on the native system as the importer.
 
-Status: exploration. The survey runs against a real home read-only. Export and import are proven on synthetic homes and disposable destinations only; do not use them on real personal data yet.
+Status: exploration. The survey and the trial run against a real home read-only; the trial restores into a private folder outside the home and compares. Importing into a real home is proven on synthetic homes and disposable destinations only; do not use `apply` on real personal data yet.
 
 ## Where this package lives
 
@@ -14,6 +14,8 @@ One difference from the other Mac packages: the exporter runs inside the Try Oma
 
 ```bash
 omarchy-migration survey      # read-only summary of what a migration would bring
+omarchy-migration export ...  # export this home into an encrypted bundle (passphrase on a descriptor)
+omarchy-migration trial       # export, restore into /var/tmp and compare; the home is only read
 omarchy-migration plan  ...   # review what importing a bundle would do (plan/1)
 omarchy-migration apply ...   # import exactly a reviewed plan (report/1)
 omarchy-migration validate F  # check contract documents

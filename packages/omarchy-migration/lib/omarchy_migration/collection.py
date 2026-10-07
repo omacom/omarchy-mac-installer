@@ -73,7 +73,8 @@ def _contracts(request, document, supported):
     except ValueError as error:
         raise probe.Rejected("collection request identity") from error
     selection = request["selection"]
-    if not isinstance(selection, list) or not 1 <= len(selection) <= 32:
+    # A real home selects each top-level entry of its chosen categories.
+    if not isinstance(selection, list) or not 1 <= len(selection) <= contract.MAX_ITEMS:
         raise probe.Rejected("collection selections")
     for item in selection:
         if not isinstance(item, dict) or set(item) != {"source", "archive"}:
@@ -83,10 +84,16 @@ def _contracts(request, document, supported):
         # This slice remaps whole roots, without inventing ancestor metadata.
         if (not item["archive"] and item["source"]) or "/" in item["archive"]:
             raise probe.Rejected("collection archive root requires one component")
-    for index, item in enumerate(selection):
-        for previous in selection[:index]:
-            if any(_beneath(item[key], previous[key]) or _beneath(previous[key], item[key])
-                   for key in ("source", "archive")):
+    # Two roots overlap when one equals or is an ancestor of the other; check
+    # each root's ancestors against the set rather than every pair.
+    for key in ("source", "archive"):
+        values = [item[key] for item in selection]
+        present = set(values)
+        if len(present) != len(values) or ("" in present and len(values) > 1):
+            raise probe.Rejected("overlapping collection selections")
+        for value in values:
+            parts = value.split("/")
+            if any("/".join(parts[:end]) in present for end in range(1, len(parts))):
                 raise probe.Rejected("overlapping collection selections")
     try:
         # The contract validates store, mount and rule shapes and overlaps.
