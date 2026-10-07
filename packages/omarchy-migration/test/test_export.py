@@ -209,6 +209,11 @@ class ExportTests(unittest.TestCase):
         self.assertGreater(outcomes["original-copy"], 3)
         self.assertEqual(outcomes["inert"], 1)  # the Work link into the shared folder
         self.assertEqual(json.loads((workdir / "trial-report.json").read_text())["comparison"], summary["comparison"])
+        details = {(item["source"], item["outcome"]) for item in summary["exception_details"]}
+        self.assertIn((".config/hypr/monitors.lua", "excluded"), details)
+        self.assertIn((".ssh", "held-out"), details)
+        described = trial.describe(summary)
+        self.assertNotIn("transformed", described.split("Not exported, by policy:")[1].splitlines()[0])
         self.assertIn("UNEXPECTED", trial.describe({**summary, "comparison": {
             "outcomes": {"unexpected": 1}, "examples": {"unexpected": ["x"]}}}))
 

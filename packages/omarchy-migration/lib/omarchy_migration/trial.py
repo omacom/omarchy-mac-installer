@@ -23,6 +23,9 @@ from .categories import CATEGORIES, DEFAULT_SELECTED
 from .dependency import admit_age
 
 EXAMPLES = 10
+# Collection outcomes that leave an entry out of the bundle; transformed
+# entries and links kept only in the manifest are exported.
+LEFT_OUT = ("excluded", "held-out", "unsupported")
 
 
 def default_request(policy_revision, categories=None):
@@ -115,6 +118,9 @@ def run_trial(home, workdir, *, age, policy_document, categories=None, emit=lamb
     summary = {
         "workdir": str(workdir), "receipt": receipt, "plan": plan, "report": report, "comparison": comparison,
         "exceptions": Counter(item["outcome"] for item in provenance.get("collection", {}).get("exceptions", [])),
+        # Names and reasons only, never contents: what the policy decided and why.
+        "exception_details": [{key: item[key] for key in ("source", "outcome", "reason", "store", "rule", "mount")}
+                              for item in provenance.get("collection", {}).get("exceptions", [])],
         "metadata_losses": len(provenance.get("metadata", [])),
     }
     with open(workdir / "trial-report.json", "w", encoding="utf-8") as output:
@@ -137,7 +143,7 @@ def describe(summary, removing=False):
     for outcome in ("unexpected", "changed-since-export"):
         for path in comparison["examples"].get(outcome, []):
             lines.append(f"           {outcome}: ~/{path}")
-    held = summary["exceptions"]
+    held = {outcome: count for outcome, count in summary["exceptions"].items() if outcome in LEFT_OUT}
     lines += ["", "Not exported, by policy: " + (", ".join(f"{count} {outcome}" for outcome, count in sorted(held.items())) or "nothing")]
     if summary["metadata_losses"]:
         lines.append(f"Copied without some metadata: {summary['metadata_losses']} entries")
@@ -156,6 +162,8 @@ def main(argv=None):
     parser.add_argument("--category", action="append", choices=CATEGORIES, help="override the default categories")
     parser.add_argument("--remove", action="store_true", help="delete the trial folder when nothing unexpected was found")
     parser.add_argument("--json", action="store_true", help="print the full trial report")
+    parser.add_argument("--details-out", type=Path, default=None,
+                        help="also write the policy exceptions and comparison examples (names only) to this new file")
     arguments = parser.parse_args(argv)
     workdir = Path(tempfile.mkdtemp(prefix="omarchy-migration-trial-", dir=arguments.workdir_parent))
     workdir.chmod(0o700)
@@ -171,6 +179,10 @@ def main(argv=None):
     except Exception as error:  # report and keep the folder for inspection
         print(f"trial: failed: {error}\ntrial: folder kept for inspection: {workdir}", file=sys.stderr)
         return 1
+    if arguments.details_out:
+        details = {"exceptions": summary["exception_details"], "comparison": summary["comparison"]}
+        with open(arguments.details_out, "x", encoding="utf-8") as output:
+            json.dump(details, output, indent=2, sort_keys=True)
     removing = arguments.remove and not summary["comparison"]["outcomes"].get("unexpected")
     print(json.dumps(summary, indent=2, sort_keys=True, default=dict) if arguments.json else describe(summary, removing))
     if removing:
