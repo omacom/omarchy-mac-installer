@@ -134,42 +134,11 @@ class Stage1CoordinatorTests(unittest.TestCase):
         outcome = run_stage1(self.plan, resumed, retry)
 
         self.assertEqual(outcome, "awaiting_recovery")
-        self.assertEqual(retry.calls, [
-            "validate_installed_checkpoint", "prepare_recovery_handoff",
-        ])
+        self.assertEqual(retry.calls, ["prepare_recovery_handoff"])
         self.assertEqual(
             resumed.completion_outcome,
             "awaiting_recovery",
         )
-
-    def test_resume_validates_prepared_target_before_recording_mutation_intent(self):
-        self.journal.event("apfs_preparation_started")
-        self.journal.checkpoint("apfs-target-prepared", "apfs_preparation", b"target")
-        adapter = RecordingStage1Adapter(failure="validate_prepared_checkpoint")
-        before = self.path.read_bytes()
-        with self.assertRaisesRegex(RuntimeError, "synthetic crash"):
-            run_stage1(self.plan, self.journal, adapter)
-        self.assertEqual(adapter.calls, ["validate_prepared_checkpoint"])
-        self.assertEqual(self.path.read_bytes(), before)
-        self.assertFalse(self.journal.has_event("stub_and_esp_started"))
-
-    def test_resume_validates_installed_content_before_recovery(self):
-        first = RecordingStage1Adapter(failure="prepare_recovery_handoff")
-        with self.assertRaises(RuntimeError):
-            run_stage1(self.plan, self.journal, first)
-        retry = RecordingStage1Adapter(failure="validate_installed_checkpoint")
-        with self.assertRaisesRegex(RuntimeError, "synthetic crash"):
-            run_stage1(self.plan, Journal(str(self.path)), retry)
-        self.assertEqual(retry.calls, ["validate_installed_checkpoint"])
-
-    def test_resume_without_a_checkpoint_validator_fails_closed(self):
-        self.journal.event("apfs_preparation_started")
-        self.journal.checkpoint("apfs-target-prepared", "apfs_preparation", b"target")
-        adapter = RecordingStage1Adapter()
-        adapter.validate_prepared_checkpoint = None
-        with self.assertRaisesRegex(Stage1Error, "validate_prepared_checkpoint"):
-            run_stage1(self.plan, self.journal, adapter)
-        self.assertEqual(adapter.calls, [])
 
     def test_explicit_recovery_retry_validates_checkpoint_then_runs_bless_only(self):
         target_evidence = b'{"partition_identifier":"disk0s4"}'
@@ -308,12 +277,8 @@ class RecordingStage1Adapter:
         target_evidence,
         installed_evidence,
     ):
-        self._record("validate_installed_checkpoint", plan)
+        self.calls.append("validate_installed_checkpoint")
         self.validated_evidence = (target_evidence, installed_evidence)
-
-    def validate_prepared_checkpoint(self, plan, target_evidence):
-        self._record("validate_prepared_checkpoint", plan)
-        self.validated_evidence = target_evidence
 
     def _record(self, name, plan):
         self.calls.append(name)

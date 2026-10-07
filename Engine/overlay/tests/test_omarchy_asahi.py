@@ -333,43 +333,6 @@ class AsahiStage1AdapterTests(unittest.TestCase):
 
         self.assertEqual(dutil.add_calls, [])
 
-    def test_resize_geometry_drift_is_rejected_before_mutation(self):
-        source = FakePart("disk0s2", offset=0, size=500 * GIB, free=False)
-        plan = SimpleNamespace(**{
-            **self.plan.__dict__, "candidate_kind": "resize",
-            "source_identifier": source.name, "minimum_container_bytes": 320 * GIB,
-        })
-        dutil = FakeDiskUtil([[source]])
-        adapter = self._adapter(FakeInstaller(dutil))
-        adapter.preflight(plan)
-        with self.assertRaisesRegex(AsahiAdapterError, "approved source partition changed"):
-            adapter.prepare_target(plan)
-        self.assertEqual(dutil.resize_calls, [])
-        self.assertEqual(dutil.add_calls, [])
-
-    def test_prepared_checkpoint_rejects_each_changed_identity_field(self):
-        initial = self._adapter(FakeInstaller(FakeDiskUtil([[self.free]])))
-        initial.preflight(self.plan)
-        evidence = initial.prepare_target(self.plan)
-        for field, value in (
-            ("uuid", "DIFFERENT-UUID"), ("name", "disk0s9"),
-            ("size", 2 * GIB + 4096), ("offset", self.plan.offset_bytes + 4096),
-            ("type", "Linux Filesystem"),
-        ):
-            with self.subTest(field=field):
-                part = FakePart("disk0s4", offset=self.plan.offset_bytes,
-                                size=2 * GIB, free=False)
-                setattr(part, field, value)
-                installer = FakeInstaller(FakeDiskUtil([[part]]))
-                adapter = self._adapter(installer)
-                adapter.preflight(self.plan)
-                with self.assertRaisesRegex(
-                    AsahiAdapterError, "prepared resume target does not match checkpoint"
-                ):
-                    adapter.validate_prepared_checkpoint(self.plan, evidence)
-                self.assertIsNone(adapter.target_part)
-                self.assertFalse(any(call[0] == "prepare_volume" for call in installer.ins.calls))
-
     def test_retry_reconciles_the_exact_prepared_apfs_partition(self):
         prepared = FakePart(
             "disk0s4",
@@ -761,20 +724,6 @@ class AsahiInPlaceRepairAdapterTests(unittest.TestCase):
             "repair content changed",
         ):
             self.adapter.validate_repaired_content(self.plan)
-
-    def test_invalid_later_repair_member_does_not_write_earlier_partition(self):
-        for field, value in (("payload_member", "repair/missing.img"), ("size_bytes", 4096)):
-            with self.subTest(field=field):
-                expected = self.manifest["replacement_content"]["root"]
-                original = expected[field]
-                expected[field] = value
-                try:
-                    with self.assertRaises(AsahiAdapterError):
-                        self.adapter.rewrite_existing_content(self.plan)
-                    self.assertEqual(self.content["disk0s5"], b"boot-old")
-                    self.assertEqual(self.opened_partitions, [])
-                finally:
-                    expected[field] = original
 
     @staticmethod
     def _identity(content):

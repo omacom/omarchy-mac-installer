@@ -2,6 +2,8 @@
 
 Validated source candidate: `ebe76e695f4a1c68f30b25d152f8394027b792a0`, on `codex/battle-test-installer`, based on PR head `51ad0d83513d39a499c9c167c856189248584f50`. This record is a subsequent documentation-only commit. The source candidate and all results below were produced locally on 2026-09-29/30 (Asia/Kolkata). No commits were pushed and no review threads were resolved.
 
+After `main` began checking every locked engine input against `Engine/source-lock.json`, the engine overlay changes and their Python tests were moved from this PR to the `codex/engine-hardening` branch, to ship with a rebuilt engine. The Python counts below include those tests; the Swift results are unaffected.
+
 The specification was Marcelo's review submitted 2026-09-29 at 01:47:55 UTC and Scott's review submitted at 03:37:55 UTC, including Scott's inline comments, on [PR 29](https://github.com/omacom/omarchy-mac-installer/pull/29). GitHub still reported the same reviews and head after local validation.
 
 ## Implemented changes
@@ -9,7 +11,7 @@ The specification was Marcelo's review submitted 2026-09-29 at 01:47:55 UTC and 
 - Payload preparation and helper execution have separate quit/close state. A failed payload wait remains a pre-submission failure. Cancellation prevents a late successful wait from submitting a request.
 - Wrapped helper connection/ping failures preserve the package-reinstallation remedy, including Recovery retry's existing checkpoint. Execution failures remain unwrapped.
 - Prepared-resume target mismatches have a named diagnostic, preserve the journal, explain prior disk preparation, and offer no blind retry or fresh installation over uncertain disk state.
-- An exact real-canary repair manifest exercises candidate discovery. Its provenance, size/alignment contract, and evidence boundary are recorded in [battle-testing.md](battle-testing.md#repair-manifest-compatibility-and-producer-contract).
+- An exact real-canary repair manifest exercises candidate discovery. Its provenance, size/alignment contract, and evidence boundary moved with the engine changes to `docs/engine-hardening.md` on `codex/engine-hardening`.
 - The source-lock refresh and authenticated engine rebuild remain an explicit, separately reviewed release follow-up. The old archive does not contain these engine changes.
 
 ## Automated validation
