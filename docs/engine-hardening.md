@@ -1,6 +1,6 @@
 # Engine overlay hardening
 
-These engine overlay changes were split out of [PR 29](https://github.com/omacom/omarchy-mac-installer/pull/29), whose app-side hardening is recorded in `docs/battle-testing.md`. They change locked engine inputs, so they must ship with a reviewed source-lock refresh and a reproducibly rebuilt engine artifact, not on their own. Until then `test_repository_inputs_match_the_recorded_digests` correctly fails on this branch.
+These engine overlay changes were split out of [PR 29](https://github.com/omacom/omarchy-mac-installer/pull/29), whose app-side hardening is recorded in `docs/battle-testing.md`. They change locked engine inputs, so they ship with a refreshed source lock and the reproducibly rebuilt engine `.29`.
 
 ## Changes and regression coverage
 
@@ -21,7 +21,7 @@ The recorded manifest meets that contract: boot has 2,147,483,648 existing and r
 
 ## Release boundary
 
-The engine overlay edits are not present in the authenticated `installer-v0.9.2-omarchy.28.tar.gz` archive. Before merging, rebuild the engine with `Engine/rebuild-python-overlay.py` under the recorded interpreter (see `docs/extraction.md`), refresh `Engine/source-lock.json` together with the new artifact identity, pin it in `Packaging/build-app.sh` and `ValidationEngineArtifact.swift`, validate the assembled package, and qualify interrupted stage-one resume and repair on authorized supported hardware. Never refresh only the source hashes: that would claim the old archive contains these fixes. `apple,j614s` remains blocked.
+These edits ship in engine `.29` (`installer-v0.9.2-omarchy.29.tar.gz`, 17,844,091 bytes, SHA-256 `3a87e43b023e050c725d2e005bddd3721cf00f5e77104635e6a1e35411804d50`), recorded in `Engine/source-lock.json` with the refreshed source hashes and reproduced as described in `docs/extraction.md`. The packager, Swift locator and release-input templates pin `.29`. Before merging or distributing, validate the assembled package and qualify interrupted stage-one resume and repair on authorized supported hardware. `apple,j614s` remains blocked.
 
 PR 29 teaches the app the engine's `prepared resume target does not match checkpoint` diagnostic, so no further Swift change is needed when this engine ships after it.
 
