@@ -96,6 +96,37 @@ class InPlaceRepairContractTests(unittest.TestCase):
         self.assertEqual(candidate["length_bytes"], 137_438_953_472)
         self.assertRegex(candidate["identity_digest"], r"^sha256:[0-9a-f]{64}$")
 
+    def test_recorded_physical_canary_manifest_remains_a_repair_candidate(self):
+        # Exact published bytes and provenance are recorded in docs/engine-hardening.md.
+        raw = (Path(__file__).parent / "fixtures" /
+               "repair-manifest-canary-2004.json").read_bytes()
+        self.assertEqual(
+            hashlib.sha256(raw).hexdigest(),
+            "3fd0b3033d91666965e157a0fa271523aa5cafa3826721f53789c13d8edaa059",
+        )
+        self.manifest = json.loads(raw)
+        inventory = collect_repair_inventory(
+            SimpleNamespace(sys_disk="disk0", parts=self.parts),
+            self.manifest,
+            disk_identity_reader=lambda _: self.manifest["disk_identity"],
+            filesystem_identity_reader=self._filesystem_identity,
+        )
+        self.assertEqual(len(inventory["candidates"]), 1)
+        self.assertEqual(inventory["candidates"][0]["kind"], "repair")
+        self.assertEqual(inventory["candidates"][0]["length_bytes"], 137_438_953_472)
+
+    def test_repair_image_must_fit_its_partition_and_raw_device_alignment(self):
+        for size in (1, 4097, self.parts[3].size + 4096):
+            with self.subTest(size=size):
+                self.manifest["replacement_content"]["boot"]["size_bytes"] = size
+                with self.assertRaisesRegex(InPlaceRepairError, "repair content size"):
+                    collect_repair_inventory(
+                        SimpleNamespace(sys_disk="disk0", parts=self.parts),
+                        self.manifest,
+                        disk_identity_reader=lambda _: "sha256:" + "5" * 64,
+                        filesystem_identity_reader=self._filesystem_identity,
+                    )
+
     def test_release_and_canary_share_the_concrete_repair_executor_adapter(self):
         plan = SimpleNamespace(plan_digest="a" * 64)
         release_adapter = FakeRepairAdapter()

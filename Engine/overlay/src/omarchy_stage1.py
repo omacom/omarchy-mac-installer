@@ -71,6 +71,20 @@ def run_stage1(plan, journal, adapter):
     if completed is not None:
         return completed
 
+    # Historical inventory admits a resumed run, but cannot establish that its
+    # prepared target still belongs to this install. Re-read checkpoint identity
+    # before recording any new mutation intent. Fresh runs need no readback.
+    if "apfs-target-prepared" in journal.checkpoints:
+        arguments = [plan, journal.checkpoint_evidence("apfs-target-prepared")]
+        validator_name = "validate_prepared_checkpoint"
+        if "stub-and-esp-installed" in journal.checkpoints:
+            validator_name = "validate_installed_checkpoint"
+            arguments.append(journal.checkpoint_evidence("stub-and-esp-installed"))
+        validator = getattr(adapter, validator_name, None)
+        if not callable(validator):
+            raise Stage1Error(f"adapter does not implement {validator_name}")
+        validator(*arguments)
+
     # The privileged helper runs with umask 077 so nothing it creates is
     # readable by other users. The stub volume and its ESP are not the
     # helper's private state: macOS and the unprivileged inspection that
