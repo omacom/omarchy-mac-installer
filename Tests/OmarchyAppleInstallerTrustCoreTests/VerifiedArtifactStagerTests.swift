@@ -7,6 +7,34 @@ import XCTest
 @testable import OmarchyAppleInstallerTrustCore
 
 final class VerifiedArtifactStagerTests: XCTestCase {
+  func testCancellationAtAssemblyDoesNotPromoteAndKeepsVerifiedParts() async throws {
+    let data = Data(repeating: 42, count: 16_384)
+    let fixture = try partsFixture(data: data)
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let operation = Task {
+      try await VerifiedArtifactStager(
+        downloader: RoutedFixtureDownloader(responses: fixture.responses)
+      )
+      .stage(fixture.artifact, in: directory) { progress in
+        if progress.phase == .assembling {
+          withUnsafeCurrentTask { $0?.cancel() }
+        }
+      }
+    }
+    do {
+      _ = try await operation.value
+      XCTFail("Cancelled assembly must not promote a payload")
+    } catch {
+      XCTAssertTrue(error is CancellationError)
+    }
+    XCTAssertFalse(
+      FileManager.default.fileExists(
+        atPath: directory.appendingPathComponent(fixture.artifact.fileName).path))
+    let remaining = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+    XCTAssertEqual(Set(remaining), Set(fixture.artifact.parts.map(\.fileName)))
+  }
+
   func testDescriptorRejectsUntrustedInputs() {
     XCTAssertThrowsError(
       try descriptor(source: "http://example.com/installer.tar.gz")

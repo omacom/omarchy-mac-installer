@@ -540,6 +540,117 @@
       XCTAssertNotNil(failure.technicalDetail)
     }
 
+    func testQuitBlockedDuringHelperSetupAndExecutionButAllowedDuringPayloadWait() async throws {
+      let environment = MockInstallerEnvironment()
+      let setupGate = OperationGate()
+      let payloadGate = OperationGate()
+      let helperGate = OperationGate()
+      environment.ensureHelperGate = setupGate
+      environment.payloadWaitGate = payloadGate
+      environment.executeGate = helperGate
+      let session = await ready(environment)
+      session.presentInstallCredentials()
+      let credentials = try authorization()
+      let task = Task { await session.submit(credentials) }
+      await setupGate.waitUntilEntered()
+      XCTAssertTrue(session.isExecutionInProgress)
+      XCTAssertEqual(environment.payloadWaitCount, 0)
+      XCTAssertEqual(environment.executeCount, 0)
+      await setupGate.release()
+      await waitUntil { environment.payloadWaitCount > 0 || environment.executeCount > 0 }
+      XCTAssertEqual(environment.payloadWaitCount, 1)
+      XCTAssertEqual(environment.executeCount, 0)
+      XCTAssertFalse(session.isExecutionInProgress)
+      await payloadGate.release()
+      await helperGate.waitUntilEntered()
+      XCTAssertTrue(session.isExecutionInProgress)
+      await helperGate.release()
+      await task.value
+      XCTAssertFalse(session.isExecutionInProgress)
+    }
+
+    func testQuitDuringPayloadWaitPreventsLateSuccessfulWaitFromSubmitting() async throws {
+      let environment = MockInstallerEnvironment()
+      let gate = OperationGate()
+      environment.payloadWaitGate = gate
+      let session = await ready(environment)
+      session.presentInstallCredentials()
+      let credentials = try authorization()
+      let task = Task { await session.submit(credentials) }
+      await gate.waitUntilEntered()
+      session.cancelPrefetchOnQuit()
+      await gate.release()
+      await task.value
+      XCTAssertEqual(environment.executeCount, 0)
+      XCTAssertFalse(session.hasExecutionStarted)
+      XCTAssertFalse(session.isExecutionInProgress)
+    }
+
+    func testPayloadWaitFailureNeverSubmitsAndAllowsFreshReview() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.payloadWaitError = PayloadPrefetchError.failed("verification failed")
+      let session = await ready(environment)
+      session.presentInstallCredentials()
+      await session.submit(try authorization())
+      XCTAssertEqual(environment.executeCount, 0)
+      XCTAssertFalse(session.hasExecutionStarted)
+      XCTAssertFalse(session.isExecutionInProgress)
+      XCTAssertFalse(environment.hasApprovedPlan)
+      XCTAssertTrue(session.canInspect)
+      guard case .failed(let failure) = session.phase else { return XCTFail("Expected failure") }
+      XCTAssertTrue(failure.plainDetail.contains("no disk changes"))
+    }
+
+    func testPreSubmissionFailureAllowsFreshReviewAndRevokesApproval() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.executeResults = [
+        .failure(InstallerPreSubmissionFailure(EngineXPCSubmissionError.connectionFailed))
+      ]
+      let session = await ready(environment)
+      session.presentInstallCredentials()
+      await session.submit(try authorization())
+      XCTAssertFalse(session.hasExecutionStarted)
+      XCTAssertFalse(session.isExecutionInProgress)
+      XCTAssertFalse(environment.hasApprovedPlan)
+      XCTAssertTrue(session.canInspect)
+      guard case .failed(let failure) = session.phase else { return XCTFail("Expected failure") }
+      XCTAssertTrue(failure.plainDetail.contains("not started"))
+      await session.inspect()
+      guard case .welcome = session.phase else { return XCTFail("Expected a fresh check") }
+    }
+
+    func testRecoveryRetryPreSubmissionFailurePreservesCheckpointAndQuitGuard() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.executeResults = [
+        .failure(EngineXPCSubmissionError.recoveryAuthorizationFailed),
+        .failure(InstallerPreSubmissionFailure(EngineXPCSubmissionError.connectionFailed)),
+      ]
+      let session = await ready(environment)
+      session.presentInstallCredentials()
+      await session.submit(try authorization())
+      XCTAssertFalse(session.isExecutionInProgress)
+      let setupGate = OperationGate()
+      let gate = OperationGate()
+      environment.ensureHelperGate = setupGate
+      environment.executeGate = gate
+      session.presentRecoveryRetryCredentials()
+      let credentials = try authorization()
+      let retry = Task { await session.submit(credentials) }
+      await setupGate.waitUntilEntered()
+      XCTAssertTrue(session.isExecutionInProgress)
+      XCTAssertEqual(environment.executeCount, 1)
+      await setupGate.release()
+      await gate.waitUntilEntered()
+      XCTAssertTrue(session.isExecutionInProgress)
+      await gate.release()
+      await retry.value
+      XCTAssertFalse(session.isExecutionInProgress)
+      XCTAssertTrue(session.hasExecutionStarted)
+      XCTAssertFalse(session.canInspect)
+      XCTAssertTrue(session.canRetryRecoveryAuthorization)
+      XCTAssertTrue(environment.hasApprovedPlan)
+    }
+
     func testRecoveryRetryIsOnlyReachableWhenEligible() async throws {
       let environment = MockInstallerEnvironment()
       environment.executeResults = [
@@ -652,6 +763,7 @@
       XCTAssertEqual(session.credentialSheet.context?.error, .credentialsRejected)
       XCTAssertEqual(session.credentialSheet.context?.mentionsBackgroundItem, true)
       XCTAssertEqual(environment.executeCount, 0)
+      XCTAssertFalse(session.isExecutionInProgress)
       XCTAssertTrue(session.canStartInstallation)
     }
 
@@ -675,6 +787,7 @@
 
         XCTAssertEqual(session.credentialSheet.context?.error, sheetError, "\(setupError)")
         XCTAssertEqual(environment.executeCount, 0, "\(setupError)")
+        XCTAssertFalse(session.isExecutionInProgress, "\(setupError)")
         // Nothing ran, so the person can simply try again.
         XCTAssertTrue(session.canStartInstallation, "\(setupError)")
         await session.submit(try authorization())
@@ -952,6 +1065,7 @@
       let authorization = try authorization()
       let operation = Task { await session.submit(authorization) }
       await gate.waitUntilEntered()
+      XCTAssertTrue(session.isExecutionInProgress)
       let phase = session.phase
       let discards = environment.discardCount
       await session.inspect()
@@ -966,6 +1080,7 @@
       await gate.release()
       await operation.value
       let terminal = session.phase
+      XCTAssertFalse(session.isExecutionInProgress)
       environment.savedJournal?(try JournalFixture.data())
       await Task.yield()
       XCTAssertEqual(session.phase, terminal)
@@ -1406,6 +1521,9 @@
     var inspectGate: OperationGate?
     var prepareGate: OperationGate?
     var executeGate: OperationGate?
+    var payloadWaitGate: OperationGate?
+    var payloadWaitError: (any Error)?
+    private(set) var payloadWaitCount = 0
     var savedProgress: (@Sendable (AssetProgressUpdate) -> Void)?
     var savedJournal: (@Sendable (Data) -> Void)?
     var inspectError: (any Error)?
@@ -1422,6 +1540,7 @@
     /// Each helper setup, as the order of calls relative to execute.
     private(set) var calls = [String]()
     var ensureHelperError: (any Error)?
+    var ensureHelperGate: OperationGate?
     private(set) var prepareCount = 0
     private(set) var lastOperation: InstallOperationKind?
     private(set) var lastEncryptLinuxDisk: Bool?
@@ -1511,6 +1630,7 @@
     ) async throws {
       calls.append(
         "ensureHelper:\(authorization.username)" + (reenablingSwitchedOff ? ":reenable" : ""))
+      await ensureHelperGate?.wait()
       if let ensureHelperError {
         self.ensureHelperError = nil
         throw ensureHelperError
@@ -1539,7 +1659,9 @@
     }
 
     func waitUntilPayloadVerified() async throws {
-      await prefetchGate?.wait()
+      payloadWaitCount += 1
+      await payloadWaitGate?.wait()
+      if let payloadWaitError { throw payloadWaitError }
     }
 
     func cancelPayloadPrefetch() {
