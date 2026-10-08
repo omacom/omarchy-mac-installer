@@ -10,7 +10,7 @@ struct Panel<Content: View>: View {
     VStack(alignment: .leading, spacing: 10) {
       content
     }
-    .padding(.horizontal, 14)
+    .padding(.horizontal, OmarchyTheme.contentInset)
     .padding(.vertical, 13)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(
@@ -181,34 +181,77 @@ struct DiskBar: View {
 
 struct ProgressTrack: View {
   let fraction: Double?
-  var height: CGFloat = 6
 
   @State private var sweep = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     GeometryReader { geometry in
+      let width = geometry.size.width
       ZStack(alignment: .leading) {
         Capsule().fill(OmarchyTheme.track)
         if let fraction {
+          // Never thinner than the bar is tall, so a started bar is a dot, not
+          // a sliver; updates glide instead of stepping.
+          let filled = fraction > 0 ? max(OmarchyTheme.progressHeight, width * min(1, fraction)) : 0
           Capsule()
             .fill(OmarchyTheme.accent)
-            .frame(width: geometry.size.width * min(1, max(0, fraction)))
-            .animation(.linear(duration: 0.18), value: fraction)
+            .frame(width: filled)
+            .animation(.easeOut(duration: 0.6), value: fraction)
+        } else if reduceMotion {
+          // Work of unknown length, without motion: the whole bar breathes, so
+          // it never reads as a stalled partial fill.
+          Capsule()
+            .fill(OmarchyTheme.accent.opacity(sweep ? 0.6 : 0.2))
+            .animation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true), value: sweep)
+            .onAppear { sweep = true }
         } else {
+          // Work of unknown length: a highlight that keeps travelling one way.
           Capsule()
             .fill(OmarchyTheme.accent.opacity(0.75))
-            .frame(width: geometry.size.width * 0.32)
-            .offset(x: sweep ? geometry.size.width * 0.68 : 0)
-            .animation(
-              .easeInOut(duration: 1.1).repeatForever(autoreverses: true),
-              value: sweep
-            )
-            .onAppear { sweep = !reduceMotion }
+            .frame(width: width * 0.32)
+            .offset(x: sweep ? width : -width * 0.32)
+            .animation(.easeInOut(duration: 1.4).repeatForever(autoreverses: false), value: sweep)
+            .onAppear { sweep = true }
         }
       }
+      .clipShape(Capsule())
     }
-    .frame(height: height)
+    .frame(height: OmarchyTheme.progressHeight)
+  }
+}
+
+/// A checkbox with its label, and optional help text that starts under the
+/// label rather than under the box.
+struct CheckboxRow: View {
+  let title: String
+  var help: String? = nil
+  var emphasized = false
+  let isOn: Bool
+  let onChange: (Bool) -> Void
+
+  var body: some View {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      Toggle("", isOn: Binding(get: { isOn }, set: onChange))
+        .labelsHidden()
+        .toggleStyle(.checkbox)
+        .controlSize(.large)
+        .tint(OmarchyTheme.accent)
+        .accessibilityLabel(title)
+      VStack(alignment: .leading, spacing: 4) {
+        Text(title)
+          .font(emphasized ? OmarchyTheme.heading : OmarchyTheme.control)
+          .foregroundStyle(emphasized ? OmarchyTheme.accent : OmarchyTheme.text)
+          .fixedSize(horizontal: false, vertical: true)
+          .contentShape(Rectangle())
+          .onTapGesture { onChange(!isOn) }
+        if let help {
+          Text(help).omarchyHelpText()
+        }
+      }
+      Spacer(minLength: 0)
+    }
+    .padding(.horizontal, OmarchyTheme.contentInset)
   }
 }
 

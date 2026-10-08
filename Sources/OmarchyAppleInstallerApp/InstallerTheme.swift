@@ -41,6 +41,11 @@ enum OmarchyTheme {
   // MARK: Metrics
 
   static let cardRadius: CGFloat = 8
+  /// A panel's inner side margin. Rows outside a panel use it too, so their
+  /// text lines up with the panel's content.
+  static let contentInset: CGFloat = 14
+  /// Every progress bar is this tall, so a stage change never resizes it.
+  static let progressHeight: CGFloat = 8
   static let buttonRadius: CGFloat = 6
   static let buttonHeight: CGFloat = 32
   static let buttonTracking: CGFloat = 0.35

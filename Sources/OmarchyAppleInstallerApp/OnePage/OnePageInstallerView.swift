@@ -53,12 +53,17 @@ struct OnePageInstallerView: View {
         header.padding(.bottom, 20)
         VStack(alignment: .leading, spacing: 14) { stage }
           .frame(maxWidth: 560)
+          .id(stageKey)
+          // The new screen fades in; the old one leaves at once, so the two
+          // never overlap while the window changes height.
+          .transition(.asymmetric(insertion: .opacity, removal: .identity))
         HStack(spacing: 16) { actions }
           .padding(.top, 24)
           .padding(.bottom, 24)
       }
       .frame(maxWidth: .infinity)
       .padding(.horizontal, 40)
+      .animation(.easeInOut(duration: 0.25), value: stageKey)
       .background {
         GeometryReader { geometry in
           Color.clear.preference(key: InstallerContentHeight.self, value: geometry.size.height)
@@ -180,6 +185,23 @@ struct OnePageInstallerView: View {
 
   // MARK: The middle of the page
 
+  /// Which screen the stage shows. Phases that keep the same screen share a
+  /// key, so only a real screen change crossfades and resets its state.
+  private var stageKey: String {
+    switch session.phase {
+    case .inspecting: "inspecting"
+    case .unsupported: "unsupported"
+    case .welcome: "welcome"
+    case .existingInstallRefused: "existing"
+    case .preparingPlan, .planPrepared: "preparing"
+    case .planReview, .awaitingInstall: "review"
+    case .installing: "installing"
+    case .awaitingRecovery: "recovery"
+    case .done: "done"
+    case .failed: "failed"
+    }
+  }
+
   @ViewBuilder
   private var stage: some View {
     switch session.phase {
@@ -235,9 +257,11 @@ struct OnePageInstallerView: View {
       } else {
         Text("Private M3 test: Linux will be installed without disk encryption.")
           .font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
+          .padding(.horizontal, OmarchyTheme.contentInset)
       }
       if let notice = session.allocationNotice {
         Text(notice).font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
+          .padding(.horizontal, OmarchyTheme.contentInset)
       }
       acknowledgement(acknowledged, resizesMacOS: plan.fixedMacOSBytes == nil)
 
@@ -256,6 +280,7 @@ struct OnePageInstallerView: View {
       } else {
         Text("Private M3 test: Linux will be installed without disk encryption.")
           .font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
+          .padding(.horizontal, OmarchyTheme.contentInset)
       }
       if !helper.isReady {
         helperNote
@@ -380,7 +405,7 @@ struct OnePageInstallerView: View {
         Text(title)
           .font(OmarchyTheme.heading)
           .foregroundStyle(OmarchyTheme.secondaryText)
-        ProgressTrack(fraction: nil, height: 14)
+        ProgressTrack(fraction: nil)
       }
       .padding(.vertical, 4)
     }
@@ -459,26 +484,13 @@ struct OnePageInstallerView: View {
   /// The tick and its text. Both are inert while a re-plan runs so a tick
   /// cannot land between the drag and the new plan.
   private func acknowledgement(_ acknowledged: Bool, resizesMacOS: Bool) -> some View {
-    let text = PlainLanguage.planAcknowledgement(resizesMacOS: resizesMacOS)
-    return HStack(alignment: .center, spacing: 12) {
-      Toggle(
-        "",
-        isOn: Binding(get: { acknowledged }, set: { session.setAcknowledged($0) })
-      )
-      .labelsHidden()
-      .toggleStyle(.checkbox)
-      .controlSize(.large)
-      .tint(OmarchyTheme.accent)
-      .accessibilityLabel(text)
-      Text(text)
-        .font(OmarchyTheme.heading)
-        .foregroundStyle(OmarchyTheme.accent)
-        .fixedSize(horizontal: false, vertical: true)
-        .onTapGesture { session.setAcknowledged(!acknowledged) }
-      Spacer(minLength: 0)
-    }
+    CheckboxRow(
+      title: PlainLanguage.planAcknowledgement(resizesMacOS: resizesMacOS),
+      emphasized: true,
+      isOn: acknowledged,
+      onChange: { session.setAcknowledged($0) }
+    )
     .disabled(session.isBusy || session.isEditingSize)
-    .padding(.horizontal, 4)
     .padding(.top, 4)
   }
 
@@ -490,7 +502,7 @@ struct OnePageInstallerView: View {
         .omarchyHelpText()
       Spacer(minLength: 0)
     }
-    .padding(.horizontal, 4)
+    .padding(.horizontal, OmarchyTheme.contentInset)
   }
 
   private func recoveryPanel(_ handoff: HandoffDisplay) -> some View {
@@ -605,7 +617,7 @@ private struct PrefetchStrip: View {
               Button(PlainLanguage.prefetchRetry, action: onRetry)
             }
           } else {
-            ProgressTrack(fraction: fraction, height: 10)
+            ProgressTrack(fraction: fraction)
           }
         }
         .padding(.vertical, 2)
@@ -648,23 +660,14 @@ private struct EncryptDiskToggle: View {
   let onChange: (Bool) -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Toggle(
-        PlainLanguage.encryptLinuxDiskTitle,
-        isOn: Binding(
-          get: { isOn },
-          set: { value in onChange(value) }
-        )
-      )
-      .toggleStyle(.checkbox)
-      .controlSize(.large)
-      .tint(OmarchyTheme.accent)
-      .disabled(!enabled)
-      // One help paragraph: the password, and that nothing else unlocks the disk.
-      Text(PlainLanguage.encryptLinuxDiskPassword + " " + PlainLanguage.encryptLinuxDiskNoRecovery)
-        .omarchyHelpText()
-    }
-    .padding(.horizontal, 4)
+    // One help paragraph: the password, and that nothing else unlocks the disk.
+    CheckboxRow(
+      title: PlainLanguage.encryptLinuxDiskTitle,
+      help: PlainLanguage.encryptLinuxDiskPassword + " " + PlainLanguage.encryptLinuxDiskNoRecovery,
+      isOn: isOn,
+      onChange: onChange
+    )
+    .disabled(!enabled)
     .padding(.top, 4)
   }
 }
@@ -696,7 +699,7 @@ private struct DownloadPanel: View {
               .foregroundStyle(OmarchyTheme.secondaryText)
           }
         }
-        ProgressTrack(fraction: fraction, height: 18)
+        ProgressTrack(fraction: fraction)
       }
       .padding(.vertical, 4)
     }
@@ -943,7 +946,7 @@ private struct InstallPanel: View {
         TimelineView(.periodic(from: progress.startedAt, by: 1)) { context in
           let elapsed = max(0, context.date.timeIntervalSince(progress.startedAt))
           VStack(alignment: .leading, spacing: 6) {
-            ProgressTrack(fraction: estimate.fraction, height: 18)
+            ProgressTrack(fraction: estimate.fraction)
             HStack {
               Text("Estimated progress · \(Int(estimate.fraction * 100))%")
               Spacer()
