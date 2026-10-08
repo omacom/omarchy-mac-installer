@@ -151,10 +151,10 @@ struct OnePageInstallerView: View {
           .font(OmarchyTheme.eyebrow)
           .textCase(.uppercase)
           .foregroundStyle(OmarchyTheme.accent)
-        if isBlocked {
-          StatusBadge(text: PlainLanguage.blockedBadge, kind: .blocked)
-        } else {
-          StatusBadge(text: PlainLanguage.supportedBadge, kind: .ok)
+        if let supported = session.modelSupported {
+          StatusBadge(
+            text: supported ? PlainLanguage.supportedBadge : PlainLanguage.blockedBadge,
+            kind: supported ? .ok : .blocked)
         }
         if let channel {
           StatusBadge(text: PlainLanguage.badge(for: channel), kind: .ok)
@@ -166,15 +166,6 @@ struct OnePageInstallerView: View {
         .font(OmarchyTheme.eyebrow)
         .textCase(.uppercase)
         .foregroundStyle(OmarchyTheme.accent)
-    }
-  }
-
-  private var isBlocked: Bool {
-    switch session.phase {
-    case .unsupported, .existingInstallRefused:
-      return true
-    default:
-      return false
     }
   }
 
