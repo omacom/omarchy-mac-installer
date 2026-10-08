@@ -136,6 +136,23 @@
       return environment.installationBlocked
     }
 
+    /// The header's word on this Mac model: false only for a refused model, so
+    /// an existing install or too little space never reads as Not supported.
+    /// Nil when the installer stopped before it could tell.
+    public var modelSupported: Bool? {
+      switch phase {
+      case .inspecting:
+        return nil
+      case .existingInstallRefused(let host):
+        return host.supported ? true : nil
+      case .unsupported(let failure):
+        if failure.isBlockedModel { return false }
+        return failure.device?.supported == true ? true : nil
+      default:
+        return true
+      }
+    }
+
     public var credentialSheet: CredentialSheetState {
       if case .awaitingInstall(_, _, let sheet) = phase {
         return sheet

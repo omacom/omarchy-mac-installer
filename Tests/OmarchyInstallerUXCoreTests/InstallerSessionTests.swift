@@ -1240,6 +1240,63 @@
       XCTAssertEqual(environment.prepareCount, 1)
     }
 
+    /// On the M2 Max (apple,j414c, enabled in the signed catalog) the header
+    /// said NOT SUPPORTED because an older install was still on the disk. Only
+    /// a refused model says that; a stop for any other reason says Supported
+    /// when the Mac is, and nothing when the installer couldn't tell.
+    func testHeaderSaysNotSupportedOnlyForARefusedModel() async {
+      let supported = MockInstallerEnvironment.supportedHost
+      let install = ExistingInstallDisplay(sourceIdentifier: "disk0s3", sizeDescription: "256 GB")
+      let cases: [(String, HostDisplay, Bool, Bool?)] = [
+        ("ready", supported, false, true),
+        (
+          "existing install on a supported Mac",
+          HostDisplay(
+            chipAndSpace: supported.chipAndSpace, supported: true, existingInstalls: [install]),
+          false, true
+        ),
+        (
+          "existing install, engine couldn't tell",
+          HostDisplay(
+            chipAndSpace: supported.chipAndSpace, supported: false, existingInstalls: [install]),
+          false, nil
+        ),
+        (
+          "too little space",
+          HostDisplay(
+            chipAndSpace: supported.chipAndSpace, supported: true,
+            spaceShortfall: .insufficientSpace(
+              requiredBytes: 76_562_825_216, availableBytes: 73_528_246_272)),
+          false, true
+        ),
+        (
+          "not ready",
+          HostDisplay(
+            chipAndSpace: supported.chipAndSpace, supported: false,
+            blockingReason: "The installer engine is unavailable."),
+          false, nil
+        ),
+        (
+          "model not in the catalog",
+          HostDisplay(
+            chipAndSpace: "Apple M3 · 400 GB free", supported: false,
+            unsupportedModel: UnsupportedModelDisplay(
+              deviceIdentifier: "apple,j504", modelIdentifier: "Mac15,3",
+              supportedDeviceIdentifiers: ["apple,j314s"])),
+          false, false
+        ),
+        ("blocked model", HostDisplay(chipAndSpace: "Apple M4 Pro", supported: false), true, false),
+      ]
+      for (name, host, blocked, expected) in cases {
+        let environment = MockInstallerEnvironment()
+        environment.host = host
+        environment.installationBlocked = blocked
+        let session = InstallerSession(environment: environment)
+        await session.inspect()
+        XCTAssertEqual(session.modelSupported, expected, name)
+      }
+    }
+
     func testReinspectResetsDisplayedAndStoredEncryptionChoice() async {
       let environment = MockInstallerEnvironment()
       let session = InstallerSession(environment: environment)
