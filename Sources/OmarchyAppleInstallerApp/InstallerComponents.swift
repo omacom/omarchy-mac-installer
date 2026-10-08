@@ -182,7 +182,6 @@ struct DiskBar: View {
 struct ProgressTrack: View {
   let fraction: Double?
 
-  @State private var sweep = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
@@ -199,25 +198,43 @@ struct ProgressTrack: View {
             .frame(width: filled)
             .animation(.easeOut(duration: 0.6), value: fraction)
         } else if reduceMotion {
-          // Work of unknown length, without motion: the whole bar breathes, so
-          // it never reads as a stalled partial fill.
-          Capsule()
-            .fill(OmarchyTheme.accent.opacity(sweep ? 0.6 : 0.2))
-            .animation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true), value: sweep)
-            .onAppear { sweep = true }
+          BreathingFill()
         } else {
-          // Work of unknown length: a highlight that keeps travelling one way.
-          Capsule()
-            .fill(OmarchyTheme.accent.opacity(0.75))
-            .frame(width: width * 0.32)
-            .offset(x: sweep ? width : -width * 0.32)
-            .animation(.easeInOut(duration: 1.4).repeatForever(autoreverses: false), value: sweep)
-            .onAppear { sweep = true }
+          SweepingHighlight(width: width)
         }
       }
       .clipShape(Capsule())
     }
     .frame(height: OmarchyTheme.progressHeight)
+  }
+}
+
+/// Work of unknown length: a highlight that keeps travelling one way. Each
+/// mode owns its animation state, so switching Reduce Motion restarts it.
+private struct SweepingHighlight: View {
+  let width: CGFloat
+  @State private var moving = false
+
+  var body: some View {
+    Capsule()
+      .fill(OmarchyTheme.accent.opacity(0.75))
+      .frame(width: width * 0.32)
+      .offset(x: moving ? width : -width * 0.32)
+      .animation(.easeInOut(duration: 1.4).repeatForever(autoreverses: false), value: moving)
+      .onAppear { moving = true }
+  }
+}
+
+/// Work of unknown length, without motion: the whole bar breathes, so it never
+/// reads as a stalled partial fill.
+private struct BreathingFill: View {
+  @State private var bright = false
+
+  var body: some View {
+    Capsule()
+      .fill(OmarchyTheme.accent.opacity(bright ? 0.9 : 0.35))
+      .animation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true), value: bright)
+      .onAppear { bright = true }
   }
 }
 
@@ -245,6 +262,8 @@ struct CheckboxRow: View {
           .fixedSize(horizontal: false, vertical: true)
           .contentShape(Rectangle())
           .onTapGesture { onChange(!isOn) }
+          // The checkbox already carries the title for VoiceOver.
+          .accessibilityHidden(true)
         if let help {
           Text(help).omarchyHelpText()
         }
