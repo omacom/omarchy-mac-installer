@@ -7,11 +7,9 @@
   /// replace an in-memory environment; the live factory is never called.
   struct SimulationDashboard: View {
     var onSessionAvailable: ((InstallerSession) -> Void)? = nil
-    var onColorSchemeChange: ((Bool) -> Void)? = nil
     @State private var scenario = Self.launchScenario
     @State private var channel = ReleaseChannel.edge
     @State private var slow = false
-    @State private var dark = true
     @State private var generation = UUID()
     @State private var environment = InstallerSimulationEnvironment(scenario: Self.launchScenario)
     @State private var canChangeChannel = false
@@ -37,7 +35,6 @@
               }
             }.disabled(!canChangeChannel)
             Toggle("Slow playback", isOn: $slow)
-            Toggle("Dark mode", isOn: $dark)
           }
           // The Release channel menu's items, exactly as the app menu words
           // them, so the three channel states can be reviewed in the window.
@@ -75,9 +72,7 @@
         )
         .id(generation)
       }
-      .preferredColorScheme(dark ? .dark : .light)
       .task { await continueAtLaunch() }
-      .onChange(of: dark) { _, value in onColorSchemeChange?(value) }
       .onChange(of: scenario) { _, _ in reset() }
       .onChange(of: slow) { _, _ in reset() }
       .onChange(of: channel) { _, _ in reset() }

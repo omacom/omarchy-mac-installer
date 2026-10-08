@@ -18,6 +18,9 @@ private final class InstallerApplicationDelegate: NSObject, NSApplicationDelegat
   private var instanceLease: InstallerAppInstanceLease?
 
   func applicationWillFinishLaunching(_ notification: Notification) {
+    // Omarchy's look is dark only: windows, sheets, alerts and menus all take
+    // the dark appearance even when macOS is set to light.
+    NSApp.appearance = NSAppearance(named: .darkAqua)
     #if !DEBUG
       if ProcessInfo.processInfo.arguments.contains("--simulate") {
         fputs("Simulation requires a debug build. Refusing to launch the live installer.\n", stderr)
@@ -71,7 +74,6 @@ struct OmarchyAppleInstallerApp: App {
   @State private var liveSession: InstallerSession?
   @State private var showsRemoval = false
   @State private var removalNeedsReview = false
-  @State private var simulationDark = true
   @State private var generation = UUID()
 
   private var isSimulation: Bool {
@@ -86,8 +88,7 @@ struct OmarchyAppleInstallerApp: App {
   private var installerContent: some View {
     #if DEBUG
       if isSimulation {
-        SimulationDashboard(
-          onSessionAvailable: { liveSession = $0 }, onColorSchemeChange: { simulationDark = $0 })
+        SimulationDashboard(onSessionAvailable: { liveSession = $0 })
       } else {
         liveContent
       }
@@ -149,7 +150,6 @@ struct OmarchyAppleInstallerApp: App {
             }
           }, onClose: { showsRemoval = false }, onRequiresReview: { removalNeedsReview = true })
       }
-      .preferredColorScheme(isSimulation ? (simulationDark ? .dark : .light) : nil)
       .frame(minWidth: 640)
       .omarchyTypography()
       .tint(OmarchyTheme.accent)
