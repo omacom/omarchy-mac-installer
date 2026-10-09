@@ -47,7 +47,7 @@
       ]
     }
   ],
-  "policy_revision": "try-omarchy/82927e9/3",
+  "policy_revision": "try-omarchy/82927e9/4",
   "schema": "omarchy-migration/inventory/2",
   "source": {
     "account_uid": 1000,

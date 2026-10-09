@@ -455,6 +455,24 @@ def _evidence(value, where):
         _pattern(value["sha256"], f"{where}.sha256", SHA256)
 
 
+def _block(block, where):
+    if not isinstance(block, str) or not block.strip() or len(block.encode()) > 8192 or "\0" in block:
+        _fail("invalid_string", where)
+    return block
+
+
+def _marker(value, where):
+    if not isinstance(value, str) or not value.strip() or len(value.encode()) > MAX_LABEL or "\n" in value or "\0" in value:
+        _fail("invalid_string", where)
+    return value
+
+
+def _object_item(value, where):
+    if not isinstance(value, dict):
+        _fail("not_an_object", where)
+    return value
+
+
 def _transform(value, match, where):
     kind = value.get("type") if isinstance(value, dict) else None
     fields = {
@@ -464,13 +482,25 @@ def _transform(value, match, where):
     if not isinstance(value, dict):
         _fail("not_an_object", where)
     _enum(kind, f"{where}.type", TRANSFORMS)
-    _object(value, where, ("type",) + fields)
+    optional = ("earlier", "markers") if kind == "strip-appended-block" else ()
+    _object(value, where, ("type",) + fields, optional)
     if match != "exact":
         _fail("inconsistent_fields", f"{where}.type")
     if kind == "strip-appended-block":
-        block = value["block"]
-        if not isinstance(block, str) or not block.strip() or len(block.encode()) > 8192 or "\0" in block:
-            _fail("invalid_string", f"{where}.block")
+        blocks = [_block(value["block"], f"{where}.block")]
+        # Older versions of the block a provider wrote, each with its source.
+        for index, item in enumerate(_list(value.get("earlier", []), f"{where}.earlier", _object_item, maximum=16)):
+            at = f"{where}.earlier[{index}]"
+            _object(item, at, ("block", "commit", "path"))
+            blocks.append(_block(item["block"], f"{at}.block"))
+            _pattern(item["commit"], f"{at}.commit", COMMIT)
+            home_path(item["path"], f"{at}.path")
+        if "markers" in value:
+            # Residue is any remaining line with a marker, so every block needs one.
+            markers = _list(value["markers"], f"{where}.markers", _marker, minimum=1, maximum=16)
+            for index, block in enumerate(blocks):
+                if not any(marker in block for marker in markers):
+                    _fail("inconsistent_fields", f"{where}.markers" if index == 0 else f"{where}.earlier[{index - 1}].block")
     else:
         _enum(value["format"], f"{where}.format", ("json", "jsonc"))
         _list(value["keys"], f"{where}.keys", _label, minimum=1, maximum=64)

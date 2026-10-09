@@ -89,7 +89,9 @@ class Policy:
             return Result(None, "too-large")
         spec = rule["transform"]
         if spec["type"] == "strip-appended-block":
-            return strip_appended_block(data, spec["block"].encode())
+            blocks = [spec["block"].encode()] + [item["block"].encode() for item in spec.get("earlier", [])]
+            markers = [marker.encode() for marker in spec["markers"]] if "markers" in spec else None
+            return strip_appended_block(data, *blocks, markers=markers)
         return remove_json_keys(data, spec["keys"])
 
 
@@ -101,15 +103,19 @@ def _block_lines(block):
     return {line.strip() for line in block.replace(b"\r\n", b"\n").split(b"\n") if line.strip()}
 
 
-def strip_appended_block(data, block):
+def strip_appended_block(data, *blocks, markers=None):
     """Remove one provider block that starts on a line boundary.
 
-    The block may use LF or CRLF endings and may lack its final newline at
-    the end of the file. A missing block leaves the file unchanged. More than
-    one copy is ambiguous, and any block line left after removal is residual;
+    `blocks` are every version the provider has written; the file holds at
+    most one of them. A block may use LF or CRLF endings and may lack its
+    final newline at the end of the file. No block leaves the file unchanged.
+    More than one occurrence is ambiguous, and a line left after removal that
+    carries a marker (or, without markers, repeats a block line) is residual;
     both return no data so the caller withholds the file.
     """
-    variants = {block, block.replace(b"\n", b"\r\n")}
+    variants = set()
+    for block in blocks:
+        variants |= {block, block.replace(b"\n", b"\r\n")}
     variants |= {variant[:-2] if variant.endswith(b"\r\n") else variant[:-1]
                  for variant in list(variants) if variant.endswith(b"\n")}
     found = set()
@@ -125,16 +131,18 @@ def strip_appended_block(data, block):
     # A shorter variant found inside a longer match is the same occurrence.
     spans = [span for span in found
              if not any(other != span and other[0] <= span[0] and span[1] <= other[1] for other in found)]
-    lines = _block_lines(block)
+    if markers is None:
+        lines = set().union(*(_block_lines(block) for block in blocks))
+        leftover = lambda text: any(line.strip() in lines for line in text.split(b"\n"))
+    else:
+        leftover = lambda text: any(marker in line for line in text.split(b"\n") for marker in markers)
     if not spans:
-        if any(line.strip() in lines for line in data.split(b"\n")):
-            return Result(None, "residual")
-        return Result(data, "not-applicable")
+        return Result(None, "residual") if leftover(data) else Result(data, "not-applicable")
     if len(spans) > 1:
         return Result(None, "ambiguous")
     start, end = spans[0]
     result = data[:start] + data[end:]
-    if any(line.strip() in lines for line in result.split(b"\n")):
+    if leftover(result):
         return Result(None, "residual")
     return Result(result, "applied")
 

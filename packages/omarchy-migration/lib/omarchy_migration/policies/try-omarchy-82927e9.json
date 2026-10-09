@@ -162,7 +162,7 @@
       "reason": "mac_shared_folder"
     }
   ],
-  "revision": "try-omarchy/82927e9/3",
+  "revision": "try-omarchy/82927e9/4",
   "rules": [
     {
       "action": "exclude",
@@ -187,7 +187,23 @@
       "reason": "try_appended_fragment",
       "transform": {
         "block": "\n-- Try Omarchy's host pinch device carries gestures only.\ndofile(\"/usr/share/try-omarchy/pinch-input.lua\")\n\n-- Match Apple keyboard geometry (ansi/iso/jis) from the host cmdline.\ndofile(\"/usr/share/try-omarchy/apple-keyboard-input.lua\")\n",
-        "type": "strip-appended-block"
+        "type": "strip-appended-block",
+        "earlier": [
+          {
+            "block": "\n-- Try Omarchy's host pinch device carries gestures only.\ndofile(\"/usr/share/try-omarchy/pinch-input.lua\")\n",
+            "commit": "1ec823c2af54f60281f39ea1f6ba4c0fd58ec6e5",
+            "path": "guest/scripts/materialize-omarchy.sh"
+          },
+          {
+            "block": "\n-- This device carries reconstructed pinch contacts, not physical fingers.\n-- Keep taps and keyboard palm rejection from changing those gestures.\nhl.device({\n  name = \"qemu-virtio-pinch-touchpad\",\n  tap_to_click = false,\n  disable_while_typing = false,\n})\n",
+            "commit": "d56a3c0926ab7fd1301a0256df735504124beaa6",
+            "path": "guest/native-overlay/usr/share/try-omarchy/pinch-input.lua"
+          }
+        ],
+        "markers": [
+          "/usr/share/try-omarchy/",
+          "qemu-virtio-pinch-touchpad"
+        ]
       }
     },
     {
@@ -251,7 +267,7 @@
       "action": "preserve",
       "evidence": {
         "path": "guest/fragments/fcitx5-profile.ini",
-        "sha256": "06a789f19c36b51585104fae04b3759d3abf06c6d0d63bb33a8955fb04a3615c"
+        "sha256": "5ac8d706f85a4e6136d73a3631f18cdb7ab3055aa230850ac9663798b08bbff2"
       },
       "id": "try-fcitx5-profile",
       "match": "exact",

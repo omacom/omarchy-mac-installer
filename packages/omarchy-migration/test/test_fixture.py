@@ -89,7 +89,7 @@ class RequestTests(unittest.TestCase):
         fixture.check_request(export_request(credential_stores=["ssh"]), policy)
         for request, error in (
                 ({**export_request(), "inventory_id": str(uuid.uuid4())}, "inventory_changed"),
-                ({**export_request(), "policy_revision": "try-omarchy/82927e9/3"}, "policy_revision_mismatch"),
+                ({**export_request(), "policy_revision": "try-omarchy/82927e9/4"}, "policy_revision_mismatch"),
                 (export_request(categories=["photos"]), "unknown_category"),
                 (export_request(credential_stores=["keychain"]), "unknown_credential_store"),
                 (export_request(credential_stores=["chromium"]), "credential_store_unavailable"),

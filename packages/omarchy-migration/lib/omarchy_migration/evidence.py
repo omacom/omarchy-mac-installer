@@ -29,8 +29,19 @@ def drift(policy, checkout):
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if digest != record["sha256"]:
                 changed.append({"path": record["path"], "status": "changed", "sha256": digest})
+    for rule in policy["rules"]:
+        for item in rule.get("transform", {}).get("earlier", []):
+            if not _written_at(root, item):
+                changed.append({"path": item["path"], "status": "earlier-block-not-found"})
     unique = {json.dumps(item, sort_keys=True): item for item in changed}
     return sorted(unique.values(), key=lambda item: item["path"])
+
+
+def _written_at(root, item):
+    """Whether an earlier block's text is in its cited file at its cited commit."""
+    shown = subprocess.run(["git", "-C", str(root), "show", f"{item['commit']}:{item['path']}"],
+                           capture_output=True)
+    return shown.returncode == 0 and item["block"].strip("\n").encode() in shown.stdout
 
 
 def main(argv=None):

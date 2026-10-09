@@ -136,6 +136,8 @@ class EvidenceTests(unittest.TestCase):
         self.policy["mounts"] = []
         self.policy["rules"] = self.policy["rules"][:2]
         for rule in self.policy["rules"]:
+            # This checkout has no provider history for earlier blocks to cite.
+            rule.get("transform", {}).pop("earlier", None)
             path = self.directory / rule["evidence"]["path"]
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(rule["id"])
@@ -150,6 +152,30 @@ class EvidenceTests(unittest.TestCase):
         (self.directory / second).unlink()
         statuses = {item["path"]: item["status"] for item in evidence.drift(self.policy, self.directory)}
         self.assertEqual(statuses, {first: "changed", second: "missing"})
+
+    def test_an_earlier_block_must_appear_in_its_cited_file_at_its_commit(self):
+        git = ["git", "-C", str(self.directory), "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+        subprocess.run([*git, "init", "-q"], check=True)
+        writer = self.directory / "guest/writer.sh"
+        writer.parent.mkdir(parents=True, exist_ok=True)
+        writer.write_text("cat >> input.lua <<'EOF'\n\n-- try block\ndofile(\"/try/x.lua\")\nEOF\n")
+        subprocess.run([*git, "add", "-A"], check=True)
+        subprocess.run([*git, "commit", "-q", "-m", "old block"], check=True)
+        commit = subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+        writer.write_text("rewritten later\n")
+        rule = copy.deepcopy(self.policy["rules"][0])
+        rule["transform"] = {"type": "strip-appended-block", "block": "\n-- new\n",
+                             "earlier": [{"block": "\n-- try block\ndofile(\"/try/x.lua\")\n",
+                                          "commit": commit, "path": "guest/writer.sh"}]}
+        self.policy["rules"][0] = rule
+        self.assertEqual(evidence.drift(self.policy, self.directory), [])
+        for damage in ({"block": "\n-- never written\n"}, {"commit": "f" * 40}, {"path": "guest/other.sh"}):
+            broken = copy.deepcopy(self.policy)
+            broken["rules"][0]["transform"]["earlier"][0].update(damage)
+            with self.subTest(damage=damage):
+                self.assertEqual(evidence.drift(broken, self.directory),
+                                 [{"path": broken["rules"][0]["transform"]["earlier"][0]["path"],
+                                   "status": "earlier-block-not-found"}])
 
     def test_evidence_cannot_escape_the_checkout_through_a_link(self):
         path = self.directory / self.policy["rules"][0]["evidence"]["path"]

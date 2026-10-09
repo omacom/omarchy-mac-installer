@@ -17,7 +17,7 @@
     "reinstall": 3
   },
   "plan_id": "e1f3a5c7-4b6d-4e8f-a0b2-c4d6e8f0a104",
-  "policy_revision": "try-omarchy/82927e9/3",
+  "policy_revision": "try-omarchy/82927e9/4",
   "required_bytes": 1048576,
   "schema": "omarchy-migration/plan/1"
 }

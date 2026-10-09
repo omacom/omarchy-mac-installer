@@ -20,6 +20,27 @@ SEEDED_MENU = b'''{
 }
 '''
 
+# What Try appended to input.lua for VMs created 2026-09-09..21 (1ec823c,
+# guest/scripts/materialize-omarchy.sh), before the keyboard line existed.
+PINCH_ONLY_BLOCK = b'''
+-- Try Omarchy's host pinch device carries gestures only.
+dofile("/usr/share/try-omarchy/pinch-input.lua")
+'''
+
+# What Try's existing-VM repair (guest/scripts/migrate-user-fixes.py) appends
+# to older VMs since 2026-10-02 (d56a3c0): a newline, then
+# guest/native-overlay/usr/share/try-omarchy/pinch-input.lua verbatim; the
+# policy cites that file, which holds the text.
+REPAIRED_BLOCK = b'''
+-- This device carries reconstructed pinch contacts, not physical fingers.
+-- Keep taps and keyboard palm rejection from changing those gestures.
+hl.device({
+  name = "qemu-virtio-pinch-touchpad",
+  tap_to_click = false,
+  disable_while_typing = false,
+})
+'''
+
 # The same file after the Touch ID and integrations entries and a user edit.
 EXTENDED_MENU = b'''{
   // My own shortcuts stay.
@@ -181,6 +202,34 @@ class StripBlockTests(unittest.TestCase):
         self.assertEqual(self.policy.transform(input_rule, partial), (None, "residual"))
         self.assertEqual(self.policy.transform(rule("try-chromium-wayland-ime"), b"  --enable-wayland-ime  \n"),
                          (None, "residual"))
+
+    def test_every_block_try_has_shipped_is_stripped(self):
+        mine = b"input {\n  kb_layout = us\n}\n-- my mouse speed\nsensitivity = 0.3\n"
+        for name, block in (("current", rule("try-hypr-input-overrides")["transform"]["block"].encode()),
+                            ("factory 2026-09-09..21", PINCH_ONLY_BLOCK),
+                            ("repaired since 2026-10-02", REPAIRED_BLOCK)):
+            with self.subTest(name=name):
+                result = self.policy.transform(rule("try-hypr-input-overrides"), mine + block)
+                self.assertEqual(result, (mine, "applied"))
+
+    def test_residue_is_judged_by_try_markers_not_generic_lua(self):
+        own_device = (b'hl.device({\n  name = "my-trackpad",\n  tap_to_click = false,\n'
+                      b'  disable_while_typing = false,\n})\n')
+        input_rule = rule("try-hypr-input-overrides")
+        self.assertEqual(self.policy.transform(input_rule, own_device), (own_device, "not-applicable"))
+        self.assertEqual(self.policy.transform(input_rule, own_device + REPAIRED_BLOCK), (own_device, "applied"))
+        leftover = own_device + b'hl.device({\n  name = "qemu-virtio-pinch-touchpad",\n})\n'
+        self.assertEqual(self.policy.transform(input_rule, leftover), (None, "residual"))
+
+    def test_earlier_blocks_cite_the_try_commit_that_wrote_them(self):
+        transform = rule("try-hypr-input-overrides")["transform"]
+        self.assertEqual({item["block"].encode() for item in transform["earlier"]}, {PINCH_ONLY_BLOCK, REPAIRED_BLOCK})
+        for damage in ({"commit": "1ec823c"}, {"path": "/abs"}, {"block": ""}, {"block": "-- no marker here\n"}):
+            document = copy.deepcopy(DOCUMENT)
+            target = next(item for item in document["rules"] if item["id"] == "try-hypr-input-overrides")
+            target["transform"]["earlier"][0].update(damage)
+            with self.subTest(damage=damage), self.assertRaises(contract.ContractError):
+                contract.validate(document)
 
     def test_repeated_block_is_ambiguous(self):
         line = b"--enable-wayland-ime\n"

@@ -591,13 +591,13 @@ class CollectionTests(unittest.TestCase):
                            ".local/share/omarchy", ".config/chromium/Default/Cookies", ".local/share/keyrings/login.keyring"):
                 self.assertNotIn(absent, snapshot.paths)
             self.assertEqual(self.entry(snapshot, "Work")["mount"], "mac-share")
-            self.assertEqual(snapshot.report["policy_revision"], "try-omarchy/82927e9/3")
+            self.assertEqual(snapshot.report["policy_revision"], "try-omarchy/82927e9/4")
             self.assertEqual(snapshot.report["counts"]["held-out"], 2)
             self.assertEqual(snapshot.report["counts"]["excluded"], 3)
             self.assertEqual(snapshot.report["counts"]["transformed"], 3)
             provenance = snapshot.manifest["provenance"]
             self.assertEqual((provenance["policy_revision"], provenance["policy_sha256"]),
-                             ("try-omarchy/82927e9/3", snapshot.report["policy_sha256"]))
+                             ("try-omarchy/82927e9/4", snapshot.report["policy_sha256"]))
             self.assertEqual(provenance["collection"]["counts"], snapshot.report["counts"])
             exceptions = {item["source"]: (item["outcome"], item["rule"] or item["store"] or item["mount"])
                           for item in provenance["collection"]["exceptions"]}

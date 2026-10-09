@@ -1,8 +1,8 @@
 {
   "schema": "omarchy-migration/export-request/2",
   "request_id": "780b82aa-3c95-4f88-8c64-859146068e8f",
-  "inventory_id": "6d1e7879-a73f-5f72-bdde-fb9fb2231ca7",
-  "policy_revision": "try-omarchy/82927e9/3/fixture",
+  "inventory_id": "09a91ccd-0a54-58b1-b3f9-74c559052a52",
+  "policy_revision": "try-omarchy/82927e9/4/fixture",
   "selection": {
     "categories": [
       "files-and-projects",
