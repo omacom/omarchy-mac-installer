@@ -147,6 +147,47 @@ grep -A3 '^  prepare_repositories$' "$here/bin/build-mac-image" | grep -Fxq '  r
   fail "the build reads the Apple list before it creates the images"
 pass "the build reads the Apple list once, before it creates the images"
 
+# The installed pacman configuration, from each runtime layout: e1b0e5e9b's aarch64-apple templates,
+# 5397950a2's apple-silicon template with its aarch64 mirror list, and older ones.
+installed_config() {
+  local layout
+  target=$scratch/installed
+  rm -rf "$target"
+  mkdir -p "$target/etc"
+  for layout in "$@"; do
+    mkdir -p "$target/${layout%/*}"
+    printf '[options]\n# %s\n' "$layout" >"$target/$layout"
+  done
+  (fail() { builder_fail "$@"; }; write_installed_config) || return
+  printf '%s %s\n' "$(sed -n 2p "$target/etc/pacman.conf")" "$(sed -n 2p "$target/etc/pacman.d/mirrorlist")"
+}
+templates=usr/share/omarchy/default/pacman
+e1b0e5e9b=("$templates"/aarch64/{pacman-edge.conf,mirrorlist-edge} "$templates"/aarch64-apple/{pacman-edge.conf,mirrorlist-edge})
+r5397950a2=("$templates"/aarch64/{pacman-edge.conf,mirrorlist-edge} "$templates"/apple-silicon/{pacman-edge.conf,mirrorlist-edge})
+[[ $(installed_config "${e1b0e5e9b[@]}") == "# $templates/aarch64-apple/pacman-edge.conf # $templates/aarch64-apple/mirrorlist-edge" ]] ||
+  fail "an e1b0e5e9b runtime installs its aarch64-apple template and mirror list"
+[[ $(installed_config "${e1b0e5e9b[@]}" usr/share/omarchy-mac/pacman/pacman-edge.conf) == \
+  "# $templates/aarch64-apple/pacman-edge.conf # $templates/aarch64-apple/mirrorlist-edge" ]] ||
+  fail "the runtime's aarch64-apple template wins over omarchy-mac's"
+[[ $(installed_config "${r5397950a2[@]}") == "# $templates/apple-silicon/pacman-edge.conf # $templates/aarch64/mirrorlist-edge" ]] ||
+  fail "a 5397950a2 runtime installs its apple-silicon template with its aarch64 mirror list"
+[[ $(installed_config "${r5397950a2[@]}" usr/share/omarchy-mac/pacman/pacman-edge.conf) == \
+  "# usr/share/omarchy-mac/pacman/pacman-edge.conf # $templates/aarch64/mirrorlist-edge" ]] ||
+  fail "omarchy-mac's template wins over a 5397950a2 runtime's apple-silicon one"
+[[ $(installed_config "$templates"/aarch64/pacman-edge.conf "$templates"/mirrorlist-aarch64) == \
+  "# $templates/aarch64/pacman-edge.conf # $templates/mirrorlist-aarch64" ]] ||
+  fail "an older runtime installs its aarch64 template and single mirror list"
+[[ $(installed_config "$templates"/aarch64-apple/pacman-edge.conf "$templates"/aarch64/mirrorlist-edge) == \
+  "# $templates/aarch64-apple/pacman-edge.conf # $templates/aarch64/mirrorlist-edge" ]] ||
+  fail "an aarch64-apple template without its own mirror list takes the aarch64 one"
+if output=$(installed_config "$templates"/aarch64-apple/mirrorlist-edge 2>&1); then
+  fail "a runtime with no Apple Silicon template for the channel is refused"
+fi
+[[ $output == "build-mac-image: the image ships no Apple Silicon pacman configuration for edge" ]] ||
+  fail "a runtime with no template is refused with its reason (got: $output)"
+unset target
+pass "the installed pacman.conf is the runtime's aarch64-apple template with its mirror list, else omarchy-mac's, apple-silicon or aarch64 with the aarch64 list"
+
 runtime_list() {
   case $1 in
     base) printf 'hyprland\nobs-studio\n' ;;

@@ -846,11 +846,12 @@ release_build_pacman_config() {
   rmdir "$target/var/cache/omarchy-image-repositories" "$target/var/cache/omarchy-image-packages"
 }
 
-# The installed configuration for an Apple Silicon Mac: omarchy-mac's
-# template for the channel the inputs name (an older set's runtime
-# apple-silicon one, or an even older runtime's aarch64 one), with the
-# runtime's aarch64 mirror list (per channel, or the single
-# mirrorlist-aarch64 of a runtime that keeps its own repositories). TEST IMAGES ONLY: a
+# The installed configuration for an Apple Silicon Mac: the runtime's
+# aarch64-apple template for the channel the inputs name (else omarchy-mac's,
+# an older runtime's apple-silicon one, or an even older runtime's aarch64
+# one), with the mirror list beside the runtime's aarch64-apple template, else
+# its aarch64 one (per channel, or the single mirrorlist-aarch64 of a runtime
+# that keeps its own repositories). TEST IMAGES ONLY: a
 # test candidate set's runtime sorts below the channel's omarchy, so its
 # [options] gain a marked IgnorePkg for the packages built from the set's
 # source commit, which keeps a pacman -Syu from replacing them
@@ -858,10 +859,12 @@ release_build_pacman_config() {
 write_installed_config() {
   local channel templates=$target/usr/share/omarchy/default/pacman repositories mirrorlist
   channel=$(field omarchy_channel)
-  repositories=$target/usr/share/omarchy-mac/pacman
+  repositories=$templates/aarch64-apple
+  [[ -f $repositories/pacman-$channel.conf ]] || repositories=$target/usr/share/omarchy-mac/pacman
   [[ -f $repositories/pacman-$channel.conf ]] || repositories=$templates/apple-silicon
   [[ -f $repositories/pacman-$channel.conf ]] || repositories=$templates/aarch64
-  mirrorlist=$templates/aarch64/mirrorlist-$channel
+  mirrorlist=$templates/aarch64-apple/mirrorlist-$channel
+  [[ -f $mirrorlist ]] || mirrorlist=$templates/aarch64/mirrorlist-$channel
   [[ -f $mirrorlist ]] || mirrorlist=$templates/mirrorlist-aarch64
   [[ -f $repositories/pacman-$channel.conf ]] || fail "the image ships no Apple Silicon pacman configuration for $channel"
   [[ -f $mirrorlist ]] || fail "the runtime ships no aarch64 mirror list for $channel"

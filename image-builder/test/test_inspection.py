@@ -546,6 +546,33 @@ class InspectionTest(unittest.TestCase):
         self.assertEqual(report["checks"]["pacman-config"]["result"], "passed", report["checks"]["pacman-config"])
         self.assertIn("omarchy-mac's apple-silicon edge pacman.conf", report["checks"]["pacman-config"]["detail"])
 
+    def test_pacman_config_follows_the_runtimes_aarch64_apple_templates(self):
+        runtime = self.root / "usr/share/omarchy/default/pacman"
+        apple = "[options]\nArchitecture = auto\n\n[omarchy]\nServer = https://pkgs.omarchy.org/edge/$arch\n"
+        apple += "\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
+        apple += "".join(f"\n[{r}]\nInclude = /etc/pacman.d/mirrorlist\n" for r in ("core", "extra", "alarm", "aur"))
+        for directory in (runtime / "apple-silicon", self.root / "usr/share/omarchy-mac/pacman"):
+            directory.mkdir(parents=True)
+            (directory / "pacman-edge.conf").write_text(apple + f"\n# {directory.name}\n")
+        (runtime / "aarch64-apple").mkdir()
+        (runtime / "aarch64-apple/pacman-edge.conf").write_text(apple)
+        (runtime / "aarch64-apple/mirrorlist-edge").write_text("Server = https://arm-mirror.omarchy.org/$arch/$repo\n")
+        pinned = fixtures.test_image_pin.pinned(self.summary)
+        self.assertFails("pacman-config", "is not the runtime's aarch64-apple edge configuration")
+        (self.root / "etc/pacman.conf").write_bytes(fixtures.test_image_pin.render(apple.encode(), pinned))
+        self.assertFails("pacman-config", "mirrorlist is not the runtime's aarch64-apple edge mirror list")
+        (self.root / "etc/pacman.d/mirrorlist").write_text("Server = https://arm-mirror.omarchy.org/$arch/$repo\n")
+        report = self.inspect()
+        self.assertEqual(report["checks"]["pacman-config"]["result"], "passed", report["checks"]["pacman-config"])
+        self.assertIn("the runtime's aarch64-apple edge pacman.conf and the runtime's aarch64-apple mirror list",
+                      report["checks"]["pacman-config"]["detail"])
+        # Without a mirror list of its own, the aarch64-apple template takes the aarch64 one.
+        (runtime / "aarch64-apple/mirrorlist-edge").unlink()
+        self.assertFails("pacman-config", "mirrorlist is not the runtime's aarch64 edge mirror list")
+        (self.root / "etc/pacman.d/mirrorlist").write_bytes((runtime / "aarch64/mirrorlist-edge").read_bytes())
+        report = self.inspect()
+        self.assertEqual(report["checks"]["pacman-config"]["result"], "passed", report["checks"]["pacman-config"])
+
     def test_pacman_config_needs_a_template(self):
         (self.root / "usr/share/omarchy/default/pacman/aarch64/pacman-edge.conf").unlink()
         self.assertFails("pacman-config", "the image ships no Apple Silicon pacman configuration for edge")
