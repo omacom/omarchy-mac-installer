@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify and freeze a signed Apple Silicon candidate set; never trust artifact-supplied keys.
 
-A set is the directory the candidate-set tool of omacom/omarchy-mac signs:
+A set is the directory the candidate-set tool of omacom/omarchy-mac-pkgs signs:
 manifest.json, signing.json and signing.json.sig, and each package archive
 with its detached .sig. Trust comes only from candidate-trust/ beside this
 file: the signer's fingerprints, the digest of its public key and the package
@@ -23,6 +23,10 @@ manifest, one entry per such package:
 
 Each declared package must name that commit as its source and carry it as its
 source revision. Any other runtime package from another commit is refused.
+
+The runtime's source is the policy's source_repositories: omacom/omarchy, where
+it lives since omacom/omarchy#14431, or omacom/omarchy-mac, the fork sets named
+before that (it serves the same commits).
 
   candidate_set.py import --input DIR --output DIR --receipt-sha256 HEX
                           --manifest-sha256 HEX --source-commit HEX
@@ -259,7 +263,7 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
         source = data.get('source', {})
         require(data.get('schema') == 1 and data.get('candidate_only') is True
                 and data.get('set') == receipt.get('set')
-                and source.get('repository') == policy['source_repository']
+                and source.get('repository') in policy['source_repositories']
                 and source.get('commit') == source_commit, 'wrong build manifest')
         require(data.get('set_sha256') == set_digest(data) == receipt.get('set_sha256'), 'set digest mismatch')
         packages = data['packages']
@@ -303,7 +307,7 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
                     require(origin.get('repository') in policy['platform_repositories']
                             and origin.get('commit') == declared[name] == revision, 'mixed package sources: ' + name)
                     origins[name] = 'platform ' + revision
-                elif origin.get('repository') == policy['source_repository'] and origin.get('commit') == source_commit:
+                elif origin.get('repository') in policy['source_repositories'] and origin.get('commit') == source_commit:
                     require(revision == source_commit, 'mixed package sources: ' + name)
                     origins[name] = 'commit'
                 else:

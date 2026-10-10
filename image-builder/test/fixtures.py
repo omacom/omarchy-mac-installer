@@ -190,14 +190,14 @@ def make_set(directory: Path, signer: Signer, *, versions=None, contents=None, n
         if name in channel or not planned:
             source = channel_source(f"{name}-{version}-{arch}.pkg.tar.xz")
         else:
-            source = {"repository": POLICY["source_repository"] if runtime else POLICY["boot_repository"],
+            source = {"repository": POLICY["source_repositories"][0] if runtime else POLICY["boot_repository"],
                       "commit": SOURCE if runtime else BOOT_SOURCE}
         packages.append({
             "name": name, "version": version, "arch": arch, "filename": filename,
             "sha256": candidate_set.digest(directory / filename), "source": source,
         })
     manifest = {"schema": 1, "candidate_only": True, "set": "apple-test-fixture",
-                "source": {"repository": POLICY["source_repository"], "commit": SOURCE}, "packages": packages}
+                "source": {"repository": POLICY["source_repositories"][0], "commit": SOURCE}, "packages": packages}
     manifest["set_sha256"] = candidate_set.set_digest(manifest)
     if manifest_edit:
         manifest_edit(manifest)
