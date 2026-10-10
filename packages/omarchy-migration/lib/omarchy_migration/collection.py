@@ -169,8 +169,10 @@ def _mount(fd):
 
 
 class _Snapshot:
-    def __init__(self, root_fd, root, directory, request, policy, supported, share_roots, budget):
+    def __init__(self, root_fd, root, directory, request, policy, supported, share_roots, budget, direct=False):
         self.root_fd, self.root, self.directory = root_fd, root, directory
+        self.direct = direct
+        self.identities = {}  # archive path -> identity of a file read in place
         self.request, self.policy = request, policy
         self.supported = frozenset(supported)
         self.mount = _mount(root_fd)
@@ -290,7 +292,8 @@ class _Snapshot:
         self.total = total
         for key in set(self.paths) - paths:
             del self.paths[key], self.metadata[key]
-        kept = {path.name for path in self.paths.values()}
+            self.identities.pop(key, None)
+        kept = {path.name for path in self.paths.values() if path.parent == self.directory}
         for path in self.directory.iterdir():
             if path.name.isdigit() and path.name not in kept:
                 if path.is_dir() and not path.is_symlink():
@@ -360,6 +363,9 @@ class _Snapshot:
                 raise probe.Rejected("collection byte limit")
             if transform and before.st_size > migration_policy.MAX_TRANSFORM_INPUT:
                 self._report(source, archive, "unsupported", "transform-too-large", rule=rule_id)
+                return
+            if self.direct and not transform:
+                self._in_place(parent, name, source, archive, before, rule_id)
                 return
             fd = os.open(name, FILE_FLAGS, dir_fd=parent)
             captured = bytearray() if transform else None
@@ -457,6 +463,31 @@ class _Snapshot:
         if self.share is None:
             self.history[source] = _metadata(before)
 
+    def _in_place(self, parent, name, source, archive, before, rule_id):
+        """Register a regular file of a read-only source to be read where it is."""
+        fd = os.open(name, FILE_FLAGS, dir_fd=parent)
+        try:
+            self._guard(fd)
+            opened = os.fstat(fd)
+            if _metadata(opened) != _metadata(before):
+                raise probe.Rejected("source file replaced before capture")
+            lost = metadata_losses(fd, before)
+        finally:
+            os.close(fd)
+        # The directory's path stays valid: nothing on a read-only mount moves.
+        location = Path(os.readlink(f"/proc/self/fd/{parent}")) / name
+        self.total += before.st_size
+        self.paths[archive], self.metadata[archive] = location, before
+        self.identities[archive] = probe.identity(opened)
+        if lost:
+            self.losses[archive] = lost
+        self._report(source, archive, "included", "regular-file", rule=rule_id)
+        after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if _metadata(after) != _metadata(before):
+            raise probe.Rejected("source entry changed during capture")
+        if self.share is None:
+            self.history[source] = _metadata(before)
+
     @staticmethod
     def _is_mount_root(target, mount):
         if not target.startswith("/"):
@@ -468,6 +499,8 @@ class _Snapshot:
         """Copy a selected shared folder's contents in place of its home link."""
         fd = os.open(self.share_roots[mount["id"]], DIRECTORY_FLAGS)
         try:
+            if self.direct and not _read_only(fd):
+                raise probe.Rejected("direct collection requires a read-only shared folder")
             metadata = os.fstat(fd)
             self.share = {"id": mount["id"], "mount": _mount(fd), "archive": archive}
             try:
@@ -564,7 +597,7 @@ class _Snapshot:
         finally:
             os.close(reopened)
         self._add_originals()
-        self.manifest = probe.make_tree_manifest(self.paths)
+        self.manifest = probe.make_tree_manifest(self.paths, self.identities)
         by_path = {entry["path"]: entry for entry in self.manifest["entries"]}
         for entry in self.manifest["entries"]:
             metadata = self.metadata[entry["path"]]
@@ -604,12 +637,21 @@ class _Snapshot:
             raise probe.Rejected("collection manifest size")
 
 
+def _read_only(fd):
+    return bool(os.fstatvfs(fd).f_flag & os.ST_RDONLY)
+
+
 @contextlib.contextmanager
-def collect_fixture(root, request, policy, *, supported_adapters=(), snapshot_parent, share_roots=None):
+def collect_fixture(root, request, policy, *, supported_adapters=(), snapshot_parent, share_roots=None, direct=False):
     """Capture only an explicitly supplied, caller-created synthetic source.
 
     `share_roots` maps a policy mount id to the directory holding its contents
     (the policy's mount path by default); only mounts the request selects are read.
+
+    With `direct`, regular files are read in place instead of copied, so no
+    file contents reach the snapshot directory except generated ones (cleaned
+    files and their originals). Every source mount must then be read-only,
+    and the archive writer refuses a file whose identity changed.
     """
     loaded = _contracts(request, policy, supported_adapters)
     roots = {mount["id"]: mount["path"] for mount in loaded.mounts}
@@ -634,6 +676,8 @@ def collect_fixture(root, request, policy, *, supported_adapters=(), snapshot_pa
         metadata = os.fstat(root_fd)
         if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o022:
             raise probe.Rejected("unsafe fixture root")
+        if direct and not _read_only(root_fd):
+            raise probe.Rejected("direct collection requires a read-only source")
         parent_fd = os.open(parent, DIRECTORY_FLAGS)
         try:
             parent_metadata = os.fstat(parent_fd)
@@ -647,7 +691,8 @@ def collect_fixture(root, request, policy, *, supported_adapters=(), snapshot_pa
                     raise probe.Rejected("snapshot and source must be separate")
                 status = os.statvfs(directory)
                 budget = max(0, status.f_bavail * status.f_frsize - SNAPSHOT_MARGIN)
-                snapshot = _Snapshot(root_fd, root, directory, request, loaded, supported_adapters, roots, budget)
+                snapshot = _Snapshot(root_fd, root, directory, request, loaded, supported_adapters, roots, budget,
+                                     direct)
                 snapshot.capture()
                 yield snapshot
         finally:

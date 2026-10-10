@@ -1,6 +1,7 @@
 """Policy holdouts and exclusions precede traversal; private snapshots isolate later source changes."""
 
 import copy
+import io
 import json
 import os
 from pathlib import Path
@@ -844,6 +845,73 @@ class CollectionTests(unittest.TestCase):
         self.assertTrue((target / "Work").is_dir() and not (target / "Work").is_symlink())
         self.assertEqual((target / "Work/Projects/plan.md").read_bytes(), b"plan\n")
         self.assertFalse(os.path.lexists(target / "Notes"))
+
+    # Direct collection reads an immutable source in place. A test user cannot
+    # mount a read-only filesystem, so these cases patch the read-only probe;
+    # the Try export boot proves it on a real read-only root.
+
+    def test_direct_collection_refuses_a_writable_source(self):
+        with self.assertRaisesRegex(probe.Rejected, "read-only"):
+            with self.capture(direct=True):
+                self.fail("direct collection of a writable home accepted")
+        share = self.make_share()
+        self.request["selected_mounts"] = ["mac-share"]
+        share_identity = (share.stat().st_dev, share.stat().st_ino)
+        only_home = lambda fd: (os.fstat(fd).st_dev, os.fstat(fd).st_ino) != share_identity
+        with patch.object(collection, "_read_only", side_effect=only_home):
+            with self.assertRaisesRegex(probe.Rejected, "read-only"):
+                with self.capture(direct=True, share_roots={"mac-share": str(share)}):
+                    self.fail("direct collection of a writable shared folder accepted")
+        self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_direct_collection_copies_no_file_contents_and_round_trips(self):
+        age = configured_age()
+        if age is None:
+            self.skipTest("set verified age for encrypted roundtrip")
+        self.write(".config/app-flags.conf", b"--user-choice\n--vm-only\n")
+        share = self.make_share()
+        self.request["selected_mounts"] = ["mac-share"]
+        with self.capture(share_roots={"mac-share": str(share)}) as snapshot:
+            copied = copy.deepcopy(snapshot.manifest["entries"])
+        ciphertext = self.root / "direct.age"
+        with patch.object(collection, "_read_only", return_value=True):
+            with self.capture(direct=True, share_roots={"mac-share": str(share)}) as snapshot:
+                self.assertEqual(snapshot.manifest["entries"], copied)
+                staged = [path for path in snapshot.directory.rglob("*") if path.is_file() and not path.is_symlink()]
+                # Only the cleaned file and its original copy are generated data.
+                self.assertEqual(sorted(path.read_bytes() for path in staged),
+                                 [b"--user-choice\n", b"--user-choice\n--vm-only\n"])
+                manifest = snapshot.manifest
+                probe.encrypt(age, SECRET, ciphertext,
+                              lambda stream: probe.write_archive(stream, manifest, snapshot.paths, snapshot.identities))
+        target, job = self.root / "destination", self.root / "job"
+        target.mkdir(mode=0o700)
+        job.mkdir(mode=0o700)
+        with restore.verified_bundle(age, SECRET, ciphertext) as bundle:
+            with restore.Restorer(bundle, target, job) as importer:
+                restored = importer.apply(importer.plan())
+        self.assertNotIn("conflict", {action.status for action in restored})
+        for name, content in self.ordinary.items():
+            self.assertEqual((target / name).read_bytes(), content)
+        self.assertEqual((target / "Work/Projects/plan.md").read_bytes(), b"plan\n")
+        self.assertEqual((target / ".config/app-flags.conf").read_bytes(), b"--user-choice\n")
+
+    def test_direct_collection_refuses_a_file_changed_after_capture(self):
+        name = next(iter(self.ordinary))
+        for change in ("content", "same-size-and-mtime"):
+            with self.subTest(change=change), patch.object(collection, "_read_only", return_value=True):
+                with self.capture(direct=True) as snapshot:
+                    path = self.source / name
+                    if change == "content":
+                        path.write_bytes(b"changed after capture")
+                    else:
+                        # Only the change time can show this edit.
+                        path.write_bytes(bytes(reversed(self.ordinary[name])))
+                        os.utime(path, ns=(MTIME, MTIME))
+                    with self.assertRaisesRegex(probe.Rejected, "changed after capture"):
+                        probe.write_archive(io.BytesIO(), snapshot.manifest, snapshot.paths, snapshot.identities)
+                path.write_bytes(self.ordinary[name])
+                os.utime(path, ns=(MTIME, MTIME))
 
 
 if __name__ == "__main__":

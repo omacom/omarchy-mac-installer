@@ -114,11 +114,22 @@ def entry_kind(entry):
     return entry.get("kind", "file")
 
 
-def make_tree_manifest(paths):
+def identity(metadata):
+    """What a file read in place must still be when it is read again."""
+    return (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
+
+
+def _same_as_captured(name, opened, identities):
+    if identities and name in identities and identity(opened) != identities[name]:
+        raise Rejected("source changed after capture")
+
+
+def make_tree_manifest(paths, identities=None):
     """Describe an explicit synthetic mapping, never recursively discover a home.
 
     All parents must be included. Links are recorded with lstat/readlink and
     never followed; a trusted, stable source mapping is still a prerequisite.
+    `identities` holds the captured identity of files read in place.
     """
     entries = []
     for index, (name, source) in enumerate(sorted(paths.items())):
@@ -135,6 +146,7 @@ def make_tree_manifest(paths):
                     opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns
                 ) != (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns):
                     raise Rejected("source changed while inventorying")
+                _same_as_captured(name, opened, identities)
                 checksum = hashlib.file_digest(stream, "sha256").hexdigest()
             entry.update(kind="file", mode=metadata.st_mode & 0o777,
                          bytes=metadata.st_size, sha256=checksum)
@@ -435,8 +447,11 @@ class AgeProcess:
         os.close(self.master)
 
 
-def write_archive(stream, manifest, files):
-    """Numbered regular tar members; personal paths/metadata live in the manifest."""
+def write_archive(stream, manifest, files, identities=None):
+    """Numbered regular tar members; personal paths/metadata live in the manifest.
+
+    Files read in place (see `identities`) must be unchanged since capture.
+    """
     with tarfile.open(fileobj=stream, mode="w|", format=tarfile.USTAR_FORMAT) as archive:
         data = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
         metadata = tarfile.TarInfo("manifest.json")
@@ -449,8 +464,10 @@ def write_archive(stream, manifest, files):
             metadata.mode, metadata.size = 0o600, entry["bytes"]
             fd = os.open(files[entry["path"]], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             with os.fdopen(fd, "rb") as source:
-                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                opened = os.fstat(fd)
+                if not stat.S_ISREG(opened.st_mode):
                     raise Rejected("archive source must remain a regular file")
+                _same_as_captured(entry["path"], opened, identities)
                 archive.addfile(metadata, source)
 
 

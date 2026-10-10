@@ -94,8 +94,13 @@ def _write_document(path, value):
 
 
 def export_home(request, home, output, *, age, secret, policy_document, share_roots=None, scratch=None,
-                emit=lambda phase, **fields: None):
-    """Write bundle.age, receipt.json and request.json into a new private `output`."""
+                direct=False, emit=lambda phase, **fields: None):
+    """Write bundle.age, receipt.json and request.json into a new private `output`.
+
+    With `direct`, the home (and any selected shared folder) must be on a
+    read-only mount and is read in place: scratch then holds only cleaned
+    files and their originals, never other file contents.
+    """
     policy = migration_policy.Policy(policy_document)
     check_request(request, policy)
     home, output = Path(home), Path(output)
@@ -115,12 +120,15 @@ def export_home(request, home, output, *, age, secret, policy_document, share_ro
         parent.chmod(0o700)
         for attempt in range(1, CAPTURE_ATTEMPTS + 1):
             try:
-                with collection.collect_fixture(home, collection_request, policy_document,
-                                                snapshot_parent=parent, share_roots=share_roots) as snapshot:
+                with collection.collect_fixture(home, collection_request, policy_document, snapshot_parent=parent,
+                                                share_roots=share_roots, direct=direct) as snapshot:
                     manifest = snapshot.manifest
                     emit("capturing")
-                    encrypted = probe.encrypt(age, secret, output / "bundle.age",
-                                              lambda stream: probe.write_archive(stream, manifest, snapshot.paths))
+
+                    def write(stream):
+                        probe.write_archive(stream, manifest, snapshot.paths, snapshot.identities)
+
+                    encrypted = probe.encrypt(age, secret, output / "bundle.age", write)
                 break
             except probe.Rejected as error:
                 if str(error) not in LIVE_CHANGES or attempt == CAPTURE_ATTEMPTS:
@@ -151,6 +159,8 @@ def main(argv=None):
     parser.add_argument("--age", default=None, help="age executable (default: age on PATH)")
     parser.add_argument("--age-sha256", default=None, help="require this digest of the age executable")
     parser.add_argument("--scratch", type=Path, default=None, help="private scratch parent (default: system temp)")
+    parser.add_argument("--read-only-source", action="store_true",
+                        help="read the home in place; refuse unless it is on a read-only mount")
     parser.add_argument("--share-root", action="append", default=[], metavar="MOUNT=PATH",
                         help="read a selected shared folder from PATH instead of its mount point")
     arguments = parser.parse_args(argv)
@@ -180,7 +190,7 @@ def main(argv=None):
             roots[mount] = path
         export_home(request, arguments.home, arguments.output, age=age, secret=secret,
                     policy_document=json.loads(POLICY_PATH.read_bytes()), share_roots=roots or None,
-                    scratch=arguments.scratch, emit=emit)
+                    scratch=arguments.scratch, direct=arguments.read_only_source, emit=emit)
         return 0
     except ExportError as error:
         emit("failed", error=str(error))

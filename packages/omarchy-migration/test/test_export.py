@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 import uuid
+from unittest.mock import patch
 
 from omarchy_migration import contract, dependency, export, fixture, probe, trial
 from omarchy_migration.dependency import configured_age
@@ -185,6 +186,24 @@ class ExportTests(unittest.TestCase):
                 self.assertEqual(events[-1]["phase"], "failed")
                 self.assertEqual(events[-1]["error"], error)
                 self.assertFalse((self.output / "bundle.age").exists())
+
+    def test_read_only_source_mode_refuses_a_writable_home(self):
+        result, events = self.run_export(export_request(), PASSPHRASE + b"\n", "--read-only-source")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(events[-1]["error"], "export_operation_failed")
+        self.assertIn("read-only", result.stderr)
+        self.assertFalse((self.output / "bundle.age").exists())
+
+    def test_read_only_source_export_matches_a_snapshot_export(self):
+        snapshot_output, direct_output = self.root / "snapshot", self.root / "direct"
+        request = export_request()
+        for output, direct in ((snapshot_output, False), (direct_output, True)):
+            with patch.object(export.collection, "_read_only", return_value=True):
+                export.export_home(request, self.home, output, age=self.age, secret=PASSPHRASE,
+                                   policy_document=policy_document(), scratch=self.scratch, direct=direct)
+        decoded = [probe.decode(self.age, PASSPHRASE, output / "bundle.age") for output in (snapshot_output, direct_output)]
+        self.assertEqual(*[[{key: value for key, value in entry.items() if key != "object"} for entry in manifest["entries"]]
+                           for manifest in decoded])
 
     def test_an_existing_output_is_never_reused_or_overwritten(self):
         self.output.mkdir()
