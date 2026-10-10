@@ -643,19 +643,19 @@ runtime_list() {
 }
 
 # The runtime's Apple list, read once before anything installs:
-# omarchy-apple-silicon.packages, else an older runtime's
-# omarchy-apple.packages. A link is passed over: bsdtar reads it as empty, and
-# the list it names is a member of its own.
+# omarchy-aarch64-apple.packages, else an older runtime's
+# omarchy-apple-silicon.packages or omarchy-apple.packages. A link is passed
+# over: bsdtar reads it as empty, and the list it names is a member of its own.
 read_apple_list() {
   local archive name list="" text
   archive=$candidates/$(candidate_archive omarchy)
-  for name in omarchy-apple-silicon omarchy-apple; do
+  for name in omarchy-aarch64-apple omarchy-apple-silicon omarchy-apple; do
     if [[ $(bsdtar -tvf "$archive" "usr/share/omarchy/install/$name.packages" 2>/dev/null) == -* ]]; then
       list=usr/share/omarchy/install/$name.packages
       break
     fi
   done
-  [[ -n $list ]] || fail "the runtime ships no Apple package list (omarchy-apple-silicon.packages or omarchy-apple.packages)"
+  [[ -n $list ]] || fail "the runtime ships no Apple package list (omarchy-aarch64-apple.packages, omarchy-apple-silicon.packages or omarchy-apple.packages)"
   text=$(bsdtar -xOf "$archive" "$list") || fail "could not read the runtime's ${list##*/}"
   mapfile -t apple_names < <(awk 'NF && $1 !~ /^#/ { print $1 }' <<<"$text")
   ((${#apple_names[@]})) || fail "the runtime's ${list##*/} names no package"
@@ -846,7 +846,7 @@ release_build_pacman_config() {
 
 # The installed configuration for an Apple Silicon Mac: omarchy-mac's
 # template for the channel the inputs name (an older set's runtime
-# apple-silicon one, or an even older runtime's aarch64 one), with the
+# aarch64-apple or apple-silicon one, or an even older runtime's aarch64 one), with the
 # runtime's aarch64 mirror list (per channel, or the single
 # mirrorlist-aarch64 of a runtime that keeps its own repositories). TEST IMAGES ONLY: a
 # test candidate set's runtime sorts below the channel's omarchy, so its
@@ -857,6 +857,7 @@ write_installed_config() {
   local channel templates=$target/usr/share/omarchy/default/pacman repositories mirrorlist
   channel=$(field omarchy_channel)
   repositories=$target/usr/share/omarchy-mac/pacman
+  [[ -f $repositories/pacman-$channel.conf ]] || repositories=$templates/aarch64-apple
   [[ -f $repositories/pacman-$channel.conf ]] || repositories=$templates/apple-silicon
   [[ -f $repositories/pacman-$channel.conf ]] || repositories=$templates/aarch64
   mirrorlist=$templates/aarch64/mirrorlist-$channel

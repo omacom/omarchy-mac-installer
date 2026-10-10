@@ -158,12 +158,13 @@ def check_runtime_sources(root: Path, candidates: Candidates, report: dict) -> s
 
 def check_apple_packages(root: Path, report: dict) -> str:
     """Every package the image's Apple list names is installed, reading the list
-    build-mac-image took: omarchy-apple-silicon.packages, else an older
-    runtime's omarchy-apple.packages, never a link."""
+    build-mac-image took: omarchy-aarch64-apple.packages, else an older
+    runtime's omarchy-apple-silicon.packages or omarchy-apple.packages, never
+    a link."""
     path = next((root / name for name in candidate_set.APPLE_LISTS
                  if (root / name).is_file() and not (root / name).is_symlink()), None)
     require(path is not None,
-            "the image ships no Apple package list (omarchy-apple-silicon.packages or omarchy-apple.packages)")
+            "the image ships no Apple package list (omarchy-aarch64-apple.packages, omarchy-apple-silicon.packages or omarchy-apple.packages)")
     names = [fields[0] for fields in map(str.split, path.read_text().splitlines())
              if fields and not fields[0].startswith("#")]
     require(bool(names), f"{path.name} names no package")
@@ -517,11 +518,12 @@ def check_first_boot(root: Path, report: dict) -> str:
 
 
 def pacman_templates(root: Path, channel: str) -> tuple[str, Path, Path]:
-    # The Apple template as build-mac-image picks it: omarchy-mac's, else an
-    # older runtime's apple-silicon one, else an even older runtime's aarch64
-    # one; and the runtime's aarch64 mirror list, per channel or single.
+    # The Apple template as build-mac-image picks it: omarchy-mac's, else the
+    # runtime's aarch64-apple one, else an older runtime's apple-silicon one, else
+    # an even older runtime's aarch64 one; and the runtime's aarch64 mirror list.
     runtime = root / "usr/share/omarchy/default/pacman"
     choices = (("omarchy-mac's apple-silicon", root / f"usr/share/omarchy-mac/pacman/pacman-{channel}.conf"),
+               ("the runtime's aarch64-apple", runtime / f"aarch64-apple/pacman-{channel}.conf"),
                ("the runtime's apple-silicon", runtime / f"apple-silicon/pacman-{channel}.conf"),
                ("the runtime's aarch64", runtime / f"aarch64/pacman-{channel}.conf"))
     kind, template = next((choice for choice in choices if choice[1].is_file()), choices[-1])
