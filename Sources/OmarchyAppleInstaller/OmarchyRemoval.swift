@@ -398,8 +398,9 @@
       _ plan: OmarchyRemovalPlan, record: (String) throws -> Void
     ) throws {
       var removed = Set<String>()
-      // Delete the startup container first: if a volume is busy, diskutil refuses
-      // before the Linux partitions are touched. No force-unmount or -force fallback.
+      // Delete the startup container first, then the Linux partitions. diskutil
+      // force-unmounts what it deletes or erases, so review refuses a mounted
+      // EFI partition rather than let it be forced off.
       for (index, member) in plan.members.enumerated() {
         let current = try disks.snapshot()
         try plan.validate(current, removed: removed)

@@ -163,16 +163,22 @@
           stubBootObject: stub.1))
     }
 
-    /// Reads an EFI partition in place when macOS already mounted it, otherwise
-    /// straight from its raw device. It must be the one the approved snapshot
-    /// names, by BSD identifier and UUID, before and after it is read.
+    /// Reads an EFI partition straight from its raw device; it is never
+    /// mounted. A mounted one is refused: `diskutil eraseVolume` would later
+    /// force it off, and on the M2 Max (macOS 27.0) that left FSKit's msdos
+    /// module holding the mount table, so every disk command hung. It must be
+    /// the one the approved snapshot names, by BSD identifier and UUID, before
+    /// and after it is read.
     private func withEFIPartition<T>(
       _ identifier: String, uuid expected: String, belongs: ([String: Any]) throws -> Bool,
       read body: (any RemovalFileReading) throws -> T
     ) throws -> T {
       let info = try reviewed(identifier, uuid: expected, belongs: belongs)
       if let mounted = info["MountPoint"] as? String, !mounted.isEmpty {
-        return try body(openTree(mounted, identifier))
+        throw RemovalFailure(
+          message:
+            "\(identifier) is mounted at \(mounted), and removal doesn’t erase a mounted EFI partition. Restart your Mac, which leaves it unmounted, then try again."
+        )
       }
       let volume: any RemovalFileReading
       do {
