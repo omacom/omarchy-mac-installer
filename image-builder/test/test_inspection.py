@@ -305,6 +305,15 @@ class InspectionTest(unittest.TestCase):
         self.assertEqual(report["checks"]["apple-packages"]["result"], "passed", report["checks"]["apple-packages"])
         self.assertEqual(report["apple_package_list"], "omarchy-apple.packages")
         self.assertIn("omarchy-apple.packages", report["checks"]["apple-packages"]["detail"])
+        # The platform's name (omacom/omarchy e1b0e5e9b) alone.
+        (install / "omarchy-apple.packages").rename(install / "omarchy-aarch64-apple.packages")
+        report = self.inspect()
+        self.assertEqual(report["checks"]["apple-packages"]["result"], "passed", report["checks"]["apple-packages"])
+        self.assertEqual(report["apple_package_list"], "omarchy-aarch64-apple.packages")
+        # A link by the platform's name is passed over for the list it names.
+        (install / "omarchy-aarch64-apple.packages").rename(install / "omarchy-apple-silicon.packages")
+        (install / "omarchy-aarch64-apple.packages").symlink_to("omarchy-apple-silicon.packages")
+        self.assertEqual(self.inspect()["apple_package_list"], "omarchy-apple-silicon.packages")
 
     def test_apple_package_list_prefers_upstreams_name(self):
         install = self.root / "usr/share/omarchy/install"
@@ -313,6 +322,13 @@ class InspectionTest(unittest.TestCase):
         self.assertEqual(report["checks"]["apple-packages"]["result"], "passed", report["checks"]["apple-packages"])
         (install / "omarchy-apple-silicon.packages").write_text("# Apple\nomarchy-mac\n  # indented\nwf-recorder\n")
         self.assertFails("apple-packages", "omarchy-apple-silicon.packages names packages that are not installed: wf-recorder$")
+        # The platform's name wins over apple-silicon's.
+        (install / "omarchy-aarch64-apple.packages").write_text("omarchy-mac\n")
+        report = self.inspect()
+        self.assertEqual(report["checks"]["apple-packages"]["result"], "passed", report["checks"]["apple-packages"])
+        self.assertEqual(report["apple_package_list"], "omarchy-aarch64-apple.packages")
+        (install / "omarchy-aarch64-apple.packages").write_text("omarchy-mac\nnot-installed\n")
+        self.assertFails("apple-packages", "omarchy-aarch64-apple.packages names packages that are not installed: not-installed$")
 
     def test_apple_package_list_missing(self):
         install = self.root / "usr/share/omarchy/install"

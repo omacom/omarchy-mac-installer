@@ -91,10 +91,11 @@ printf '# aarch64\nzram-generator\n' >"$scratch/runtime/usr/share/omarchy/instal
   fail "the aarch64 additions follow the base list"
 pass "the runtime's base list, then its aarch64 additions, as omarchy-pkg-defaults composes them"
 
-# The Apple list by upstream's name, else an older runtime's; never a link, which bsdtar reads as empty.
+# The Apple list by the platform's name (omacom/omarchy e1b0e5e9b), else an older runtime's; never a
+# link, which bsdtar reads as empty.
 install_dir=$scratch/runtime/usr/share/omarchy/install
 apple_layout() {
-  rm -f "$install_dir"/omarchy-apple*.packages
+  rm -f "$install_dir"/omarchy-apple*.packages "$install_dir"/omarchy-aarch64-apple.packages
   while (($#)); do
     if [[ $2 == @* ]]; then
       ln -s "${2#@}" "$install_dir/$1"
@@ -108,17 +109,23 @@ apple_layout() {
 chosen_apple() {
   (fail() { builder_fail "$@"; }; read_apple_list && echo "${apple_names[*]}")
 }
+apple_layout omarchy-aarch64-apple.packages 'omarchy-mac omarchy-mac-boot'
+[[ $(chosen_apple) == "omarchy-mac omarchy-mac-boot" ]] || fail "an e1b0e5e9b runtime's omarchy-aarch64-apple.packages is the Apple list"
 apple_layout omarchy-apple-silicon.packages 'omarchy-mac wf-recorder'
-[[ $(chosen_apple) == "omarchy-mac wf-recorder" ]] || fail "an upstream runtime's omarchy-apple-silicon.packages is the Apple list"
+[[ $(chosen_apple) == "omarchy-mac wf-recorder" ]] || fail "a 5397950a2 runtime's omarchy-apple-silicon.packages is the Apple list"
 apple_layout omarchy-apple.packages omarchy-mac
 [[ $(chosen_apple) == omarchy-mac ]] || fail "an older runtime's omarchy-apple.packages is the Apple list"
+apple_layout omarchy-aarch64-apple.packages 'omarchy-mac omarchy-mac-boot' omarchy-apple-silicon.packages 'omarchy-mac wf-recorder'
+[[ $(chosen_apple) == "omarchy-mac omarchy-mac-boot" ]] || fail "the platform's name wins over apple-silicon"
+apple_layout omarchy-aarch64-apple.packages @omarchy-apple-silicon.packages omarchy-apple-silicon.packages 'omarchy-mac wf-recorder'
+[[ $(chosen_apple) == "omarchy-mac wf-recorder" ]] || fail "a link by the platform's name is passed over for the list it names"
 apple_layout omarchy-apple-silicon.packages 'omarchy-mac wf-recorder' omarchy-apple.packages omarchy-mac
-[[ $(chosen_apple) == "omarchy-mac wf-recorder" ]] || fail "upstream's name wins when a runtime ships both"
+[[ $(chosen_apple) == "omarchy-mac wf-recorder" ]] || fail "apple-silicon wins over the oldest name when a runtime ships both"
 apple_layout omarchy-apple-silicon.packages 'omarchy-mac wf-recorder' omarchy-apple.packages @omarchy-apple-silicon.packages
 [[ $(chosen_apple) == "omarchy-mac wf-recorder" ]] || fail "a compatibility link beside the list changes nothing"
 apple_layout omarchy-apple.packages omarchy-mac omarchy-apple-silicon.packages @omarchy-apple.packages
 [[ $(chosen_apple) == omarchy-mac ]] || fail "a link by upstream's name is passed over for the list it names"
-pass "the Apple list is omarchy-apple-silicon.packages, else an older runtime's omarchy-apple.packages, never a link"
+pass "the Apple list is omarchy-aarch64-apple.packages, else omarchy-apple-silicon.packages, else omarchy-apple.packages, never a link"
 refused_apple() {
   local output
   if output=$(chosen_apple 2>&1); then
@@ -127,10 +134,10 @@ refused_apple() {
   [[ $output == "build-mac-image: $1" ]] || fail "$2 is refused with: $1 (got: $output)"
 }
 apple_layout
-refused_apple "the runtime ships no Apple package list (omarchy-apple-silicon.packages or omarchy-apple.packages)" \
+refused_apple "the runtime ships no Apple package list (omarchy-aarch64-apple.packages, omarchy-apple-silicon.packages or omarchy-apple.packages)" \
   "a runtime with no Apple list"
-apple_layout omarchy-apple.packages @omarchy-apple-silicon.packages
-refused_apple "the runtime ships no Apple package list (omarchy-apple-silicon.packages or omarchy-apple.packages)" \
+apple_layout omarchy-aarch64-apple.packages @omarchy-apple.packages omarchy-apple.packages @omarchy-apple-silicon.packages
+refused_apple "the runtime ships no Apple package list (omarchy-aarch64-apple.packages, omarchy-apple-silicon.packages or omarchy-apple.packages)" \
   "a runtime whose only Apple list is a link"
 apple_layout omarchy-apple-silicon.packages ''
 refused_apple "the runtime's omarchy-apple-silicon.packages names no package" "a runtime whose Apple list names nothing"

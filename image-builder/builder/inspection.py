@@ -158,12 +158,12 @@ def check_runtime_sources(root: Path, candidates: Candidates, report: dict) -> s
 
 def check_apple_packages(root: Path, report: dict) -> str:
     """Every package the image's Apple list names is installed, reading the list
-    build-mac-image took: omarchy-apple-silicon.packages, else an older
-    runtime's omarchy-apple.packages, never a link."""
+    build-mac-image took: omarchy-aarch64-apple.packages, else an older
+    runtime's omarchy-apple-silicon.packages or omarchy-apple.packages, never a
+    link."""
     path = next((root / name for name in candidate_set.APPLE_LISTS
                  if (root / name).is_file() and not (root / name).is_symlink()), None)
-    require(path is not None,
-            "the image ships no Apple package list (omarchy-apple-silicon.packages or omarchy-apple.packages)")
+    require(path is not None, "the image " + candidate_set.NO_APPLE_LIST)
     names = [fields[0] for fields in map(str.split, path.read_text().splitlines())
              if fields and not fields[0].startswith("#")]
     require(bool(names), f"{path.name} names no package")

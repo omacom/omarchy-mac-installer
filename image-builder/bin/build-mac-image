@@ -643,19 +643,21 @@ runtime_list() {
 }
 
 # The runtime's Apple list, read once before anything installs:
-# omarchy-apple-silicon.packages, else an older runtime's
+# omarchy-aarch64-apple.packages, named for the platform, else an older
+# runtime's omarchy-apple-silicon.packages, else an even older one's
 # omarchy-apple.packages. A link is passed over: bsdtar reads it as empty, and
 # the list it names is a member of its own.
 read_apple_list() {
   local archive name list="" text
   archive=$candidates/$(candidate_archive omarchy)
-  for name in omarchy-apple-silicon omarchy-apple; do
+  for name in omarchy-aarch64-apple omarchy-apple-silicon omarchy-apple; do
     if [[ $(bsdtar -tvf "$archive" "usr/share/omarchy/install/$name.packages" 2>/dev/null) == -* ]]; then
       list=usr/share/omarchy/install/$name.packages
       break
     fi
   done
-  [[ -n $list ]] || fail "the runtime ships no Apple package list (omarchy-apple-silicon.packages or omarchy-apple.packages)"
+  [[ -n $list ]] ||
+    fail "the runtime ships no Apple package list (omarchy-aarch64-apple.packages, omarchy-apple-silicon.packages or omarchy-apple.packages)"
   text=$(bsdtar -xOf "$archive" "$list") || fail "could not read the runtime's ${list##*/}"
   mapfile -t apple_names < <(awk 'NF && $1 !~ /^#/ { print $1 }' <<<"$text")
   ((${#apple_names[@]})) || fail "the runtime's ${list##*/} names no package"
