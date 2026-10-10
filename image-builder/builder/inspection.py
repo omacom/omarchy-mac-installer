@@ -158,12 +158,12 @@ def check_runtime_sources(root: Path, candidates: Candidates, report: dict) -> s
 
 def check_apple_packages(root: Path, report: dict) -> str:
     """Every package the image's Apple list names is installed, reading the list
-    build-mac-image took: omarchy-apple-silicon.packages, else an older
-    runtime's omarchy-apple.packages, never a link."""
+    build-mac-image took: omarchy-aarch64-apple.packages, else an older
+    runtime's omarchy-apple-silicon.packages or omarchy-apple.packages, never a
+    link."""
     path = next((root / name for name in candidate_set.APPLE_LISTS
                  if (root / name).is_file() and not (root / name).is_symlink()), None)
-    require(path is not None,
-            "the image ships no Apple package list (omarchy-apple-silicon.packages or omarchy-apple.packages)")
+    require(path is not None, "the image " + candidate_set.NO_APPLE_LIST)
     names = [fields[0] for fields in map(str.split, path.read_text().splitlines())
              if fields and not fields[0].startswith("#")]
     require(bool(names), f"{path.name} names no package")
@@ -517,30 +517,34 @@ def check_first_boot(root: Path, report: dict) -> str:
 
 
 def pacman_templates(root: Path, channel: str) -> tuple[str, Path, Path]:
-    # The Apple template as build-mac-image picks it: omarchy-mac's, else an
-    # older runtime's apple-silicon one, else an even older runtime's aarch64
-    # one; and the runtime's aarch64 mirror list, per channel or single.
+    # The Apple template as build-mac-image picks it: the runtime's
+    # aarch64-apple one, else omarchy-mac's, else an older runtime's
+    # apple-silicon one, else an even older runtime's aarch64 one; and the
+    # mirror list beside the runtime's aarch64-apple template, else its aarch64
+    # one, per channel or single.
     runtime = root / "usr/share/omarchy/default/pacman"
-    choices = (("omarchy-mac's apple-silicon", root / f"usr/share/omarchy-mac/pacman/pacman-{channel}.conf"),
+    choices = (("the runtime's aarch64-apple", runtime / f"aarch64-apple/pacman-{channel}.conf"),
+               ("omarchy-mac's apple-silicon", root / f"usr/share/omarchy-mac/pacman/pacman-{channel}.conf"),
                ("the runtime's apple-silicon", runtime / f"apple-silicon/pacman-{channel}.conf"),
                ("the runtime's aarch64", runtime / f"aarch64/pacman-{channel}.conf"))
     kind, template = next((choice for choice in choices if choice[1].is_file()), choices[-1])
-    mirrorlist = runtime / f"aarch64/mirrorlist-{channel}"
-    if not mirrorlist.is_file():
-        mirrorlist = runtime / "mirrorlist-aarch64"
+    mirrorlist = next((path for path in (runtime / f"aarch64-apple/mirrorlist-{channel}",
+                                         runtime / f"aarch64/mirrorlist-{channel}") if path.is_file()),
+                      runtime / "mirrorlist-aarch64")
     return kind, template, mirrorlist
 
 
 def check_pacman_config(root: Path, channel: str, candidates: Candidates) -> str:
     kind, template, mirrorlist = pacman_templates(root, channel)
+    mirrors = "aarch64-apple" if mirrorlist.parent.name == "aarch64-apple" else "aarch64"
     require(template.is_file(), f"the image ships no Apple Silicon pacman configuration for {channel}")
     pinned = test_image_pin.pinned(candidates.summary)
     require((root / "etc/pacman.conf").read_bytes() == test_image_pin.render(limine.regular(template), pinned),
             f"/etc/pacman.conf is not {kind} {channel} configuration"
             + (" with the test image's pin" if pinned else ""))
     require((root / "etc/pacman.d/mirrorlist").read_bytes() == limine.regular(mirrorlist),
-            f"/etc/pacman.d/mirrorlist is not the runtime's aarch64 {channel} mirror list")
-    return (f"{kind} {channel} pacman.conf and the runtime's aarch64 mirror list"
+            f"/etc/pacman.d/mirrorlist is not the runtime's {mirrors} {channel} mirror list")
+    return (f"{kind} {channel} pacman.conf and the runtime's {mirrors} mirror list"
             + (f"; test image pin: IgnorePkg = {' '.join(pinned)}" if pinned else ""))
 
 

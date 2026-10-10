@@ -305,6 +305,15 @@ class InspectionTest(unittest.TestCase):
         self.assertEqual(report["checks"]["apple-packages"]["result"], "passed", report["checks"]["apple-packages"])
         self.assertEqual(report["apple_package_list"], "omarchy-apple.packages")
         self.assertIn("omarchy-apple.packages", report["checks"]["apple-packages"]["detail"])
+        # The platform's name (omacom/omarchy e1b0e5e9b) alone.
+        (install / "omarchy-apple.packages").rename(install / "omarchy-aarch64-apple.packages")
+        report = self.inspect()
+        self.assertEqual(report["checks"]["apple-packages"]["result"], "passed", report["checks"]["apple-packages"])
+        self.assertEqual(report["apple_package_list"], "omarchy-aarch64-apple.packages")
+        # A link by the platform's name is passed over for the list it names.
+        (install / "omarchy-aarch64-apple.packages").rename(install / "omarchy-apple-silicon.packages")
+        (install / "omarchy-aarch64-apple.packages").symlink_to("omarchy-apple-silicon.packages")
+        self.assertEqual(self.inspect()["apple_package_list"], "omarchy-apple-silicon.packages")
 
     def test_apple_package_list_prefers_upstreams_name(self):
         install = self.root / "usr/share/omarchy/install"
@@ -313,6 +322,13 @@ class InspectionTest(unittest.TestCase):
         self.assertEqual(report["checks"]["apple-packages"]["result"], "passed", report["checks"]["apple-packages"])
         (install / "omarchy-apple-silicon.packages").write_text("# Apple\nomarchy-mac\n  # indented\nwf-recorder\n")
         self.assertFails("apple-packages", "omarchy-apple-silicon.packages names packages that are not installed: wf-recorder$")
+        # The platform's name wins over apple-silicon's.
+        (install / "omarchy-aarch64-apple.packages").write_text("omarchy-mac\n")
+        report = self.inspect()
+        self.assertEqual(report["checks"]["apple-packages"]["result"], "passed", report["checks"]["apple-packages"])
+        self.assertEqual(report["apple_package_list"], "omarchy-aarch64-apple.packages")
+        (install / "omarchy-aarch64-apple.packages").write_text("omarchy-mac\nnot-installed\n")
+        self.assertFails("apple-packages", "omarchy-aarch64-apple.packages names packages that are not installed: not-installed$")
 
     def test_apple_package_list_missing(self):
         install = self.root / "usr/share/omarchy/install"
@@ -530,6 +546,33 @@ class InspectionTest(unittest.TestCase):
         self.assertEqual(report["checks"]["pacman-config"]["result"], "passed", report["checks"]["pacman-config"])
         self.assertIn("omarchy-mac's apple-silicon edge pacman.conf", report["checks"]["pacman-config"]["detail"])
 
+    def test_pacman_config_follows_the_runtimes_aarch64_apple_templates(self):
+        runtime = self.root / "usr/share/omarchy/default/pacman"
+        apple = "[options]\nArchitecture = auto\n\n[omarchy]\nServer = https://pkgs.omarchy.org/edge/$arch\n"
+        apple += "\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
+        apple += "".join(f"\n[{r}]\nInclude = /etc/pacman.d/mirrorlist\n" for r in ("core", "extra", "alarm", "aur"))
+        for directory in (runtime / "apple-silicon", self.root / "usr/share/omarchy-mac/pacman"):
+            directory.mkdir(parents=True)
+            (directory / "pacman-edge.conf").write_text(apple + f"\n# {directory.name}\n")
+        (runtime / "aarch64-apple").mkdir()
+        (runtime / "aarch64-apple/pacman-edge.conf").write_text(apple)
+        (runtime / "aarch64-apple/mirrorlist-edge").write_text("Server = https://arm-mirror.omarchy.org/$arch/$repo\n")
+        pinned = fixtures.test_image_pin.pinned(self.summary)
+        self.assertFails("pacman-config", "is not the runtime's aarch64-apple edge configuration")
+        (self.root / "etc/pacman.conf").write_bytes(fixtures.test_image_pin.render(apple.encode(), pinned))
+        self.assertFails("pacman-config", "mirrorlist is not the runtime's aarch64-apple edge mirror list")
+        (self.root / "etc/pacman.d/mirrorlist").write_text("Server = https://arm-mirror.omarchy.org/$arch/$repo\n")
+        report = self.inspect()
+        self.assertEqual(report["checks"]["pacman-config"]["result"], "passed", report["checks"]["pacman-config"])
+        self.assertIn("the runtime's aarch64-apple edge pacman.conf and the runtime's aarch64-apple mirror list",
+                      report["checks"]["pacman-config"]["detail"])
+        # Without a mirror list of its own, the aarch64-apple template takes the aarch64 one.
+        (runtime / "aarch64-apple/mirrorlist-edge").unlink()
+        self.assertFails("pacman-config", "mirrorlist is not the runtime's aarch64 edge mirror list")
+        (self.root / "etc/pacman.d/mirrorlist").write_bytes((runtime / "aarch64/mirrorlist-edge").read_bytes())
+        report = self.inspect()
+        self.assertEqual(report["checks"]["pacman-config"]["result"], "passed", report["checks"]["pacman-config"])
+
     def test_pacman_config_needs_a_template(self):
         (self.root / "usr/share/omarchy/default/pacman/aarch64/pacman-edge.conf").unlink()
         self.assertFails("pacman-config", "the image ships no Apple Silicon pacman configuration for edge")
@@ -592,6 +635,53 @@ class ClosureInspectionTest(unittest.TestCase):
                 (local / "desc").write_text((local / "desc").read_text().replace("26.04-1", "26.04-2"))
                 report = inspection.inspect(root, candidates, "edge", trust=signer.trust)
                 self.assertEqual(report["checks"]["candidate-versions"]["result"], "failed")
+            finally:
+                signer.close()
+                for path in base.rglob("*"):
+                    if path.is_dir() and not path.is_symlink():
+                        path.chmod(0o700)
+
+
+class RuntimeLayoutInspectionTest(unittest.TestCase):
+    """Images built from each runtime layout the builder takes (fixtures.RUNTIME_LAYOUTS)."""
+
+    EXPECTED = {
+        "e1b0e5e9b": ("omarchy-aarch64-apple.packages",
+                      "the runtime's aarch64-apple edge pacman.conf and the runtime's aarch64-apple mirror list"),
+        "5397950a2": ("omarchy-apple-silicon.packages",
+                      "the runtime's apple-silicon edge pacman.conf and the runtime's aarch64 mirror list"),
+    }
+
+    def test_each_runtime_layout_passes_inspection(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            base = Path(scratch)
+            signer = fixtures.Signer(base / "signer")
+            try:
+                for layout, (apple_list, pacman) in self.EXPECTED.items():
+                    with self.subTest(layout=layout):
+                        work = base / layout
+                        receipt = fixtures.make_set(work / "set", signer, contents=fixtures.default_contents(layout))
+                        candidates = work / "candidates"
+                        fixtures.import_set(work / "set", candidates, signer, receipt)
+                        summary = __import__("json").loads((candidates / "import.json").read_text())
+                        root = work / "root"
+                        fixtures.make_root(root, candidates, layout)
+                        factory = work / "factory"
+                        fixtures.make_factory(factory, root, summary)
+                        SUBVOLUMES.clear()
+                        SUBVOLUMES.add(root / ".snapshots")
+                        report = inspection.inspect(root, candidates, "edge", factory, trust=signer.trust)
+                        failed = {name: check for name, check in report["checks"].items() if check["result"] != "passed"}
+                        self.assertEqual(report["result"], "passed", failed)
+                        self.assertEqual(report["apple_package_list"], apple_list)
+                        self.assertIn(pacman, report["checks"]["pacman-config"]["detail"])
+                        # The plain aarch64 template, without asahi-alarm, is not what the image installs.
+                        template = root / "usr/share/omarchy/default/pacman/aarch64/pacman-edge.conf"
+                        self.assertNotIn("[asahi-alarm]", template.read_text())
+                        (root / "etc/pacman.conf").write_bytes(
+                            fixtures.test_image_pin.render(template.read_bytes(), fixtures.test_image_pin.pinned(summary)))
+                        report = inspection.inspect(root, candidates, "edge", factory, trust=signer.trust)
+                        self.assertEqual(report["checks"]["pacman-config"]["result"], "failed")
             finally:
                 signer.close()
                 for path in base.rglob("*"):

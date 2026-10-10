@@ -294,8 +294,11 @@ class CandidateSetTest(unittest.TestCase):
     def test_apple_package_list_by_either_name(self):
         apple = b"# Apple\nomarchy-mac\nomarchy-mac-boot\n"
         layouts = {
-            "upstream": {"omarchy-apple-silicon.packages": apple},
+            "e1b0e5e9b": {"omarchy-aarch64-apple.packages": apple},
+            "5397950a2": {"omarchy-apple-silicon.packages": apple},
             "older": {"omarchy-apple.packages": apple},
+            "platform-link": {"omarchy-apple-silicon.packages": apple,
+                              "omarchy-aarch64-apple.packages": "omarchy-apple-silicon.packages"},
             "compatibility-link": {"omarchy-apple-silicon.packages": apple,
                                    "omarchy-apple.packages": "omarchy-apple-silicon.packages"},
             "reverse-link": {"omarchy-apple.packages": apple,
@@ -314,9 +317,28 @@ class CandidateSetTest(unittest.TestCase):
                                                    "omarchy-apple.packages": b"omarchy-mac\nomarchy-mac-boot\n"})
         with self.assertRaisesRegex(ValueError, "lacks the add-on or boot package"):
             self.verify(self.work / "both-stale", receipt)
+        # The platform's name (omacom/omarchy e1b0e5e9b) wins over apple-silicon's.
+        receipt = self.apple_layout("platform", {"omarchy-aarch64-apple.packages": b"omarchy-mac\nomarchy-mac-boot\n",
+                                                 "omarchy-apple-silicon.packages": b"omarchy-mac\n"})
+        self.verify(self.work / "platform", receipt)
+        receipt = self.apple_layout("platform-stale", {"omarchy-aarch64-apple.packages": b"omarchy-mac\n",
+                                                       "omarchy-apple-silicon.packages": b"omarchy-mac\nomarchy-mac-boot\n"})
+        with self.assertRaisesRegex(ValueError, "lacks the add-on or boot package"):
+            self.verify(self.work / "platform-stale", receipt)
+
+    def test_each_runtime_layout_verifies(self):
+        for layout in fixtures.RUNTIME_LAYOUTS:
+            with self.subTest(layout=layout):
+                output = self.work / "output"
+                if output.exists():
+                    output.chmod(0o700)
+                    shutil.rmtree(output)
+                receipt = fixtures.make_set(self.work / layout, self.signer, contents=fixtures.default_contents(layout))
+                self.assertEqual(self.verify(self.work / layout, receipt)["source_commit"], fixtures.SOURCE)
 
     def test_apple_package_list_missing(self):
-        for directory, lists in (("none", {}), ("link-only", {"omarchy-apple.packages": "omarchy-apple-silicon.packages"})):
+        for directory, lists in (("none", {}), ("link-only", {"omarchy-apple.packages": "omarchy-apple-silicon.packages"}),
+                                 ("platform-link-only", {"omarchy-aarch64-apple.packages": "omarchy-apple.packages"})):
             with self.subTest(layout=directory):
                 receipt = self.apple_layout(directory, lists)
                 with self.assertRaisesRegex(ValueError, "the runtime ships no Apple package list"):

@@ -25,6 +25,17 @@ SOURCE = "a" * 40
 BOOT_SOURCE = "b" * 40
 RELEASE = "7.0.0-1-ARCH"
 MODELS = ("t6000-j314s", "t8103-j274")
+# The runtime layouts the builder takes, by the omacom/omarchy commit that has
+# them: the Apple package list and the pacman template directories it ships,
+# and the directories build-mac-image installs pacman.conf and the mirror list
+# from. Without a layout, a fixture is an older runtime's: apple-silicon's list
+# and aarch64 templates alone.
+RUNTIME_LAYOUTS = {
+    "e1b0e5e9b": {"apple_list": "omarchy-aarch64-apple.packages", "templates": ("aarch64", "aarch64-apple"),
+                  "installed": ("aarch64-apple", "aarch64-apple")},
+    "5397950a2": {"apple_list": "omarchy-apple-silicon.packages", "templates": ("aarch64", "apple-silicon"),
+                  "installed": ("apple-silicon", "aarch64")},
+}
 
 
 def load(name: str, relative: str):
@@ -56,7 +67,7 @@ def dtb(model: str) -> bytes:
     return b"\xd0\x0d\xfe\xed" + struct.pack(">I", 8 + len(body)) + body
 
 
-def default_contents() -> dict[str, dict[str, bytes]]:
+def default_contents(layout: str | None = None) -> dict[str, dict[str, bytes]]:
     first_boot = b"#!/bin/bash\ncmp -s \"$steps\" <(printf '%s\\n' 'install/hardware/apple/limine-boot.sh')\n"
     contents = {
         "omarchy": {
@@ -89,6 +100,12 @@ def default_contents() -> dict[str, dict[str, bytes]]:
         },
         "limine-mkinitcpio-hook": {"usr/share/libalpm/scripts/limine-apple-gate": b"#!/bin/bash\n"},
     }
+    if layout:
+        install = "usr/share/omarchy/install/"
+        runtime = contents["omarchy"]
+        runtime[install + RUNTIME_LAYOUTS[layout]["apple_list"]] = runtime.pop(install + "omarchy-apple-silicon.packages")
+        runtime[install + "omarchy-aarch64.packages"] = b"# aarch64\nzram-generator\n"
+        runtime[install + "omarchy-x86_64-only.packages"] = b"# x86_64 only\nobs-studio\n"
     return contents
 
 
@@ -302,8 +319,9 @@ def image_target(summary: dict, profile: str = "test") -> str:
             f"package_set_sha256={PACKAGE_SET_SHA256}\nbuilt={BUILT}\n")
 
 
-def make_root(root: Path, candidates: Path) -> None:
-    """An image root that passes inspection against the imported set CANDIDATES."""
+def make_root(root: Path, candidates: Path, layout: str | None = None) -> None:
+    """An image root that passes inspection against the imported set CANDIDATES,
+    with the pacman templates of the runtime LAYOUT (RUNTIME_LAYOUTS)."""
     summary = json.loads((candidates / "import.json").read_text())
 
     def member(name: str, path: str) -> bytes:
@@ -378,10 +396,18 @@ def make_root(root: Path, candidates: Path) -> None:
     template = "[options]\nArchitecture = auto\n\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
     template += "".join(f"\n[{r}]\nInclude = /etc/pacman.d/mirrorlist\n" for r in ("core", "extra", "alarm", "aur"))
     template += "\n[omarchy]\nServer = https://pkgs.omarchy.org/edge/$arch\n"
-    write(root, "usr/share/omarchy/default/pacman/aarch64/pacman-edge.conf", template)
-    write(root, "usr/share/omarchy/default/pacman/aarch64/mirrorlist-edge", "Server = https://mirror.invalid/$arch/$repo\n")
-    write(root, "etc/pacman.conf", test_image_pin.render(template.encode(), test_image_pin.pinned(summary)))
-    write(root, "etc/pacman.d/mirrorlist", "Server = https://mirror.invalid/$arch/$repo\n")
+    # A runtime with a platform template keeps asahi-alarm out of its plain aarch64 one.
+    asahi = "\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
+    templates = {"aarch64": (template.replace(asahi, "") if layout else template,
+                             "Server = https://mirror.invalid/$arch/$repo\n")}
+    for name in RUNTIME_LAYOUTS[layout]["templates"] if layout else ():
+        templates.setdefault(name, (f"# {name}\n" + template, f"Server = https://{name}.mirror.invalid/$arch/$repo\n"))
+    for name, (conf, mirrors) in templates.items():
+        write(root, f"usr/share/omarchy/default/pacman/{name}/pacman-edge.conf", conf)
+        write(root, f"usr/share/omarchy/default/pacman/{name}/mirrorlist-edge", mirrors)
+    conf, mirrors = RUNTIME_LAYOUTS[layout]["installed"] if layout else ("aarch64", "aarch64")
+    write(root, "etc/pacman.conf", test_image_pin.render(templates[conf][0].encode(), test_image_pin.pinned(summary)))
+    write(root, "etc/pacman.d/mirrorlist", templates[mirrors][1])
     # What the installed-system checks read.
     write(root, "usr/lib/NetworkManager/conf.d/20-omarchy-mac-wifi.conf", "[device]\nwifi.backend=iwd\n")
     write(root, "etc/systemd/system/omarchy-vendor-firmware.service",

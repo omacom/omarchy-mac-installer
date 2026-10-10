@@ -33,7 +33,11 @@ SUPPORTED_FW=(13.5 14.8.3)
 ICON_SHA256=cf26ed5d2831db99c00d62ca046040e01a18e08e63363d629340d04ac6ec8c23
 KERNEL=linux-aurora
 # The hardware this image is for. It is written to the image-target manifest
-# and is the only machine identity the build chroot sees.
+# and is the only machine identity the build chroot sees. Upstream's name is now
+# aarch64-apple (omacom/omarchy e1b0e5e9b), which still reads apple-silicon from
+# a manifest; an older runtime (5397950a2, in released images and packages)
+# refuses aarch64-apple in omarchy-hw-platform and install/helpers/image-target.sh,
+# so the manifest keeps apple-silicon until no supported runtime needs it.
 PLATFORM=apple-silicon
 PLATFORM_COMPATIBLE=apple,arm-platform
 
@@ -643,19 +647,21 @@ runtime_list() {
 }
 
 # The runtime's Apple list, read once before anything installs:
-# omarchy-apple-silicon.packages, else an older runtime's
+# omarchy-aarch64-apple.packages, named for the platform, else an older
+# runtime's omarchy-apple-silicon.packages, else an even older one's
 # omarchy-apple.packages. A link is passed over: bsdtar reads it as empty, and
 # the list it names is a member of its own.
 read_apple_list() {
   local archive name list="" text
   archive=$candidates/$(candidate_archive omarchy)
-  for name in omarchy-apple-silicon omarchy-apple; do
+  for name in omarchy-aarch64-apple omarchy-apple-silicon omarchy-apple; do
     if [[ $(bsdtar -tvf "$archive" "usr/share/omarchy/install/$name.packages" 2>/dev/null) == -* ]]; then
       list=usr/share/omarchy/install/$name.packages
       break
     fi
   done
-  [[ -n $list ]] || fail "the runtime ships no Apple package list (omarchy-apple-silicon.packages or omarchy-apple.packages)"
+  [[ -n $list ]] ||
+    fail "the runtime ships no Apple package list (omarchy-aarch64-apple.packages, omarchy-apple-silicon.packages or omarchy-apple.packages)"
   text=$(bsdtar -xOf "$archive" "$list") || fail "could not read the runtime's ${list##*/}"
   mapfile -t apple_names < <(awk 'NF && $1 !~ /^#/ { print $1 }' <<<"$text")
   ((${#apple_names[@]})) || fail "the runtime's ${list##*/} names no package"
@@ -760,6 +766,8 @@ write_image_target() {
   [[ ${MAC_IMAGE_BUILDER_COMMIT:-} =~ ^[0-9a-f]{40}$ && ${MAC_IMAGE_BUILDER_CLEAN:-} =~ ^(true|false)$ ]] ||
     fail "the build names no builder commit for the image target"
   install -d -m 0755 "$target/var/lib/omarchy" "$target/var/lib/omarchy/image"
+  # platform=apple-silicon, not upstream's aarch64-apple: the new runtime reads
+  # either, an older one only apple-silicon (see PLATFORM above).
   printf 'format=1\nplatform=%s\ncandidate_set=%s\ncandidate_source_commit=%s\nbuilder_commit=%s\nbuilder_tree_clean=%s\nimage_profile=%s\n' \
     "$PLATFORM" "$set_name" "$source_commit" "$MAC_IMAGE_BUILDER_COMMIT" "$MAC_IMAGE_BUILDER_CLEAN" "$image_profile" \
     >"$target/var/lib/omarchy/image/target"
@@ -844,11 +852,12 @@ release_build_pacman_config() {
   rmdir "$target/var/cache/omarchy-image-repositories" "$target/var/cache/omarchy-image-packages"
 }
 
-# The installed configuration for an Apple Silicon Mac: omarchy-mac's
-# template for the channel the inputs name (an older set's runtime
-# apple-silicon one, or an even older runtime's aarch64 one), with the
-# runtime's aarch64 mirror list (per channel, or the single
-# mirrorlist-aarch64 of a runtime that keeps its own repositories). TEST IMAGES ONLY: a
+# The installed configuration for an Apple Silicon Mac: the runtime's
+# aarch64-apple template for the channel the inputs name (else omarchy-mac's,
+# an older runtime's apple-silicon one, or an even older runtime's aarch64
+# one), with the mirror list beside the runtime's aarch64-apple template, else
+# its aarch64 one (per channel, or the single mirrorlist-aarch64 of a runtime
+# that keeps its own repositories). TEST IMAGES ONLY: a
 # test candidate set's runtime sorts below the channel's omarchy, so its
 # [options] gain a marked IgnorePkg for the packages built from the set's
 # source commit, which keeps a pacman -Syu from replacing them
@@ -856,10 +865,12 @@ release_build_pacman_config() {
 write_installed_config() {
   local channel templates=$target/usr/share/omarchy/default/pacman repositories mirrorlist
   channel=$(field omarchy_channel)
-  repositories=$target/usr/share/omarchy-mac/pacman
+  repositories=$templates/aarch64-apple
+  [[ -f $repositories/pacman-$channel.conf ]] || repositories=$target/usr/share/omarchy-mac/pacman
   [[ -f $repositories/pacman-$channel.conf ]] || repositories=$templates/apple-silicon
   [[ -f $repositories/pacman-$channel.conf ]] || repositories=$templates/aarch64
-  mirrorlist=$templates/aarch64/mirrorlist-$channel
+  mirrorlist=$templates/aarch64-apple/mirrorlist-$channel
+  [[ -f $mirrorlist ]] || mirrorlist=$templates/aarch64/mirrorlist-$channel
   [[ -f $mirrorlist ]] || mirrorlist=$templates/mirrorlist-aarch64
   [[ -f $repositories/pacman-$channel.conf ]] || fail "the image ships no Apple Silicon pacman configuration for $channel"
   [[ -f $mirrorlist ]] || fail "the runtime ships no aarch64 mirror list for $channel"
