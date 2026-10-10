@@ -82,6 +82,24 @@ class CandidateSetTest(unittest.TestCase):
                                "c" * 40 if change == "source" else fixtures.SOURCE,
                                "0" * 64 if change == "manifest" else None, self.signer.trust)
 
+    def test_runtime_source_names_either_policy_repository(self):
+        def name_source(repository):
+            def edit(manifest):
+                manifest["source"]["repository"] = repository
+                for package in manifest["packages"]:
+                    if package["source"].get("commit") == fixtures.SOURCE:
+                        package["source"]["repository"] = repository
+            return edit
+        for repository in ("omacom/omarchy", "omacom/omarchy-mac"):
+            with self.subTest(repository=repository):
+                directory = self.work / repository.replace("/", "-")
+                receipt = fixtures.make_set(directory, self.signer, manifest_edit=name_source(repository))
+                c.snapshot(directory, self.work / (directory.name + "-out"), receipt, fixtures.SOURCE, None, self.signer.trust)
+        directory = self.work / "elsewhere"
+        receipt = fixtures.make_set(directory, self.signer, manifest_edit=name_source("someone/omarchy"))
+        with self.assertRaisesRegex(ValueError, "wrong build manifest"):
+            c.snapshot(directory, self.work / "elsewhere-out", receipt, fixtures.SOURCE, None, self.signer.trust)
+
     def test_set_cannot_supply_its_own_trust_anchor(self):
         trust = self.work / "trust"
         shutil.copytree(self.signer.trust, trust)
@@ -227,7 +245,7 @@ class CandidateSetTest(unittest.TestCase):
 
     def test_platform_packages_from_the_repository_they_moved_from(self):
         declared = {"omarchy-mac": "d" * 40, "omarchy-mac-boot": "e" * 40}
-        directory, receipt = self.platform_set("moved from", declared, repository=fixtures.POLICY["source_repository"])
+        directory, receipt = self.platform_set("moved from", declared, repository="omacom/omarchy-mac")
         packages = {p["name"]: p for p in self.verify(directory, receipt)["packages"]}
         self.assertEqual(packages["omarchy-mac"]["origin"], "platform " + "d" * 40)
 
