@@ -185,7 +185,9 @@ def main(argv=None):
     except ExportError as error:
         emit("failed", error=str(error))
         return 1
-    except (probe.Rejected, contract.ContractError, OSError, RuntimeError):
+    except (probe.Rejected, contract.ContractError, OSError, RuntimeError) as error:
+        # The progress code stays stable; the diagnostic is for the log only.
+        print(f"omarchy-migration export: {type(error).__name__}: {error}", file=sys.stderr)
         emit("failed", error="export_operation_failed")
         return 1
 
