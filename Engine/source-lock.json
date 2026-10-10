@@ -141,7 +141,7 @@
     }
   },
   "downstream_overlay": {
-    "version": "v0.9.2-omarchy.28",
+    "version": "v0.9.2-omarchy.30",
     "capability": "candidate_bound_full_os_stage_one_authenticated_recovery",
     "engine_modes": [
       "inspect",
@@ -150,7 +150,7 @@
     ],
     "patch": {
       "path": "patches/0001-omarchy-engine-runtime.patch",
-      "sha256": "c6f625c62250993fe8dd11f210225d2667b6ab341fa8922209ce0b435a3b60a7"
+      "sha256": "d6195ae8d436f9e4309d131e673dd609c74da584b5d0a96e7006927f8d915f56"
     },
     "files": [
       {
@@ -171,7 +171,7 @@
       {
         "path": "overlay/src/omarchy_asahi.py",
         "destination": "src/omarchy_asahi.py",
-        "sha256": "a5d887b1d07a1977ff397980d247c9138a61cfffb675ce51aa18d07589030f0c"
+        "sha256": "0efb7ffb77ce826389eb324bd8f7c09f44c40f83a32adad91badc63d276f357d"
       },
       {
         "path": "overlay/src/omarchy_contract.py",
@@ -206,7 +206,7 @@
       {
         "path": "overlay/tests/test_omarchy_asahi.py",
         "destination": "tests/test_omarchy_asahi.py",
-        "sha256": "bf57c80bf26bbfc00a3cb24d1a5f8fc1196e8c155789fd4af97dddc0e4b7292a"
+        "sha256": "aead11015d20ca12737f516806e7576e5da436f6d47f16b7307d56e1ab3a24d7"
       },
       {
         "path": "overlay/tests/test_omarchy_contract.py",
@@ -252,6 +252,26 @@
         "path": "overlay/tests/test_omarchy_image.py",
         "destination": "tests/test_omarchy_image.py",
         "sha256": "2d8ebe63c25b290f24fb70d5195f50743c79baf9eb70e8a8bba3ab5f95d5e97f"
+      },
+      {
+        "path": "overlay/src/omarchy_mt7932.py",
+        "destination": "src/omarchy_mt7932.py",
+        "sha256": "bd3abd4142e3b7c5fcdac23f67aa4cc8422321e74ff0d3f87222a2ddf2aa1861"
+      },
+      {
+        "path": "overlay/tests/test_omarchy_mt7932.py",
+        "destination": "tests/test_omarchy_mt7932.py",
+        "sha256": "b9668eb4a6407f35cfdeb9addd061190720208d5ee1cbb4f969cb6499aa6a822"
+      },
+      {
+        "path": "overlay/src/omarchy_mesa.py",
+        "destination": "src/omarchy_mesa.py",
+        "sha256": "fcdb678568bb33d8f8cf2275f11b16d0b66409c5bd27732133d5e728bb06983b"
+      },
+      {
+        "path": "overlay/tests/test_omarchy_mesa.py",
+        "destination": "tests/test_omarchy_mesa.py",
+        "sha256": "372d07d0e1860299bdf0a56b834d60748b5e130a2ef185f53ff9e8f12b3e790a"
       }
     ]
   },
@@ -266,17 +286,17 @@
     },
     {
       "path": "verify-source-lock.py",
-      "sha256": "21c230c7120388e0691ccd34ad621073c7c677b3f3d55028ec78249f4805597f"
+      "sha256": "ee2cd52a254696ca86594db4d843b2580d22286d55ce189ec9f34b8b21019302"
     },
     {
       "path": "rebuild-python-overlay.py",
-      "sha256": "3cc29ff5c7bd834b40a50ef2271417efcd33bc7bc747b11c743d5ba2042017c2"
+      "sha256": "324c324ffde5c68294890243010e7764b44849df81c9f1605ec8bbe00c13e65c"
     }
   ],
   "validation_artifact": {
-    "filename": "installer-v0.9.2-omarchy.28.tar.gz",
-    "size_bytes": 17843348,
-    "sha256": "0cf1aa87760f90a545298b7cef737c9b497f2cad421d79ac59f557a81f2eb146",
+    "filename": "installer-v0.9.2-omarchy.30.tar.gz",
+    "size_bytes": 17852406,
+    "sha256": "2d5a14c3dde7b9ebb7076cd65a6d5a478d7f20b6396fadb52b59532752d12bdc",
     "reproducibility_scope": "two-identical-python-overlay-repacks-authenticated-base",
     "signature": "absent",
     "metadata_sha256": "2e6181ce6b6e17c11039e04bfadade8d10ae0e11889885ad8c9960b68f179a5d"
@@ -303,9 +323,13 @@
           "upstream_base_sha256": "c8d4d2a80f3a88a9ba4d6d4024c0001062e35d15d72ae530681a0612e6525984",
           "upstream_sha256": "894fb8cd2ffc672bb96a14969ee9de2879d250c8c5990fee122ccf66d9b50024",
           "base_sha256": "95760ed02d44b5457acb81559a4e2d892ffbb7f0f2b7417c0b2eb02937945ae7",
-          "sha256": "d7fb4fcc9bdc13cba5a9f9c9ecace6317c60d816915950d9dfa05f826737afbd"
+          "sha256": "1208e9105815aa2d639190d8d26fc6804fadea01e776cce6e499ef2676a91b4e"
         }
       ]
+    },
+    "base_patch": {
+      "path": "patches/base/0001-omarchy-engine-runtime.patch",
+      "sha256": "c6f625c62250993fe8dd11f210225d2667b6ab341fa8922209ce0b435a3b60a7"
     }
   }
 }

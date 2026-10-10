@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 import sys
+import subprocess
 import tempfile
 import re
 import shutil
@@ -60,9 +61,16 @@ class FakeStubInstaller:
         # Where the real stub writes the Recovery setup that Omarchy replaces.
         self.step2_sh = os.path.join(self.recovery.name, "step2.sh")
         self.icon_path = dutil.stub_icon_path
+        self.boot_obj_path = os.path.join(self.recovery.name, "boot.bin")
 
     def load_ipsw(self, ipsw):
         self.calls.append(("load_ipsw", ipsw))
+
+    def load_identity(self):
+        self.bootcaches = {"bless2": {}}
+
+    def collect_firmware(self, pkg):
+        self.calls.append(("collect_firmware", pkg))
 
     def prepare_volume(self, part):
         self.calls.append(("prepare_volume", part.name))
@@ -75,6 +83,10 @@ class FakeStubInstaller:
 
     def install_files(self, current_os):
         self.calls.append(("install_files", current_os))
+        # As the real stub does, with the plain image older firmware ships.
+        image = Path(self.osi.recovery, self.osi.vgid, "usr/standalone/firmware/arm64eBaseSystem.dmg")
+        image.parent.mkdir(parents=True, exist_ok=True)
+        image.write_bytes(b"plain recovery image")
 
     def prepare_for_bless(self):
         self.calls.append(("prepare_for_bless",))
@@ -98,10 +110,14 @@ sys.path.insert(
 )
 
 from omarchy_asahi import (  # noqa: E402
+    _collect_neo_radios,
+    _collect_neo_touch_id,
     STEP2_SCRIPT,
     AsahiAdapterError,
     AsahiInPlaceRepairAdapter,
     AsahiStage1Adapter,
+    fill_j700_stage1,
+    install_board_stage1,
     stub_installer,
 )
 
@@ -808,7 +824,8 @@ class FakeInstaller:
     def __init__(self, dutil):
         self.dutil = dutil
         self.sys_disk = "disk0"
-        self.sysinfo = object()
+        # An M3 Air: asahi's own Stage 1 stays the boot object.
+        self.sysinfo = SimpleNamespace(device_class="j613ap")
         self.osinfo = object()
         self.cur_os = "current-os"
         self.chosen_firmware = "unset"
@@ -864,7 +881,10 @@ class Step2ScriptTests(unittest.TestCase):
                 pass
 
             def install_files(self, cur_os):
-                pass
+                # As the real stub does, with the plain image older firmware ships.
+                image = Path(self.osi.recovery, self.osi.vgid, "usr/standalone/firmware/arm64eBaseSystem.dmg")
+                image.parent.mkdir(parents=True, exist_ok=True)
+                image.write_bytes(b"plain recovery image")
 
         with patch("omarchy_asahi.stub.StubInstaller", Stub), patch.dict(
             os.environ, {"OMARCHY_MACHINE_OWNER": owner, "OMARCHY_INSTALLER_NAME": self.title}
@@ -1149,8 +1169,16 @@ class Step2ScriptTests(unittest.TestCase):
                                                recovery=root.name)
                     self.step2_sh = str(step2)
 
-                def install_files(self, cur_os):
+                def load_identity(self):
                     pass
+
+                def collect_firmware(self, pkg):
+                    pass
+
+                def install_files(self, cur_os):
+                    image = Path(root.name, vgid, "usr/standalone/firmware/arm64eBaseSystem.dmg")
+                    image.parent.mkdir(parents=True, exist_ok=True)
+                    image.write_bytes(b"plain recovery image")
 
             with self.subTest(vgid=vgid), patch("omarchy_asahi.stub.StubInstaller", Stub), patch.dict(
                 os.environ, {"OMARCHY_MACHINE_OWNER": "scott", "OMARCHY_INSTALLER_NAME": self.title}
@@ -1232,6 +1260,413 @@ class Step2ScriptDashTests(Step2ScriptTests):
     shell = [shutil.which("dash") or "dash"]
     # Linux's /bin/sh is often dash, so the fakes run under it too.
     fake_shell = shutil.which("dash") or "dash"
+
+class Macos26BootcachesTests(unittest.TestCase):
+    class Stub:
+        def __init__(self, *args, bless2):
+            self.args = args
+            self.bless2 = bless2
+
+        def load_identity(self):
+            self.bootcaches = {"bless2": dict(self.bless2)}
+            return "identity"
+
+        def collect_firmware(self, pkg):
+            return pkg
+
+        def install_files(self, cur_os):
+            pass
+
+    def make(self, bless2):
+        with patch(
+            "omarchy_asahi.stub.StubInstaller",
+            lambda *args: self.Stub(*args, bless2=bless2),
+        ):
+            return stub_installer("sysinfo", "dutil", "osinfo")
+
+    def test_macos_26_bootcaches_get_the_restore_bundle_every_macos_uses(self):
+        # macOS 26.6 (25G72) bless2 names no RestoreBundlePath.
+        installer = self.make({"Version": 1, "SupportsExternalPrebootObjects": True})
+        self.assertEqual(installer.load_identity(), "identity")
+        self.assertEqual(installer.bootcaches["bless2"]["RestoreBundlePath"], "./Restore")
+        self.assertEqual(installer.args, ("sysinfo", "dutil", "osinfo"))
+
+    def test_a_named_restore_bundle_is_kept(self):
+        installer = self.make({"RestoreBundlePath": "./Elsewhere"})
+        installer.load_identity()
+        self.assertEqual(installer.bootcaches["bless2"]["RestoreBundlePath"], "./Elsewhere")
+
+
+class EncryptedRecoveryFirmwareTests(unittest.TestCase):
+    """macOS 26 recovery images are AEA archives hdiutil cannot attach."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name)
+        self.work = root / "work"
+        self.work.mkdir()
+        self.host = root / "host"
+        (self.host / "usr/share/firmware/wifi").mkdir(parents=True)
+        (self.host / "usr/sbin").mkdir(parents=True)
+        (self.host / "usr/sbin/appleh13camerad").write_bytes(b"camera")
+        self.recovery = root / "stub-recovery"
+        self.image = self.recovery / "vgid-1/usr/standalone/firmware/arm64eBaseSystem.dmg"
+        self.image.parent.mkdir(parents=True)
+        previous = os.getcwd()
+        os.chdir(self.work)
+        self.addCleanup(os.chdir, previous)
+        self.runs = []
+        self.seen = {}
+
+    def make(self, image_bytes, host_build="25G72", ipsw_build="25G72"):
+        self.image.write_bytes(image_bytes)
+        test = self
+
+        class Stub:
+            def __init__(self, sysinfo, dutil, osinfo):
+                self.sysinfo = SimpleNamespace(macos_build=host_build)
+                self.osi = SimpleNamespace(recovery=str(test.recovery), vgid="vgid-1")
+                self.manifest = {"ProductBuildVersion": ipsw_build}
+
+            def load_identity(self):
+                self.bootcaches = {"bless2": {}}
+
+            def collect_firmware(self, pkg):
+                fake_stub.subprocess.run(["hdiutil", "attach", "-quiet", "-readonly",
+                                          "-mountpoint", "recovery", str(test.image)], check=True)
+                if os.path.lexists("recovery"):
+                    test.seen["wifi"] = os.path.isdir("recovery/usr/share/firmware/wifi")
+                    test.seen["camera"] = Path("recovery/usr/sbin/appleh13camerad").read_bytes()
+                fake_stub.subprocess.run(["tar", "czf", "all_firmware.tar.gz"], check=True)
+                fake_stub.subprocess.run(["hdiutil", "detach", "-quiet", "recovery"])
+                return pkg
+
+            def install_files(self, cur_os):
+                pass
+
+        def run(command, **kwargs):
+            test.runs.append(command)
+            return subprocess.CompletedProcess(command, 0)
+
+        fake_stub = SimpleNamespace(
+            StubInstaller=Stub,
+            subprocess=SimpleNamespace(run=run, CompletedProcess=subprocess.CompletedProcess),
+        )
+        self.fake_stub = fake_stub
+        with patch("omarchy_asahi.stub", fake_stub):
+            installer = stub_installer("sysinfo", "dutil", "osinfo")
+        return installer
+
+    def collect(self, installer):
+        with patch("omarchy_asahi.stub", self.fake_stub), patch(
+            "omarchy_asahi.HOST_ROOT", str(self.host)
+        ):
+            return installer.collect_firmware("pkg")
+
+    def test_firmware_comes_from_the_running_macos_of_the_same_build(self):
+        installer = self.make(b"AEA1" + b"\0" * 60)
+        self.assertEqual(self.collect(installer), "pkg")
+        self.assertEqual(self.seen, {"wifi": True, "camera": b"camera"})
+        # Neither hdiutil call reaches the system; the tar still does.
+        self.assertEqual(self.runs, [["tar", "czf", "all_firmware.tar.gz"]])
+        self.assertFalse(os.path.lexists("recovery"))
+
+    def test_a_different_running_build_is_refused(self):
+        installer = self.make(b"AEA1" + b"\0" * 60, host_build="25G83")
+        with self.assertRaisesRegex(AsahiAdapterError, "25G72.*25G83"):
+            self.collect(installer)
+        self.assertEqual(self.runs, [])
+
+    def test_a_plain_recovery_image_is_attached_as_before(self):
+        installer = self.make(b"koly" + b"\0" * 60)
+        self.collect(installer)
+        self.assertEqual(self.runs[0][:2], ["hdiutil", "attach"])
+        self.assertEqual(self.runs[-1][:2], ["hdiutil", "detach"])
+
+
+STUB_VG = "5A6B7C8D-9E0F-4A1B-8C2D-3E4F5A6B7C8D"
+
+
+class DecryptedMacos26ImagesTests(unittest.TestCase):
+    """The stub's recoveryOS cannot boot the AEA images in a macOS 26 restore image."""
+
+    AEA = b"AEA1" + b"\0" * 60
+    UDIF = b"plain image" + b"\0" * 600 + b"koly" + b"\0" * 508
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        root = Path(self.temporary.name)
+        self.stub_recovery = root / "stub-recovery"
+        self.stub_preboot = root / "stub-preboot"
+        self.host_recovery = root / "host-recovery"
+        self.host_preboot = root / "host-preboot"
+        self.stub_image = self.stub_recovery / STUB_VG / "usr/standalone/firmware/arm64eBaseSystem.dmg"
+        self.host_image = self.host_recovery / "host-vg/usr/standalone/firmware/arm64eBaseSystem.dmg"
+        self.stub_restore = self.stub_preboot / STUB_VG / "Restore"
+        self.host_restore = self.host_preboot / "host-vg/restore"
+        for path in (self.stub_image, self.host_image):
+            path.parent.mkdir(parents=True)
+        self.stub_restore.mkdir(parents=True)
+        self.host_restore.mkdir(parents=True)
+        self.host_image.write_bytes(self.UDIF)
+        (self.host_restore / "094-96734-085.dmg.aea").write_bytes(b"exclave plain")
+        self.step2 = root / "step2.sh"
+        self.cur_os = SimpleNamespace(
+            recovery=str(self.host_recovery), preboot=str(self.host_preboot), vgid="host-vg"
+        )
+
+    def make(self, image, restore, host_build="25G72", ipsw_build="25G72"):
+        self.stub_image.write_bytes(image)
+        for name, data in restore.items():
+            (self.stub_restore / name).write_bytes(data)
+        test = self
+
+        class Stub:
+            def __init__(self, *args):
+                self.sysinfo = SimpleNamespace(macos_build=host_build)
+                self.osi = SimpleNamespace(
+                    recovery=str(test.stub_recovery), preboot=str(test.stub_preboot), vgid=STUB_VG,
+                    preboot_vgid=STUB_VG,
+                )
+                self.step2_sh = str(test.step2)
+                self.manifest = {"ProductBuildVersion": ipsw_build}
+                self.pb_vgid = str(test.stub_preboot / STUB_VG)
+                self.bootcaches = {"bless2": {}}
+
+            def load_identity(self):
+                pass
+
+            def collect_firmware(self, pkg):
+                pass
+
+            def install_files(self, cur_os):
+                test.installed = cur_os
+
+        with patch("omarchy_asahi.stub.StubInstaller", Stub):
+            return stub_installer("sysinfo", "dutil", "osinfo")
+
+    def test_encrypted_images_are_replaced_by_the_running_macos_copies(self):
+        installer = self.make(self.AEA, {"094-96734-085.dmg.aea": self.AEA, "BuildManifest.plist": b"x"})
+        installer.install_files(self.cur_os)
+        self.assertIs(self.installed, self.cur_os)
+        self.assertEqual(self.stub_image.read_bytes(), self.UDIF)
+        self.assertEqual((self.stub_restore / "094-96734-085.dmg.aea").read_bytes(), b"exclave plain")
+        self.assertEqual((self.stub_restore / "BuildManifest.plist").read_bytes(), b"x")
+        # The same install also writes Omarchy's Recovery setup.
+        self.assertIn(f'VGID="{STUB_VG}"', self.step2.read_text())
+
+    def test_older_firmware_is_left_alone(self):
+        installer = self.make(b"koly-free plain", {"094-1.dmg": b"plain"})
+        installer.install_files(self.cur_os)
+        self.assertEqual(self.stub_image.read_bytes(), b"koly-free plain")
+
+    def test_a_different_running_build_is_refused(self):
+        installer = self.make(self.AEA, {}, host_build="25G83")
+        with self.assertRaisesRegex(AsahiAdapterError, "25G72.*25G83"):
+            installer.install_files(self.cur_os)
+        self.assertEqual(self.stub_image.read_bytes(), self.AEA)
+
+    def test_an_encrypted_file_without_a_decrypted_copy_is_refused(self):
+        installer = self.make(self.AEA, {"094-00000-000.dmg.aea": self.AEA})
+        with self.assertRaisesRegex(AsahiAdapterError, "094-00000-000.dmg.aea"):
+            installer.install_files(self.cur_os)
+
+    def test_an_encrypted_running_recovery_image_is_refused(self):
+        self.host_image.write_bytes(self.AEA)
+        installer = self.make(self.AEA, {})
+        with self.assertRaisesRegex(AsahiAdapterError, "recovery image"):
+            installer.install_files(self.cur_os)
+
+
+def j700_stage1(path=b"", window=0, uuid=b""):
+    import struct as _struct
+    import zlib as _zlib
+    body = _struct.pack("<II40s192s", 1, window, uuid.ljust(40, b"\0"), path.ljust(192, b"\0"))
+    block = b"AURORA-S1-CFG01\0" + body + _struct.pack("<I", _zlib.crc32(body))
+    return b"m1n1 j700 stage 1" + block + b"\0" * 64 + b"STACKBOT"
+
+
+class J700Stage1Tests(unittest.TestCase):
+    UUID = "97c92d03-2cb3-461f-9134-134a58cc9fdc"
+
+    def test_the_block_is_filled_in_place(self):
+        import struct as _struct
+        import zlib as _zlib
+        image = j700_stage1()
+        filled = fill_j700_stage1(image, self.UUID, "m1n1/boot.bin", 5000)
+        self.assertEqual(len(filled), len(image))
+        self.assertTrue(filled.endswith(b"STACKBOT"))
+        offset = filled.index(b"AURORA-S1-CFG01\0") + 16
+        version, window, uuid, path = _struct.unpack_from("<II40s192s", filled, offset)
+        self.assertEqual((version, window), (1, 5000))
+        self.assertEqual(uuid.rstrip(b"\0"), self.UUID.encode())
+        self.assertEqual(path.rstrip(b"\0"), b";m1n1/boot.bin")
+        crc = _struct.unpack_from("<I", filled, offset + _struct.calcsize("<II40s192s"))[0]
+        self.assertEqual(crc, _zlib.crc32(filled[offset:offset + _struct.calcsize("<II40s192s")]))
+
+    def test_bad_inputs_are_refused(self):
+        image = j700_stage1()
+        for args in (
+            (image, self.UUID.upper(), "m1n1/boot.bin", 0),
+            (image, self.UUID, "/m1n1/boot.bin", 0),
+            (image, self.UUID, "m1n1/../boot.bin", 0),
+            (image, self.UUID, "m1n1/boot.bin", 100000),
+            (image[:-8], self.UUID, "m1n1/boot.bin", 0),
+            (image + image, self.UUID, "m1n1/boot.bin", 0),
+        ):
+            with self.assertRaises(AsahiAdapterError):
+                fill_j700_stage1(*args)
+
+    def write_generic(self, root):
+        target = Path(root) / "boot.bin"
+        target.write_bytes(b"asahi stage 1")
+        return target
+
+    def test_a_neo_gets_the_filled_j700_stage1(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = self.write_generic(root)
+            package = {"esp/aurora/stage1-j700.bin": j700_stage1()}
+            install_board_stage1("j700ap", package.__getitem__, self.UUID.upper(), str(target))
+            data = target.read_bytes()
+            self.assertTrue(data.startswith(b"m1n1 j700 stage 1"))
+            self.assertIn(b";m1n1/boot.bin", data)
+            self.assertIn(self.UUID.encode(), data)
+
+    def test_other_macs_keep_the_asahi_stage1(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = self.write_generic(root)
+            install_board_stage1("j613ap", {}.__getitem__, self.UUID, str(target))
+            self.assertEqual(target.read_bytes(), b"asahi stage 1")
+
+    def test_a_neo_image_without_the_j700_stage1_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = self.write_generic(root)
+            with self.assertRaisesRegex(AsahiAdapterError, "stage1-j700.bin"):
+                install_board_stage1("j700ap", {}.__getitem__, self.UUID, str(target))
+            self.assertEqual(target.read_bytes(), b"asahi stage 1")
+
+
+class NewerTrackpadKeyTests(unittest.TestCase):
+    """J700's Multitouch.im4p keys its trackpad C1FE, not C1FD."""
+
+    def test_c1fe_counts_as_a_trackpad_while_firmware_is_collected(self):
+        original = lambda key: "trackpad" if key.startswith("C1FD") else "unknown"
+        multitouch = SimpleNamespace(device_key_to_kind=original, DEVICE_KIND_TRACKPAD="trackpad")
+        seen = {}
+
+        class Stub:
+            def __init__(self, *args):
+                pass
+
+            def load_identity(self):
+                pass
+
+            def install_files(self, cur_os):
+                pass
+
+            def collect_firmware(self, pkg):
+                seen["C1FE0,0"] = multitouch.device_key_to_kind("C1FE0,0")
+                seen["C1FD0,0"] = multitouch.device_key_to_kind("C1FD0,0")
+                seen["C1FB0,0"] = multitouch.device_key_to_kind("C1FB0,0")
+
+        with patch("omarchy_asahi.stub.StubInstaller", Stub), patch(
+            "omarchy_asahi.asahi_firmware", SimpleNamespace(multitouch=multitouch)
+        ), patch("omarchy_asahi._is_encrypted", lambda path: False), patch(
+            "omarchy_asahi.os.path.join", lambda *parts: "/".join(str(p) for p in parts)
+        ):
+            installer = stub_installer("sysinfo", "dutil", "osinfo")
+            installer.osi = SimpleNamespace(recovery="r", vgid="v")
+            installer.collect_firmware("pkg")
+        self.assertEqual(seen, {"C1FE0,0": "trackpad", "C1FD0,0": "trackpad", "C1FB0,0": "unknown"})
+        self.assertIs(multitouch.device_key_to_kind, original)
+
+
+class NeoRadioFirmwareTests(unittest.TestCase):
+    """The MacBook Neo's MT7932 inputs join its vendor firmware package."""
+
+    files = {"mediatek/mt7932/ppr.bin": b"ppr", "mediatek/j700-mt7932-btcal.bin": b"btcal"}
+
+    def run_hook(self, device_class, collect):
+        package = SimpleNamespace(added=[])
+        package.add_file = lambda name, data: package.added.append((name, data))
+        installer = SimpleNamespace(sysinfo=SimpleNamespace(device_class=device_class))
+        firmware = SimpleNamespace(core=SimpleNamespace(FWFile=lambda name, data: ("FWFile", name, data)))
+        with patch("omarchy_asahi.asahi_firmware", firmware):
+            _collect_neo_radios(installer, package, collect=collect)
+        return package.added
+
+    def test_a_neo_adds_every_collected_file(self):
+        added = self.run_hook("j700ap", lambda: self.files)
+        self.assertEqual(added, [
+            ("mediatek/j700-mt7932-btcal.bin", ("FWFile", "mediatek/j700-mt7932-btcal.bin", b"btcal")),
+            ("mediatek/mt7932/ppr.bin", ("FWFile", "mediatek/mt7932/ppr.bin", b"ppr")),
+        ])
+
+    def test_other_macs_collect_nothing(self):
+        def collect():
+            raise AssertionError("collected on a Mac that is not a Neo")
+        self.assertEqual(self.run_hook("j613ap", collect), [])
+
+    def test_a_failed_collection_leaves_the_install_going(self):
+        import omarchy_mt7932
+
+        def collect():
+            raise omarchy_mt7932.Mt7932Error("the factory BWC2 record has no WCAL")
+        with self.assertLogs(level="WARNING") as logs:
+            self.assertEqual(self.run_hook("j700ap", collect), [])
+        self.assertIn("no WCAL", logs.output[0])
+
+class NeoTouchIdCalibrationTests(unittest.TestCase):
+    """The MacBook Neo's FSC2 calibration joins its vendor firmware package."""
+
+    def run_hook(self, device_class, collect, partitions=None):
+        package = SimpleNamespace(added=[])
+        package.add_file = lambda name, data: package.added.append((name, data))
+        dutil = SimpleNamespace(
+            find_system_disk=lambda: "disk0",
+            disk_parts={"disk0": {"Partitions": partitions or [
+                {"Content": "Apple_APFS_ISC", "DeviceIdentifier": "disk0s1"},
+                {"Content": "Apple_APFS", "DeviceIdentifier": "disk0s2"},
+            ]}},
+        )
+        installer = SimpleNamespace(sysinfo=SimpleNamespace(device_class=device_class), dutil=dutil)
+        firmware = SimpleNamespace(core=SimpleNamespace(FWFile=lambda name, data: ("FWFile", name, data)))
+        with patch("omarchy_asahi.asahi_firmware", firmware):
+            _collect_neo_touch_id(installer, package, collect=collect)
+        return package.added
+
+    def test_a_neo_reads_the_raw_iboot_system_container(self):
+        devices = []
+
+        def collect(device):
+            devices.append(device)
+            return {"apple/mesacal-j700.bin": b"img4"}
+
+        self.assertEqual(self.run_hook("j700ap", collect), [
+            ("apple/mesacal-j700.bin", ("FWFile", "apple/mesacal-j700.bin", b"img4")),
+        ])
+        self.assertEqual(devices, ["/dev/rdisk0s1"])
+
+    def test_other_macs_collect_nothing(self):
+        self.assertEqual(self.run_hook("j613ap", lambda device: self.fail("read the container")), [])
+
+    def test_a_failed_collection_leaves_the_install_going(self):
+        import omarchy_mesa
+
+        def collect(device):
+            raise omarchy_mesa.MesaError("expected one signed FSC2 calibration, found 0")
+
+        with self.assertLogs(level="WARNING") as logs:
+            self.assertEqual(self.run_hook("j700ap", collect), [])
+        self.assertIn("found 0", logs.output[0])
+
+    def test_a_disk_without_its_container_first_is_not_read(self):
+        partitions = [{"Content": "Apple_APFS", "DeviceIdentifier": "disk0s1"}]
+        with self.assertLogs(level="WARNING"):
+            self.assertEqual(self.run_hook("j700ap", lambda device: self.fail("read"), partitions), [])
+
 
 if __name__ == "__main__":
     unittest.main()

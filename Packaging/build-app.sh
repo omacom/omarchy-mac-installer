@@ -46,8 +46,8 @@ helper_identifier="$INSTALLER_HELPER_IDENTIFIER"
 app_name="$INSTALLER_APP_NAME.app"
 app_executable_name="OmarchyAppleInstallerApp"
 daemon_plist_name="$helper_identifier.plist"
-engine_file_name="installer-v0.9.2-omarchy.28.tar.gz"
-engine_digest="0cf1aa87760f90a545298b7cef737c9b497f2cad421d79ac59f557a81f2eb146"
+engine_file_name="installer-v0.9.2-omarchy.30.tar.gz"
+engine_digest="2d5a14c3dde7b9ebb7076cd65a6d5a478d7f20b6396fadb52b59532752d12bdc"
 
 if [[ $signing_identity == "-" ]]; then
   client_requirement="identifier \"$app_identifier\""
@@ -87,6 +87,9 @@ sealed_catalog_signature="$release_directory/catalog.json.sig"
 
 [[ ${OMARCHY_PRIVATE_PLAIN_TEST:-0} != "1" || ${OMARCHY_PRIVATE_LIMINE_TEST:-0} != "1" ]] \
   || fail "private plain and Limine profiles are mutually exclusive"
+[[ ${OMARCHY_DEVELOPER_BUILD:-0} != "1" \
+  || ( ${OMARCHY_PRIVATE_PLAIN_TEST:-0} != "1" && ${OMARCHY_PRIVATE_LIMINE_TEST:-0} != "1" ) ]] \
+  || fail "the developer build cannot also be a private profile"
 sealed_catalog_available=false
 if [[ -e $sealed_catalog || -L $sealed_catalog \
   || -e $sealed_catalog_signature || -L $sealed_catalog_signature ]]; then
@@ -108,6 +111,11 @@ fi
 
 if [[ ${OMARCHY_PRIVATE_LIMINE_TEST:-0} == "1" && $sealed_catalog_available != "true" ]]; then
   fail "private Limine builds require a sealed private catalog"
+fi
+# A developer catalog can admit Macs no public catalog does, so it must never
+# reach a developer build over the network.
+if [[ ${OMARCHY_DEVELOPER_BUILD:-0} == "1" && $sealed_catalog_available != "true" ]]; then
+  fail "developer builds require a sealed developer catalog"
 fi
 
 if [[ ${OMARCHY_PRIVATE_LIMINE_TEST:-0} == "1" ]]; then
@@ -270,8 +278,11 @@ for model in json.loads(catalog.read_text())["models"]:
     if source.stat().st_size != artifact["sizeBytes"] or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
         raise SystemExit("bundled engine differs from signed catalog")
     target = destination / name
-    if target.exists() and hashlib.sha256(target.read_bytes()).hexdigest() != expected:
-        raise SystemExit("bundled engine conflicts with inspection engine")
+    if target.exists():
+        if hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+            raise SystemExit("bundled engine conflicts with inspection engine")
+        # The inspection engine is already this exact execution engine.
+        continue
     shutil.copyfile(source, target)
     target.chmod(0o444)
 PYCODE
@@ -293,6 +304,9 @@ if [[ ${OMARCHY_PRIVATE_PLAIN_TEST:-0} == "1" ]]; then
 fi
 if [[ ${OMARCHY_PRIVATE_LIMINE_TEST:-0} == "1" ]]; then
   plutil -insert OmarchyPrivateLimineTest -bool true "$contents/Info.plist"
+fi
+if [[ ${OMARCHY_DEVELOPER_BUILD:-0} == "1" ]]; then
+  plutil -insert OmarchyDeveloperBuild -bool true "$contents/Info.plist"
 fi
 plutil -replace CFBundleVersion \
   -string "$build_number" "$contents/Info.plist"
