@@ -7,8 +7,8 @@
     case inspecting
     case unsupported(FailureDisplay)
     case welcome(HostDisplay)
-    /// Omarchy is already on this Mac. The installer never replaces or adds
-    /// to an existing install; this is a terminal page with a Close button.
+    /// Omarchy is already on this Mac. The installer never adds a second
+    /// one; it replaces this one only through `reinstallOverExisting()`.
     case existingInstallRefused(host: HostDisplay)
     case preparingPlan(AssetProgressUpdate)
     /// Everything is downloaded and verified; the plan waits for the person to
@@ -109,6 +109,9 @@
     /// The approved plan the engine refused before changing the disk, kept so
     /// a re-plan can start from the size the person chose.
     private var refusedPlan: PlanDisplay?
+    /// The existing install a reinstall replaces. Set only by
+    /// `reinstallOverExisting()`, and forgotten by every new inspection.
+    private var replacingInstall: ExistingInstallDisplay?
     /// True while a chosen size is being re-planned; the Plan screen stays
     /// visible with its controls disabled instead of showing the download
     /// screen again.
@@ -244,6 +247,24 @@
       await preparePlan(host: host)
     }
 
+    /// True on the refusal page when the inspection found exactly one
+    /// existing install, the only case a reinstall can name unambiguously.
+    public var canReinstallOverExisting: Bool {
+      guard !isBusy, case .existingInstallRefused(let host) = phase else { return false }
+      return host.existingInstalls.count == 1
+    }
+
+    /// Plans a reinstall over the one existing install: the engine erases it
+    /// and reuses its exact space, so macOS is not resized. Nothing is erased
+    /// here; the plan still needs review, approval and the owner's password.
+    public func reinstallOverExisting() async {
+      guard canReinstallOverExisting, case .existingInstallRefused(let host) = phase else {
+        return
+      }
+      replacingInstall = host.existingInstalls[0]
+      await preparePlan(host: host)
+    }
+
     /// Every returned plan is reviewed anew, even when the engine clamps to
     /// the old allocation. A revision clears any tentative view value.
     public func replan(omarchyBytes: UInt64) async {
@@ -284,7 +305,9 @@
       defer { isBusy = false }
 
       do {
-        let outcome = try await environment.preparePlan(omarchyBytes: omarchyBytes) {
+        let outcome = try await environment.preparePlan(
+          omarchyBytes: omarchyBytes, replacing: replacingInstall?.sourceIdentifier
+        ) {
           [weak self] update in
           Task { @MainActor in
             guard let self, self.operationID == currentOperation else { return }
@@ -840,6 +863,7 @@
       recoveryRetryAvailable = false
       isExecuting = false
       lastHost = nil
+      replacingInstall = nil
       refusedPlan = nil
       encryptLinuxDisk = allowsEncryption
       environment.setEncryptLinuxDisk(allowsEncryption)

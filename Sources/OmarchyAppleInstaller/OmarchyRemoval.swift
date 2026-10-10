@@ -289,10 +289,7 @@
         })
     }
 
-    var macOSName: String {
-      snapshot.containers.first { $0.uuid == snapshot.macOSContainerUUID }?.volumes
-        .first { $0.roles == ["System"] }?.name ?? "macOS"
-    }
+    var macOSName: String { snapshot.macOSName }
 
     /// Every intermediate state must be exactly the approved layout minus the
     /// partitions already removed. This also proves the gap is adjacent to macOS.
@@ -374,7 +371,7 @@
             throw RemovalFailure(
               message: "A macOS administrator account is needed to set the startup disk.")
           }
-          try setMacOSStartup(plan, snapshot: first, authorization: authorization)
+          try setRunningMacOSAsStartupDisk(disks, snapshot: first, authorization: authorization)
           var recorded = false
           do {
             try removeAndReturnSpace(plan) { phase in
@@ -432,35 +429,43 @@
       try plan.validate(disks.snapshot(), removed: removed, expanded: true)
       try record("complete")
     }
+  }
 
-    /// Nothing is deleted unless macOS then reports the running macOS as both
-    /// the startup disk and the next restart's choice.
-    private func setMacOSStartup(
-      _ plan: OmarchyRemovalPlan, snapshot: RemovalSnapshot,
-      authorization: MachineOwnerAuthorization
-    ) throws {
-      let name = plan.macOSName
+  extension RemovalSnapshot {
+    var macOSName: String {
+      containers.first { $0.uuid == macOSContainerUUID }?.volumes
+        .first { $0.roles == ["System"] }?.name ?? "macOS"
+    }
+  }
+
+  /// Removal and a reinstall over an existing Omarchy both delete a stub the
+  /// Mac may start up from. Nothing is deleted unless macOS then reports the
+  /// running macOS as both the startup disk and the next restart's choice.
+  func setRunningMacOSAsStartupDisk(
+    _ disks: any RemovalDiskOperating, snapshot: RemovalSnapshot,
+    authorization: MachineOwnerAuthorization
+  ) throws {
+    let name = snapshot.macOSName
+    do {
+      try disks.setMacOSStartup(snapshot, nextOnly: false, authorization: authorization)
+    } catch let refusal as RemovalStartupRefusal {
+      throw RemovalFailure(
+        message: RemovalText.startupRefused(name, reason: refusal.reason), complete: true)
+    }
+    var now = try disks.startup(snapshot)
+    if now == .nextStartupOverride {
       do {
-        try disks.setMacOSStartup(snapshot, nextOnly: false, authorization: authorization)
-      } catch let refusal as RemovalStartupRefusal {
+        try disks.setMacOSStartup(snapshot, nextOnly: true, authorization: authorization)
+      } catch {
+        let reason = (error as? RemovalStartupRefusal)?.reason ?? error.localizedDescription
         throw RemovalFailure(
-          message: RemovalText.startupRefused(name, reason: refusal.reason), complete: true)
+          message: RemovalText.startupUnconfirmed(name, now, reason: reason), complete: true)
       }
-      var now = try disks.startup(snapshot)
-      if now == .nextStartupOverride {
-        do {
-          try disks.setMacOSStartup(snapshot, nextOnly: true, authorization: authorization)
-        } catch {
-          let reason = (error as? RemovalStartupRefusal)?.reason ?? error.localizedDescription
-          throw RemovalFailure(
-            message: RemovalText.startupUnconfirmed(name, now, reason: reason), complete: true)
-        }
-        now = try disks.startup(snapshot)
-      }
-      guard now == .macOS else {
-        throw RemovalFailure(
-          message: RemovalText.startupUnconfirmed(name, now, reason: nil), complete: true)
-      }
+      now = try disks.startup(snapshot)
+    }
+    guard now == .macOS else {
+      throw RemovalFailure(
+        message: RemovalText.startupUnconfirmed(name, now, reason: nil), complete: true)
     }
   }
 #endif

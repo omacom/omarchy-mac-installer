@@ -26,6 +26,11 @@
 
     public static let existingInstallHeadline = "Omarchy is already installed"
     public static let closeInstaller = "Close"
+    public static let reinstallOmarchy = "Reinstall Omarchy"
+    public static let reinstallDetail =
+      "Reinstall erases this Omarchy and everything on it, then installs the new one in the same space. macOS keeps its size, so nothing has to be resized. You review the exact plan before anything changes."
+    public static let removeOmarchyHint =
+      "To remove Omarchy and return its space to macOS instead, select Installation → Remove Omarchy from the menu bar."
 
     // MARK: Screen B — Plan
 
@@ -611,6 +616,17 @@
               plainDetail:
                 "Keep your Mac powered on. An installation may still be running; check its installation record before starting another attempt.",
               technicalDetail: technical
+            )
+          }
+          let startup = ClosedEngineHelperError.macOSStartupNotSet as NSError
+          if domain == startup.domain, code == startup.code {
+            return FailureDisplay(
+              headline: "macOS couldn’t be set as the startup disk",
+              plainDetail:
+                "Reinstall sets macOS as the startup disk before it erases the old Omarchy, and macOS didn’t confirm that change. Nothing was erased.",
+              technicalDetail: technical,
+              remedy:
+                "Choose macOS in System Settings → General → Startup Disk, then try again."
             )
           }
           return FailureDisplay(

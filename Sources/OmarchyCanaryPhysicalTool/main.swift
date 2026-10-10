@@ -333,7 +333,8 @@ private enum OmarchyCanaryPhysicalTool {
       bindingDigest: bindingDigest,
       planDigest: plan.planDigest,
       deviceIdentifier: plan.deviceIdentifier,
-      storeIdentifier: plan.storeIdentifier
+      storeIdentifier: plan.storeIdentifier,
+      candidateKind: plan.candidateKind
     )
     let result = try await executor.execute(
       package,

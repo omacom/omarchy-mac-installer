@@ -34,6 +34,9 @@
     /// An app from another build is replacing this helper; it takes no new
     /// work meanwhile, so replacing it can never cut a job short.
     case beingReplaced
+    /// A reinstall would delete the old Omarchy stub, and macOS could not be
+    /// confirmed as the startup disk first. Nothing was erased.
+    case macOSStartupNotSet
   }
 
   /// Whether the helper is idle, working on a job, or held for replacement by
@@ -332,6 +335,10 @@
         )
       }
 
+      if operation == .install, package.candidateKind == "replace" {
+        try await setMacOSStartupBeforeReplace(authorization)
+      }
+
       var tailer: EngineJournalTailer?
       if let progress,
         let journalURL = EngineJournalLocator.journalURL(
@@ -400,6 +407,27 @@
         completedInstallPlan = completed
       }
       return result
+    }
+
+    /// A replace deletes the old Omarchy stub, which the Mac may start up
+    /// from. As removal does (eed259e), make the running macOS the startup
+    /// disk and the next restart's choice, and confirm it, before the engine
+    /// erases anything.
+    private func setMacOSStartupBeforeReplace(_ authorization: MachineOwnerAuthorization)
+      async throws
+    {
+      let disks = removalDisks
+      let validateAdministrator = removalAdminValidator
+      do {
+        try await Task.detached {
+          let snapshot = try disks.snapshot()
+          guard try disks.startup(snapshot) != .macOS else { return }
+          try validateAdministrator(authorization)
+          try setRunningMacOSAsStartupDisk(disks, snapshot: snapshot, authorization: authorization)
+        }.value
+      } catch {
+        throw ClosedEngineHelperError.macOSStartupNotSet
+      }
     }
 
     public func writeInstallConf(
