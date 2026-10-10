@@ -315,6 +315,14 @@ class CandidateSetTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "lacks the add-on or boot package"):
             self.verify(self.work / "both-stale", receipt)
 
+    def test_apple_package_list_prefers_the_renamed_list(self):
+        receipt = self.apple_layout("renamed", {"omarchy-aarch64-apple.packages": b"omarchy-mac\nomarchy-mac-boot\n"})
+        self.verify(self.work / "renamed", receipt)
+        receipt = self.apple_layout("renamed-stale", {"omarchy-aarch64-apple.packages": b"omarchy-mac\n",
+                                                      "omarchy-apple-silicon.packages": b"omarchy-mac\nomarchy-mac-boot\n"})
+        with self.assertRaisesRegex(ValueError, "lacks the add-on or boot package"):
+            self.verify(self.work / "renamed-stale", receipt)
+
     def test_apple_package_list_missing(self):
         for directory, lists in (("none", {}), ("link-only", {"omarchy-apple.packages": "omarchy-apple-silicon.packages"})):
             with self.subTest(layout=directory):

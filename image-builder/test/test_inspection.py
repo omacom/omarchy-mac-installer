@@ -298,6 +298,12 @@ class InspectionTest(unittest.TestCase):
         # omarchy-mac's compatibility link beside upstream's name.
         (install / "omarchy-apple.packages").symlink_to("omarchy-apple-silicon.packages")
         self.assertEqual(self.inspect()["apple_package_list"], "omarchy-apple-silicon.packages")
+        # The renamed list wins over the name before the platform rename.
+        (install / "omarchy-apple.packages").unlink()
+        (install / "omarchy-aarch64-apple.packages").write_text((install / "omarchy-apple-silicon.packages").read_text())
+        self.assertEqual(self.inspect()["apple_package_list"], "omarchy-aarch64-apple.packages")
+        (install / "omarchy-aarch64-apple.packages").unlink()
+        (install / "omarchy-apple.packages").symlink_to("omarchy-apple-silicon.packages")
         # An older runtime's name alone.
         (install / "omarchy-apple.packages").unlink()
         (install / "omarchy-apple-silicon.packages").rename(install / "omarchy-apple.packages")
@@ -511,6 +517,20 @@ class InspectionTest(unittest.TestCase):
         report = self.inspect()
         self.assertEqual(report["checks"]["pacman-config"]["result"], "passed", report["checks"]["pacman-config"])
         self.assertIn("apple-silicon edge pacman.conf", report["checks"]["pacman-config"]["detail"])
+
+    def test_pacman_config_prefers_the_runtimes_renamed_template(self):
+        templates = self.root / "usr/share/omarchy/default/pacman"
+        apple = "[options]\nArchitecture = auto\n\n[omarchy]\nServer = https://pkgs.omarchy.org/edge/$arch\n"
+        apple += "\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
+        apple += "".join(f"\n[{r}]\nInclude = /etc/pacman.d/mirrorlist\n" for r in ("core", "extra", "alarm", "aur"))
+        for name, text in (("aarch64-apple", apple), ("apple-silicon", apple + "\n# before the rename\n")):
+            (templates / name).mkdir()
+            (templates / name / "pacman-edge.conf").write_text(text)
+        pinned = fixtures.test_image_pin.pinned(self.summary)
+        (self.root / "etc/pacman.conf").write_bytes(fixtures.test_image_pin.render(apple.encode(), pinned))
+        report = self.inspect()
+        self.assertEqual(report["checks"]["pacman-config"]["result"], "passed", report["checks"]["pacman-config"])
+        self.assertIn("aarch64-apple edge pacman.conf", report["checks"]["pacman-config"]["detail"])
 
     def test_pacman_config_prefers_omarchy_macs_template(self):
         runtime = self.root / "usr/share/omarchy/default/pacman"

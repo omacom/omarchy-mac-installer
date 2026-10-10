@@ -44,8 +44,9 @@ TRUST = Path(__file__).resolve().parent / 'candidate-trust'
 HEX40 = re.compile(r'[0-9a-f]{40}')
 HEX64 = re.compile(r'[0-9a-f]{64}')
 ARCHIVE = re.compile(r'[A-Za-z0-9@._+:-]+\.pkg\.tar\.(xz|zst)')
-# The runtime's Apple package list, by upstream's name, then an older runtime's.
-APPLE_LISTS = ('usr/share/omarchy/install/omarchy-apple-silicon.packages',
+# The runtime's Apple package list, by upstream's name, then older runtimes'.
+APPLE_LISTS = ('usr/share/omarchy/install/omarchy-aarch64-apple.packages',
+               'usr/share/omarchy/install/omarchy-apple-silicon.packages',
                'usr/share/omarchy/install/omarchy-apple.packages')
 # Where each runtime package records the commit it was built from.
 REVISION_FILES = {
@@ -183,7 +184,7 @@ def apple_list(package):
         entry = subprocess.run(['bsdtar', '-tvf', str(package), name], capture_output=True, text=True)
         if entry.returncode == 0 and entry.stdout.startswith('-'):
             return name, member(package, name).decode()
-    raise ValueError('the runtime ships no Apple package list (omarchy-apple-silicon.packages or omarchy-apple.packages)')
+    raise ValueError('the runtime ships no Apple package list (omarchy-aarch64-apple.packages, omarchy-apple-silicon.packages or omarchy-apple.packages)')
 
 
 def payload_paths(package):
