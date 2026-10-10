@@ -396,7 +396,10 @@ def make_root(root: Path, candidates: Path, layout: str | None = None) -> None:
     template = "[options]\nArchitecture = auto\n\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
     template += "".join(f"\n[{r}]\nInclude = /etc/pacman.d/mirrorlist\n" for r in ("core", "extra", "alarm", "aur"))
     template += "\n[omarchy]\nServer = https://pkgs.omarchy.org/edge/$arch\n"
-    templates = {"aarch64": (template, "Server = https://mirror.invalid/$arch/$repo\n")}
+    # A runtime with a platform template keeps asahi-alarm out of its plain aarch64 one.
+    asahi = "\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
+    templates = {"aarch64": (template.replace(asahi, "") if layout else template,
+                             "Server = https://mirror.invalid/$arch/$repo\n")}
     for name in RUNTIME_LAYOUTS[layout]["templates"] if layout else ():
         templates.setdefault(name, (f"# {name}\n" + template, f"Server = https://{name}.mirror.invalid/$arch/$repo\n"))
     for name, (conf, mirrors) in templates.items():

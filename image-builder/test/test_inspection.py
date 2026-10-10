@@ -677,6 +677,7 @@ class RuntimeLayoutInspectionTest(unittest.TestCase):
                         self.assertIn(pacman, report["checks"]["pacman-config"]["detail"])
                         # The plain aarch64 template, without asahi-alarm, is not what the image installs.
                         template = root / "usr/share/omarchy/default/pacman/aarch64/pacman-edge.conf"
+                        self.assertNotIn("[asahi-alarm]", template.read_text())
                         (root / "etc/pacman.conf").write_bytes(
                             fixtures.test_image_pin.render(template.read_bytes(), fixtures.test_image_pin.pinned(summary)))
                         report = inspection.inspect(root, candidates, "edge", factory, trust=signer.trust)
