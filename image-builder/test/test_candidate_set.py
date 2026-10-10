@@ -326,6 +326,16 @@ class CandidateSetTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "lacks the add-on or boot package"):
             self.verify(self.work / "platform-stale", receipt)
 
+    def test_each_runtime_layout_verifies(self):
+        for layout in fixtures.RUNTIME_LAYOUTS:
+            with self.subTest(layout=layout):
+                output = self.work / "output"
+                if output.exists():
+                    output.chmod(0o700)
+                    shutil.rmtree(output)
+                receipt = fixtures.make_set(self.work / layout, self.signer, contents=fixtures.default_contents(layout))
+                self.assertEqual(self.verify(self.work / layout, receipt)["source_commit"], fixtures.SOURCE)
+
     def test_apple_package_list_missing(self):
         for directory, lists in (("none", {}), ("link-only", {"omarchy-apple.packages": "omarchy-apple-silicon.packages"}),
                                  ("platform-link-only", {"omarchy-aarch64-apple.packages": "omarchy-apple.packages"})):

@@ -642,6 +642,52 @@ class ClosureInspectionTest(unittest.TestCase):
                         path.chmod(0o700)
 
 
+class RuntimeLayoutInspectionTest(unittest.TestCase):
+    """Images built from each runtime layout the builder takes (fixtures.RUNTIME_LAYOUTS)."""
+
+    EXPECTED = {
+        "e1b0e5e9b": ("omarchy-aarch64-apple.packages",
+                      "the runtime's aarch64-apple edge pacman.conf and the runtime's aarch64-apple mirror list"),
+        "5397950a2": ("omarchy-apple-silicon.packages",
+                      "the runtime's apple-silicon edge pacman.conf and the runtime's aarch64 mirror list"),
+    }
+
+    def test_each_runtime_layout_passes_inspection(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            base = Path(scratch)
+            signer = fixtures.Signer(base / "signer")
+            try:
+                for layout, (apple_list, pacman) in self.EXPECTED.items():
+                    with self.subTest(layout=layout):
+                        work = base / layout
+                        receipt = fixtures.make_set(work / "set", signer, contents=fixtures.default_contents(layout))
+                        candidates = work / "candidates"
+                        fixtures.import_set(work / "set", candidates, signer, receipt)
+                        summary = __import__("json").loads((candidates / "import.json").read_text())
+                        root = work / "root"
+                        fixtures.make_root(root, candidates, layout)
+                        factory = work / "factory"
+                        fixtures.make_factory(factory, root, summary)
+                        SUBVOLUMES.clear()
+                        SUBVOLUMES.add(root / ".snapshots")
+                        report = inspection.inspect(root, candidates, "edge", factory, trust=signer.trust)
+                        failed = {name: check for name, check in report["checks"].items() if check["result"] != "passed"}
+                        self.assertEqual(report["result"], "passed", failed)
+                        self.assertEqual(report["apple_package_list"], apple_list)
+                        self.assertIn(pacman, report["checks"]["pacman-config"]["detail"])
+                        # The plain aarch64 template, without asahi-alarm, is not what the image installs.
+                        template = root / "usr/share/omarchy/default/pacman/aarch64/pacman-edge.conf"
+                        (root / "etc/pacman.conf").write_bytes(
+                            fixtures.test_image_pin.render(template.read_bytes(), fixtures.test_image_pin.pinned(summary)))
+                        report = inspection.inspect(root, candidates, "edge", factory, trust=signer.trust)
+                        self.assertEqual(report["checks"]["pacman-config"]["result"], "failed")
+            finally:
+                signer.close()
+                for path in base.rglob("*"):
+                    if path.is_dir() and not path.is_symlink():
+                        path.chmod(0o700)
+
+
 class TestImagePinTest(unittest.TestCase):
     TEMPLATE = b"# pacman\n\n[options]\nArchitecture = auto\n\n[core]\nInclude = /etc/pacman.d/mirrorlist\n"
 
