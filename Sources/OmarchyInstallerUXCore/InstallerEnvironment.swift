@@ -98,8 +98,9 @@
   }
 
   /// Plan preparation either yields a reviewable plan or reports the
-  /// existing installs it found, which the session refuses. Nothing is
-  /// approved or executed from either value.
+  /// existing installs it found, which the session refuses unless the person
+  /// chose to reinstall over one. Nothing is approved or executed from either
+  /// value.
   public enum PlanPreparationDisplay: Equatable, Sendable {
     case plan(PlanDisplay)
     case existingInstallChoice([ExistingInstallDisplay])
@@ -533,9 +534,12 @@
     func inspect() async throws -> HostDisplay
     /// `omarchyBytes` asks the planner for that much space for Omarchy; nil
     /// keeps the balanced default. The engine still clamps the request to the
-    /// candidate's real minimum and maximum.
+    /// candidate's real minimum and maximum. `replacing` names the existing
+    /// install to reinstall over: the plan reuses its exact space and ignores
+    /// `omarchyBytes`.
     func preparePlan(
       omarchyBytes: UInt64?,
+      replacing: String?,
       progress: @escaping @Sendable (AssetProgressUpdate) -> Void
     ) async throws -> PlanPreparationDisplay
     func approve() throws

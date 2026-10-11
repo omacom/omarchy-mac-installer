@@ -1297,6 +1297,59 @@
       }
     }
 
+    /// Reinstalling plans the engine's replace of the one install the
+    /// inspection found, instead of Remove Omarchy (grow macOS) and a new
+    /// install (shrink it again). The plan still needs review and approval.
+    func testReinstallPlansTheReplaceOfTheOneExistingInstall() async {
+      let environment = MockInstallerEnvironment()
+      let install = ExistingInstallDisplay(sourceIdentifier: "disk0s3", sizeDescription: "256 GB")
+      environment.host = HostDisplay(
+        chipAndSpace: MockInstallerEnvironment.supportedHost.chipAndSpace,
+        supported: true, existingInstalls: [install])
+      environment.existingInstalls = [install]
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      XCTAssertTrue(session.canReinstallOverExisting)
+
+      await session.reinstallOverExisting()
+
+      guard case .planPrepared(let plan, _) = session.phase else {
+        return XCTFail("Expected a prepared plan, got \(session.phase)")
+      }
+      XCTAssertEqual(plan, environment.plan)
+      XCTAssertEqual(environment.prepareCount, 1)
+      XCTAssertEqual(environment.lastReplacing, "disk0s3")
+      XCTAssertFalse(environment.hasApprovedPlan, "nothing is approved by choosing to reinstall")
+
+      // A fresh check forgets the choice: a normal install never replaces.
+      environment.host = MockInstallerEnvironment.supportedHost
+      environment.existingInstalls = []
+      await session.inspect()
+      await session.continueToPlan()
+      XCTAssertEqual(environment.prepareCount, 2)
+      XCTAssertNil(environment.lastReplacing)
+    }
+
+    func testReinstallIsUnavailableUnlessExactlyOneInstallWasFound() async {
+      let environment = MockInstallerEnvironment()
+      let installs = ["disk0s3", "disk0s8"].map {
+        ExistingInstallDisplay(sourceIdentifier: $0, sizeDescription: "128 GB")
+      }
+      environment.host = HostDisplay(
+        chipAndSpace: MockInstallerEnvironment.supportedHost.chipAndSpace,
+        supported: true, existingInstalls: installs)
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      XCTAssertFalse(session.canReinstallOverExisting)
+
+      await session.reinstallOverExisting()
+
+      guard case .existingInstallRefused = session.phase else {
+        return XCTFail("Expected the refusal to stay, got \(session.phase)")
+      }
+      XCTAssertEqual(environment.prepareCount, 0)
+    }
+
     func testReinspectResetsDisplayedAndStoredEncryptionChoice() async {
       let environment = MockInstallerEnvironment()
       let session = InstallerSession(environment: environment)
@@ -1453,6 +1506,7 @@
     }
 
     var lastOmarchyBytes: UInt64?
+    var lastReplacing: String?
     var payloadPrefetchRequired = false
     var prefetchGate: OperationGate?
     private(set) var prefetchStartCount = 0
@@ -1465,6 +1519,7 @@
 
     func preparePlan(
       omarchyBytes: UInt64?,
+      replacing: String?,
       progress: @escaping @Sendable (AssetProgressUpdate) -> Void
     ) async throws -> PlanPreparationDisplay {
       savedProgress = progress
@@ -1472,6 +1527,7 @@
       prepareCount += 1
       cancelsBeforePrepare = prefetchCancelCount
       lastOmarchyBytes = omarchyBytes
+      lastReplacing = replacing
       approved = false
       for update in progressUpdates {
         progress(update)
@@ -1480,7 +1536,7 @@
       if let prepareError {
         throw prepareError
       }
-      if !existingInstalls.isEmpty {
+      if !existingInstalls.isEmpty, replacing == nil {
         return .existingInstallChoice(existingInstalls)
       }
       return .plan(plan)

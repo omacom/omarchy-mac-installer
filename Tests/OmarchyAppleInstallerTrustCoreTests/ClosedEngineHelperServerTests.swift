@@ -204,6 +204,49 @@
       XCTAssertTrue(try importedEntries(in: fixture.destination).isEmpty)
     }
 
+    /// A reinstall deletes the old Omarchy stub, which the Mac may start up
+    /// from. Like removal (eed259e), the helper makes macOS the startup disk
+    /// and confirms it before the engine runs, and never runs the engine when
+    /// that fails. A fresh install never touches the startup disk.
+    func testAReplaceMakesMacOSTheStartupDiskBeforeTheEngineRuns() async throws {
+      let refused = RemovalStartupRefusal(reason: "Could not set boot device property")
+      let cases: [(String, RemovalStartup, [Result<RemovalStartup, RemovalStartupRefusal>], Bool)] =
+        [
+          ("replace", .other("Omarchy"), [.success(.macOS)], true),
+          ("replace", .other("Omarchy"), [.failure(refused)], false),
+          ("replace", .other("Omarchy"), [.success(.other("Omarchy"))], false),
+          ("replace", .macOS, [], true),
+          ("free", .other("Omarchy"), [], true),
+        ]
+      for (kind, before, afterSet, runsEngine) in cases {
+        let name = "\(kind) from \(before), bless \(afterSet)"
+        let fixture = try makeFixture(candidateKind: kind)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let source = try openDirectory(fixture.source)
+        defer { try? source.close() }
+        let disk = FakeRemovalDisk()
+        disk.startupState = before
+        disk.startupAfterSet = afterSet
+        let executor = StartupRecordingExecutor(disk: disk, result: fixture.transcript)
+        let server = ClosedEngineHelperServer(
+          workingDirectory: fixture.destination, executor: executor,
+          credentialValidator: AcceptingMachineOwnerCredentialValidator(),
+          removalDisks: disk, removalAdminValidator: { _ in })
+
+        do {
+          _ = try await server.submit(
+            packageDirectory: source, authorization: try machineOwnerAuthorization())
+          XCTAssertTrue(runsEngine, name)
+        } catch {
+          XCTAssertFalse(runsEngine, name)
+          XCTAssertEqual(error as? ClosedEngineHelperError, .macOSStartupNotSet, name)
+        }
+        let startups = await executor.startupAtExecution
+        XCTAssertEqual(startups, runsEngine ? [kind == "free" ? before : .macOS] : [], name)
+        XCTAssertEqual(disk.startupWrites.count, afterSet.count, name)
+      }
+    }
+
     func testEngineFailureIsKeptInRootDiagnosticsAndRethrown() async throws {
       let fixture = try makeFixture()
       defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -487,7 +530,8 @@
     private func makeFixture(
       deviceIdentifier: String = "apple,j314s",
       transcriptPlanMismatch: Bool = false,
-      includeCompletion: Bool = true
+      includeCompletion: Bool = true,
+      candidateKind: String = "free"
     ) throws -> HelperServerFixture {
       let root = FileManager.default.temporaryDirectory.appendingPathComponent(
         "omarchy-helper-server-\(UUID().uuidString.lowercased())",
@@ -528,10 +572,14 @@
         to: source.appendingPathComponent("omarchy.img.zst")
       )
 
+      let identityDigest = "sha256:" + String(repeating: "9", count: 64)
+      let identityField = candidateKind == "replace" ? [identityDigest] : []
+      let identityJSON =
+        candidateKind == "replace" ? #","identity_digest":"\#(identityDigest)""# : ""
       let layoutDigest = lengthPrefixedDigest(
         [
-          "disk0", "free", "disk0s3", "447750000000", "107374182400",
-        ],
+          "disk0", candidateKind, "disk0s3", "447750000000", "107374182400",
+        ] + identityField,
         prefix: "sha256:"
       )
       let requiredHumanSteps = [
@@ -541,7 +589,7 @@
       let engineVersion = "v0.9.0-omarchy.1"
       let requestPlanDigest = lengthPrefixedDigest(
         [
-          deviceIdentifier, "disk0", layoutDigest, "free", "disk0s3",
+          deviceIdentifier, "disk0", layoutDigest, candidateKind, "disk0s3",
           "447750000000", "107374182400", engineVersion,
           engineDigest, metadataDigest, payloadDigest,
           requiredHumanSteps.joined(separator: ","),
@@ -562,7 +610,7 @@
         : payloadDigest
       let transcriptPlanDigest = lengthPrefixedDigest(
         [
-          "apple,j314s", "disk0", layoutDigest, "free", "disk0s3",
+          "apple,j314s", "disk0", layoutDigest, candidateKind, "disk0s3",
           "447750000000", "107374182400", engineVersion,
           transcriptEngineDigest, transcriptMetadataDigest,
           transcriptPayloadDigest,
@@ -578,7 +626,7 @@
       )
       let request = Data(
         """
-        {"format":1,"operation":"install","plan_digest":"\(requestPlanDigest)","device_identifier":"\(deviceIdentifier)","store_identifier":"disk0","layout_digest":"\(layoutDigest)","candidate_kind":"free","source_identifier":"disk0s3","offset_bytes":447750000000,"length_bytes":107374182400,"engine_version":"\(engineVersion)","required_human_steps":["enterOneTrueRecovery","authenticateMachineOwner"]}
+        {"format":1,"operation":"install","plan_digest":"\(requestPlanDigest)","device_identifier":"\(deviceIdentifier)","store_identifier":"disk0","layout_digest":"\(layoutDigest)","candidate_kind":"\(candidateKind)","source_identifier":"disk0s3","offset_bytes":447750000000,"length_bytes":107374182400,"engine_version":"\(engineVersion)","required_human_steps":["enterOneTrueRecovery","authenticateMachineOwner"]}
         """.utf8
       )
       let identity = Data(
@@ -601,8 +649,8 @@
 
       var lines = [
         #"{"schema_version":1,"sequence":1,"type":"inspection","payload":{"device_identifier":"apple,j314s","support":"supported"}}"#,
-        #"{"schema_version":1,"sequence":2,"type":"inventory","payload":{"layout_digest":"\#(layoutDigest)","system_store_identifier":"disk0","candidates":[{"kind":"free","source_identifier":"disk0s3","offset_bytes":447750000000,"length_bytes":107374182400,"minimum_install_bytes":67501226240,"minimum_container_bytes":0}]}}"#,
-        #"{"schema_version":1,"sequence":3,"type":"plan","payload":{"plan_digest":"\#(transcriptPlanDigest)","device_identifier":"apple,j314s","store_identifier":"disk0","layout_digest":"\#(layoutDigest)","candidate_kind":"free","source_identifier":"disk0s3","offset_bytes":447750000000,"length_bytes":107374182400,"engine_version":"\#(engineVersion)","engine_digest":"\#(transcriptEngineDigest)","metadata_digest":"\#(transcriptMetadataDigest)","payload_digest":"\#(transcriptPayloadDigest)","required_human_steps":["enterOneTrueRecovery","authenticateMachineOwner"]}}"#,
+        #"{"schema_version":1,"sequence":2,"type":"inventory","payload":{"layout_digest":"\#(layoutDigest)","system_store_identifier":"disk0","candidates":[{"kind":"\#(candidateKind)","source_identifier":"disk0s3","offset_bytes":447750000000,"length_bytes":107374182400,"minimum_install_bytes":67501226240,"minimum_container_bytes":0\#(identityJSON)}]}}"#,
+        #"{"schema_version":1,"sequence":3,"type":"plan","payload":{"plan_digest":"\#(transcriptPlanDigest)","device_identifier":"apple,j314s","store_identifier":"disk0","layout_digest":"\#(layoutDigest)","candidate_kind":"\#(candidateKind)","source_identifier":"disk0s3","offset_bytes":447750000000,"length_bytes":107374182400,"engine_version":"\#(engineVersion)","engine_digest":"\#(transcriptEngineDigest)","metadata_digest":"\#(transcriptMetadataDigest)","payload_digest":"\#(transcriptPayloadDigest)","required_human_steps":["enterOneTrueRecovery","authenticateMachineOwner"]}}"#,
       ]
       if includeCompletion {
         lines.append(
@@ -689,6 +737,27 @@
       operation: EngineHandoffOperation
     ) async throws -> Data {
       executionCount += 1
+      return result
+    }
+  }
+
+  /// Records which disk the Mac would start up from when the engine starts.
+  private actor StartupRecordingExecutor: ImportedEngineHandoffExecuting {
+    private(set) var startupAtExecution = [RemovalStartup]()
+    private let disk: FakeRemovalDisk
+    private let result: Data
+
+    init(disk: FakeRemovalDisk, result: Data) {
+      self.disk = disk
+      self.result = result
+    }
+
+    func execute(
+      _ package: ImportedEngineHandoffPackage,
+      authorization: MachineOwnerAuthorization,
+      operation: EngineHandoffOperation
+    ) async throws -> Data {
+      startupAtExecution.append(disk.startupState)
       return result
     }
   }

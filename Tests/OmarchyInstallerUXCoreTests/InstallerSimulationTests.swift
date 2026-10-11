@@ -246,9 +246,10 @@
 
     func testFreeExtentCanGrowWithoutChangingMacOSOrTotalCapacity() async throws {
       let environment = InstallerSimulationEnvironment(scenario: .freeSpace, delay: .zero)
-      let first = try await environment.preparePlan(omarchyBytes: nil, progress: { _ in })
+      let first = try await environment.preparePlan(
+        omarchyBytes: nil, replacing: nil, progress: { _ in })
       let next = try await environment.preparePlan(
-        omarchyBytes: 600_000_000_000, progress: { _ in })
+        omarchyBytes: 600_000_000_000, replacing: nil, progress: { _ in })
       guard case .plan(let initial) = first, case .plan(let larger) = next else {
         return XCTFail("Expected plans")
       }
