@@ -134,7 +134,7 @@ jobs:
         run: |
           set -euo pipefail
           for check in provenance descriptor; do
-            bash image-builder/bin/mac-image-check "$check" edge "$RUNNER_TEMP/out" 2>&1 |
+            python3 image-builder/bin/mac-image-check "$check" edge "$RUNNER_TEMP/out" 2>&1 |
               tee -a "$RUNNER_TEMP/probe/checks.log"
           done
           grep -E '^(lane|candidate_set|builder_commit|builder_tree_clean|package_set_sha256|built|image_sha256=root.img)' \
