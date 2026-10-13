@@ -1,0 +1,200 @@
+name: Probe image build (hosted arm64)
+
+# Probe: does the current image builder build a complete Apple Silicon test
+# image, Limine activation included, on a GitHub-hosted arm64 runner? It builds
+# the test candidate set apple-test-defbf90e893e-20261012 (signed with the
+# candidate test key E11E851A, which builder/candidate-trust pins). The set's
+# metadata, signatures and the locally built runtime pair are assets of the
+# draft release probe-set-apple-test-defbf90e893e-20261012; every other package
+# is downloaded from the pkgs.omarchy.org edge URL the set's manifest records
+# and checked against the manifest's sha256. Nothing is published.
+
+on:
+  push:
+    branches: [probe-hosted-arm64]
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Runner label to build on
+        required: false
+        default: ubuntu-24.04-arm
+        type: string
+      upload_payload:
+        description: Also upload the payload zip as an artifact (~3.6 GB)
+        required: false
+        default: true
+        type: boolean
+
+# Draft releases are listed only to tokens that can write contents; the job
+# reads the draft's assets and writes nothing.
+permissions:
+  contents: write
+
+concurrency:
+  group: probe-image-hosted-arm64
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  SET_RELEASE: probe-set-apple-test-defbf90e893e-20261012
+
+jobs:
+  build:
+    name: Build test image (${{ inputs.runner || 'ubuntu-24.04-arm' }})
+    runs-on: ${{ inputs.runner || 'ubuntu-24.04-arm' }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Record the host
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/probe"
+          echo "start=$(date -u +%s)" >>"$GITHUB_ENV"
+          {
+            git rev-parse HEAD
+            uname -a
+            cat /etc/os-release | head -3
+            nproc
+            free -h
+            df -h / /mnt "$RUNNER_TEMP" 2>/dev/null
+            echo "--- firmware"
+            ls /sys/firmware
+            [[ -d /sys/firmware/devicetree/base ]] && echo "host device tree: yes" || echo "host device tree: no"
+            [[ -d /sys/firmware/acpi ]] && echo "host ACPI: yes" || echo "host ACPI: no"
+            [[ -d /sys/firmware/efi ]] && echo "host EFI: yes" || echo "host EFI: no"
+            echo "--- docker"
+            docker version --format '{{.Server.Version}} {{.Server.Arch}}'
+            docker info --format 'root={{.DockerRootDir}} driver={{.Driver}}'
+            echo "--- loop"
+            ls /dev/loop-control /dev/loop* 2>&1 | head -5
+            losetup --list 2>&1 | head
+            id
+            sudo -n true && echo "passwordless sudo: yes"
+            bash --version | head -1
+            python3 --version
+          } 2>&1 | tee "$RUNNER_TEMP/probe/host.txt"
+
+      - name: Install host tools
+        run: |
+          set -euo pipefail
+          command -v bsdtar >/dev/null || { sudo apt-get update -q && sudo apt-get install --yes -q libarchive-tools; }
+          command -v jq gpg curl sha256sum
+
+      - name: Fetch the candidate set
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          t0=$SECONDS
+          set_dir=$RUNNER_TEMP/set
+          mkdir -p "$set_dir"
+          gh release download "$SET_RELEASE" --repo "$GITHUB_REPOSITORY" --dir "$set_dir"
+          python3 -I - "$set_dir" <<'PY'
+          import hashlib, json, sys, time, urllib.parse, urllib.request
+          from pathlib import Path
+          d = Path(sys.argv[1])
+          for p in json.loads((d / 'manifest.json').read_text())['packages']:
+              f = d / p['filename']
+              if not f.exists():
+                  url = p['source'].get('url')
+                  if not url:
+                      sys.exit(f"{p['name']}: not in the draft release and no URL")
+                  s = urllib.parse.urlsplit(url)
+                  url = urllib.parse.urlunsplit(s._replace(path=urllib.parse.quote(s.path)))
+                  for attempt in range(4):
+                      try:
+                          with urllib.request.urlopen(url, timeout=300) as r:
+                              f.write_bytes(r.read())
+                          break
+                      except Exception as exc:  # noqa: BLE001
+                          if attempt == 3:
+                              raise
+                          print(f'retry {url}: {exc}')
+                          time.sleep(5)
+              h = hashlib.sha256(f.read_bytes()).hexdigest()
+              if h != p['sha256']:
+                  sys.exit(f"{p['filename']}: sha256 {h} is not the manifest's {p['sha256']}")
+              print('ok', p['filename'])
+          PY
+          du -sh "$set_dir"
+          echo "fetch_seconds=$((SECONDS - t0))" | tee -a "$RUNNER_TEMP/probe/timing.txt"
+
+      - name: Resolve the inputs
+        run: |
+          set -euo pipefail
+          t0=$SECONDS
+          bash image-builder/bin/mac-image-inputs resolve "$RUNNER_TEMP/probe/inputs" \
+            --candidates "$RUNNER_TEMP/set" --cache "$RUNNER_TEMP/cache"
+          echo "resolve_seconds=$((SECONDS - t0))" | tee -a "$RUNNER_TEMP/probe/timing.txt"
+
+      - name: Build the test image
+        run: |
+          set -euo pipefail
+          t0=$SECONDS
+          status=0
+          bash image-builder/bin/build-mac-image --inputs "$RUNNER_TEMP/probe/inputs" \
+            --candidates "$RUNNER_TEMP/set" --cache "$RUNNER_TEMP/cache" "$RUNNER_TEMP/out" \
+            2>&1 | tee "$RUNNER_TEMP/probe/build.log" || status=$?
+          echo "build_seconds=$((SECONDS - t0))" | tee -a "$RUNNER_TEMP/probe/timing.txt"
+          echo "build_status=$status" | tee -a "$RUNNER_TEMP/probe/timing.txt"
+          df -h / | tee -a "$RUNNER_TEMP/probe/host.txt"
+          exit "$status"
+
+      - name: Check the payload record
+        run: |
+          set -euo pipefail
+          for check in provenance descriptor; do
+            bash image-builder/bin/mac-image-check "$check" edge "$RUNNER_TEMP/out" 2>&1 |
+              tee -a "$RUNNER_TEMP/probe/checks.log"
+          done
+          grep -E '^(lane|candidate_set|builder_commit|builder_tree_clean|package_set_sha256|built|image_sha256=root.img)' \
+            "$RUNNER_TEMP/out/IMAGE"
+          ls -l "$RUNNER_TEMP/out"
+
+      - name: Report
+        if: always()
+        run: |
+          set -uo pipefail
+          echo "total_seconds=$(($(date -u +%s) - start))" | tee -a "$RUNNER_TEMP/probe/timing.txt"
+          {
+            echo "### Image builder probe on \`${{ inputs.runner || 'ubuntu-24.04-arm' }}\`"
+            echo '```'
+            cat "$RUNNER_TEMP/probe/timing.txt" 2>/dev/null
+            grep -E '^host (device tree|ACPI|EFI)' "$RUNNER_TEMP/probe/host.txt" 2>/dev/null
+            tail -n 15 "$RUNNER_TEMP/probe/build.log" 2>/dev/null
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          # The container writes as root; make the evidence readable for upload.
+          sudo -n chmod -R a+rX "$RUNNER_TEMP/out" 2>/dev/null || true
+
+      - name: Save the evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: probe-evidence
+          path: |
+            ${{ runner.temp }}/probe/
+            ${{ runner.temp }}/out/logs/
+            ${{ runner.temp }}/out/IMAGE
+            ${{ runner.temp }}/out/INSPECTION
+            ${{ runner.temp }}/out/PROVENANCE
+            ${{ runner.temp }}/out/installer_data.json
+            ${{ runner.temp }}/out/inputs
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Save the payload
+        if: success() && (github.event_name == 'push' || inputs.upload_payload)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: probe-payload
+          path: ${{ runner.temp }}/out/*.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
