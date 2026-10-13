@@ -53,7 +53,7 @@ jobs:
 
       - name: Record the host
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           mkdir -p "$RUNNER_TEMP/probe"
           echo "start=$(date -u +%s)" >>"$GITHUB_ENV"
           {
@@ -95,33 +95,17 @@ jobs:
           set_dir=$RUNNER_TEMP/set
           mkdir -p "$set_dir"
           gh release download "$SET_RELEASE" --repo "$GITHUB_REPOSITORY" --dir "$set_dir"
-          python3 -I - "$set_dir" <<'PY'
-          import hashlib, json, sys, time, urllib.parse, urllib.request
-          from pathlib import Path
-          d = Path(sys.argv[1])
-          for p in json.loads((d / 'manifest.json').read_text())['packages']:
-              f = d / p['filename']
-              if not f.exists():
-                  url = p['source'].get('url')
-                  if not url:
-                      sys.exit(f"{p['name']}: not in the draft release and no URL")
-                  s = urllib.parse.urlsplit(url)
-                  url = urllib.parse.urlunsplit(s._replace(path=urllib.parse.quote(s.path)))
-                  for attempt in range(4):
-                      try:
-                          with urllib.request.urlopen(url, timeout=300) as r:
-                              f.write_bytes(r.read())
-                          break
-                      except Exception as exc:  # noqa: BLE001
-                          if attempt == 3:
-                              raise
-                          print(f'retry {url}: {exc}')
-                          time.sleep(5)
-              h = hashlib.sha256(f.read_bytes()).hexdigest()
-              if h != p['sha256']:
-                  sys.exit(f"{p['filename']}: sha256 {h} is not the manifest's {p['sha256']}")
-              print('ok', p['filename'])
-          PY
+          # curl, as the builder fetches: pkgs.omarchy.org refuses Python's default user agent.
+          while IFS=$'\t' read -r name file sha url; do
+            if [[ ! -f $set_dir/$file ]]; then
+              [[ -n $url ]] || { echo "$name: not in the draft release and no URL" >&2; exit 1; }
+              curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --retry 3 \
+                --output "$set_dir/$file" "$url"
+            fi
+            [[ $(sha256sum "$set_dir/$file" | cut -d' ' -f1) == "$sha" ]] ||
+              { echo "$file: sha256 is not the manifest's $sha" >&2; exit 1; }
+            echo "ok $file"
+          done < <(jq -r '.packages[] | [.name, .filename, .sha256, (.source.url // "")] | @tsv' "$set_dir/manifest.json")
           du -sh "$set_dir"
           echo "fetch_seconds=$((SECONDS - t0))" | tee -a "$RUNNER_TEMP/probe/timing.txt"
 
@@ -160,7 +144,7 @@ jobs:
       - name: Report
         if: always()
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           echo "total_seconds=$(($(date -u +%s) - start))" | tee -a "$RUNNER_TEMP/probe/timing.txt"
           {
             echo "### Image builder probe on \`${{ inputs.runner || 'ubuntu-24.04-arm' }}\`"
