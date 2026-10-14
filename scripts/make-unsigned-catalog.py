@@ -20,9 +20,14 @@ Schema 4 carries no `expiresAt`: a signed catalog stays valid until a
 higher-sequence one replaces it. The monotonic `sequence` is the only
 machine-enforced guard.
 
+`--developer` is for a developer build's sealed catalog only. Its inputs may
+add `developer_models`: groups of boards from the manifest's `developer`
+section, each with its own payload and metadata. The main group still covers
+exactly every M1, M2 and M3 Mac. Channel publishing rejects such a catalog.
+
 Usage:
   make-unsigned-catalog.py --base-url URL --assets-dir DIR --inputs FILE
-                           [--output FILE] [--now ISO8601]
+                           [--developer] [--output FILE] [--now ISO8601]
 """
 from __future__ import annotations
 
@@ -57,6 +62,7 @@ REQUIRED_INPUT_KEYS = frozenset(
 REQUIRED_INSTALLER_KEYS = frozenset(
     {"minimum_version", "latest_version", "download_url"}
 )
+DEVELOPER_GROUP_KEYS = frozenset({"payload_name", "metadata_name", "device_identifiers"})
 
 DEVICE_IDENTIFIER_PATTERN = re.compile(r"^apple,[0-9a-z]+$")
 EVIDENCE_REVISION_PATTERN = re.compile(r"^[0-9a-z.-]+$")
@@ -165,7 +171,42 @@ def parse_version(value: str) -> tuple[int, int, int]:
     return (int(parts[0]), int(parts[1]), int(parts[2]))
 
 
-def load_inputs(path: Path) -> dict:
+def load_developer_models(document: dict) -> list[dict]:
+    """Validate a developer catalog's extra groups, failing closed."""
+    groups = document["developer_models"]
+    if not isinstance(groups, list) or not groups:
+        raise SystemExit("inputs developer_models must be a non-empty list")
+    allowed = supported_models.developer_boards()
+    names = {document["payload_name"], document["metadata_name"], document["engine_name"]}
+    boards = set(document["device_identifiers"])
+    for group in groups:
+        if not isinstance(group, dict) or set(group) != DEVELOPER_GROUP_KEYS:
+            raise SystemExit(
+                "inputs developer_models entries must have exactly "
+                f"{', '.join(sorted(DEVELOPER_GROUP_KEYS))}"
+            )
+        for key in ("payload_name", "metadata_name"):
+            name = group[key]
+            if not isinstance(name, str) or not name or "/" in name or name in {".", ".."}:
+                raise SystemExit(f"inputs developer_models {key} must be a plain file name: {name}")
+            if name in names:
+                raise SystemExit(f"inputs developer_models reuses the file name {name}")
+            names.add(name)
+        identifiers = group["device_identifiers"]
+        if not isinstance(identifiers, list) or not identifiers:
+            raise SystemExit("inputs developer_models device_identifiers must be a non-empty list")
+        for identifier in identifiers:
+            if identifier in boards:
+                raise SystemExit(f"inputs developer_models lists {identifier} twice")
+            if identifier not in allowed:
+                raise SystemExit(
+                    f"{identifier} is not a developer board in scripts/supported-models.json"
+                )
+            boards.add(identifier)
+    return groups
+
+
+def load_inputs(path: Path, developer: bool = False) -> dict:
     """Read and fully validate the per-release inputs, failing closed."""
     if not path.is_file() or path.is_symlink():
         raise SystemExit(f"unsafe or missing inputs file: {path}")
@@ -180,7 +221,7 @@ def load_inputs(path: Path) -> dict:
     missing = REQUIRED_INPUT_KEYS - keys
     if missing:
         raise SystemExit(f"inputs file is missing keys: {', '.join(sorted(missing))}")
-    unknown = keys - REQUIRED_INPUT_KEYS
+    unknown = keys - REQUIRED_INPUT_KEYS - ({"developer_models"} if developer else set())
     if unknown:
         raise SystemExit(f"inputs file has unknown keys: {', '.join(sorted(unknown))}")
 
@@ -262,6 +303,8 @@ def load_inputs(path: Path) -> dict:
     if not isinstance(download_url, str) or not download_url.startswith("https://"):
         raise SystemExit(f"inputs installer.download_url must be https: {download_url}")
 
+    if "developer_models" in document:
+        load_developer_models(document)
     return document
 
 
@@ -295,6 +338,11 @@ def parse_arguments() -> argparse.Namespace:
         "--now",
         help="override the issue time as YYYY-MM-DDTHH:MM:SSZ (tests only)",
     )
+    parser.add_argument(
+        "--developer",
+        action="store_true",
+        help="allow developer_models: for a developer build's sealed catalog only",
+    )
     arguments = parser.parse_args()
 
     if not arguments.base_url.startswith("https://"):
@@ -320,18 +368,44 @@ def issue_time(override: str | None) -> datetime.datetime:
     return parsed.replace(tzinfo=datetime.timezone.utc)
 
 
-def main() -> None:
-    arguments = parse_arguments()
-    inputs = load_inputs(arguments.inputs)
-    assets = arguments.assets_dir
+def model_group(inputs: dict, group: dict, assets: Path, base_url: str) -> tuple[list[dict], int]:
+    """The catalog models for one payload's boards, and its payload part count."""
     engine = require_regular_file(assets / inputs["engine_name"])
-    metadata = require_regular_file(assets / inputs["metadata_name"])
-    payload = require_regular_file(assets / inputs["payload_name"])
+    metadata = require_regular_file(assets / group["metadata_name"])
+    payload = require_regular_file(assets / group["payload_name"])
 
-    payload_artifact = artifact(payload, arguments.base_url)
+    payload_artifact = artifact(payload, base_url)
     parts = discover_parts(payload)
     if parts:
-        payload_artifact["parts"] = part_records(payload, parts, arguments.base_url)
+        payload_artifact["parts"] = part_records(payload, parts, base_url)
+    shared = {
+        "status": "enabled",
+        "asahiInstallerTag": inputs["asahi_installer_tag"],
+        "asahiInstallerRevision": inputs["asahi_installer_revision"],
+        "asahiInstallerDataRevision": inputs["asahi_installer_data_revision"],
+        "downstreamRevision": inputs["downstream_revision"],
+        "engineVersion": inputs["engine_version"],
+        "engineDigest": f"sha256:{digest(engine)}",
+        "metadataDigest": f"sha256:{digest(metadata)}",
+        "payloadDigest": f"sha256:{digest(payload)}",
+        "evidenceRevision": inputs["evidence_revision"],
+        "engineArtifact": artifact(engine, base_url),
+        "metadataArtifact": artifact(metadata, base_url),
+        "payloadArtifact": payload_artifact,
+    }
+    models = [
+        {"deviceIdentifier": device_identifier, **shared}
+        for device_identifier in group["device_identifiers"]
+    ]
+    return models, len(parts)
+
+
+def main() -> None:
+    arguments = parse_arguments()
+    inputs = load_inputs(arguments.inputs, developer=arguments.developer)
+    models, parts = model_group(inputs, inputs, arguments.assets_dir, arguments.base_url)
+    for group in inputs.get("developer_models", []):
+        models += model_group(inputs, group, arguments.assets_dir, arguments.base_url)[0]
 
     issued = issue_time(arguments.now)
     installer = inputs["installer"]
@@ -345,25 +419,7 @@ def main() -> None:
             "latestVersion": installer["latest_version"],
             "downloadURL": installer["download_url"],
         },
-        "models": [
-            {
-                "deviceIdentifier": device_identifier,
-                "status": "enabled",
-                "asahiInstallerTag": inputs["asahi_installer_tag"],
-                "asahiInstallerRevision": inputs["asahi_installer_revision"],
-                "asahiInstallerDataRevision": inputs["asahi_installer_data_revision"],
-                "downstreamRevision": inputs["downstream_revision"],
-                "engineVersion": inputs["engine_version"],
-                "engineDigest": f"sha256:{digest(engine)}",
-                "metadataDigest": f"sha256:{digest(metadata)}",
-                "payloadDigest": f"sha256:{digest(payload)}",
-                "evidenceRevision": inputs["evidence_revision"],
-                "engineArtifact": artifact(engine, arguments.base_url),
-                "metadataArtifact": artifact(metadata, arguments.base_url),
-                "payloadArtifact": payload_artifact,
-            }
-            for device_identifier in inputs["device_identifiers"]
-        ],
+        "models": models,
     }
 
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
@@ -373,7 +429,7 @@ def main() -> None:
     print(f"sequence={catalog['sequence']}")
     print(f"evidence_revision={inputs['evidence_revision']}")
     print(f"models={len(catalog['models'])}")
-    print(f"payload_parts={len(parts)}")
+    print(f"payload_parts={parts}")
 
 
 if __name__ == "__main__":

@@ -1,22 +1,28 @@
 # SPDX-License-Identifier: MIT
 """Concrete stage-1 adapter over pinned upstream Asahi primitives."""
 
+import contextlib
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import stat
 import shutil
+import struct
 import subprocess
 import sys
 import zipfile
+import zlib
 from pathlib import PurePosixPath
 
 import asahi_firmware
 import osinstall
 import stub
 
+import omarchy_mesa
+import omarchy_mt7932
 import omarchy_planner
 from omarchy_image import (
     WRITE_VERIFICATION, flush_device, hash_target, open_target, timing, write_image,
@@ -30,6 +36,14 @@ INSTALLER_TITLE_PATTERN = re.compile(r"^[A-Za-z0-9 ._()-]{1,64}$")
 VOLUME_GROUP_PATTERN = re.compile(r"^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$")
 PARTITION_PATTERN = re.compile(r"^disk[0-9]+s[0-9]+$")
 READBACK_CHUNK_BYTES = 1024 * 1024
+# Where every macOS through 14 named its restore bundle in bootcaches.plist,
+# and where macOS 26 still keeps it in Preboot, though its bless2 no longer
+# names it.
+RESTORE_BUNDLE_PATH = "./Restore"
+# From macOS 15 the recovery image in a restore image is an Apple Encrypted
+# Archive, which hdiutil cannot attach without Apple's key.
+AEA_MAGIC = b"AEA1"
+HOST_ROOT = "/"
 
 
 class AsahiAdapterError(RuntimeError):
@@ -371,20 +385,272 @@ def _write_step2(installer):
     with open(installer.step2_sh, "w") as fd:
         fd.write(script)
     os.chmod(installer.step2_sh, 0o755)
+# Aurora's J700 Stage 1 carries one versioned config block that names the ESP
+# and the Stage 2 path; it is filled in place so the image keeps its length
+# and STACKBOT tail (port of aurora-silicon/m1n1 tools/fill_stage1_config.py,
+# MIT).
+J700_STAGE1 = "esp/aurora/stage1-j700.bin"
+J700_STAGE1_MAGIC = b"AURORA-S1-CFG01\0"
+J700_STAGE1_BODY = struct.Struct("<II40s192s")
+J700_STAGE1_BLOCK = len(J700_STAGE1_MAGIC) + J700_STAGE1_BODY.size + 4
+J700_PROXY_WINDOW_MS = 5000
+CANONICAL_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
+
+
+def fill_j700_stage1(image, uuid, path, window_ms):
+    if not CANONICAL_UUID.fullmatch(uuid):
+        raise AsahiAdapterError("ESP PARTUUID must be canonical lowercase")
+    if not path or any(not 0x20 <= ord(c) < 0x7F or c in ";\\" for c in path) or any(
+        component in ("", ".", "..") for component in path.split("/")
+    ):
+        raise AsahiAdapterError("Stage 2 path must be relative to the ESP root")
+    encoded = b";" + path.encode("ascii")
+    if len(encoded) >= 192:
+        raise AsahiAdapterError("Stage 2 path is too long")
+    if not 0 <= window_ms <= 99999:
+        raise AsahiAdapterError("proxy window must be 0..99999 ms")
+    if not image.endswith(b"STACKBOT"):
+        raise AsahiAdapterError("J700 Stage 1 does not end at STACKBOT")
+    if image.count(J700_STAGE1_MAGIC) != 1:
+        raise AsahiAdapterError("J700 Stage 1 config block must occur exactly once")
+    offset = image.index(J700_STAGE1_MAGIC)
+    if offset + J700_STAGE1_BLOCK > len(image) - 8:
+        raise AsahiAdapterError("J700 Stage 1 config block extends past the image")
+    if struct.unpack_from("<I", image, offset + len(J700_STAGE1_MAGIC))[0] != 1:
+        raise AsahiAdapterError("unsupported J700 Stage 1 config version")
+    body = J700_STAGE1_BODY.pack(
+        1, window_ms, uuid.encode("ascii").ljust(40, b"\0"), encoded.ljust(192, b"\0")
+    )
+    block = J700_STAGE1_MAGIC + body + struct.pack("<I", zlib.crc32(body))
+    return image[:offset] + block + image[offset + J700_STAGE1_BLOCK:]
+
+
+def install_board_stage1(device_class, read_member, esp_uuid, boot_object, next_object="m1n1/boot.bin"):
+    """Replace asahi's Stage 1 on boards that need their own (the J700)."""
+    if device_class != "j700ap":
+        return
+    try:
+        image = read_member(J700_STAGE1)
+    except KeyError as error:
+        raise AsahiAdapterError(f"this image has no {J700_STAGE1} for the MacBook Neo") from error
+    filled = fill_j700_stage1(image, esp_uuid.lower(), next_object, J700_PROXY_WINDOW_MS)
+    with open(boot_object, "wb") as fd:
+        fd.write(filled)
+
+
+class _WithoutRecoveryMount:
+    """subprocess for stub, minus attaching or detaching its recovery image."""
+
+    def __init__(self, module):
+        self._module = module
+
+    def __getattr__(self, name):
+        return getattr(self._module, name)
+
+    def run(self, command, *args, **kwargs):
+        if command[:1] == ["hdiutil"] and "recovery" in command:
+            return self._module.CompletedProcess(command, 0)
+        return self._module.run(command, *args, **kwargs)
 
 
 def stub_installer(sysinfo, dutil, osinfo):
-    """A StubInstaller whose Recovery setup is Omarchy's own step2.sh."""
+    """A StubInstaller that reads macOS 26 firmware's bootcaches.plist and
+    writes Omarchy's own step2.sh as its Recovery setup."""
     installer = stub.StubInstaller(sysinfo, dutil, osinfo)
+    load_identity = installer.load_identity
+
+    def load_identity_naming_the_restore_bundle():
+        identity = load_identity()
+        installer.bootcaches["bless2"].setdefault(
+            "RestoreBundlePath", RESTORE_BUNDLE_PATH
+        )
+        return identity
+
+    installer.load_identity = load_identity_naming_the_restore_bundle
+
+    collect_firmware = installer.collect_firmware
+
+    def collect_firmware_from_an_encrypted_recovery(pkg):
+        with _newer_trackpad_keys():
+            result = _collect_firmware(pkg)
+        _collect_neo_radios(installer, pkg)
+        _collect_neo_touch_id(installer, pkg)
+        return result
+
+    def _collect_firmware(pkg):
+        image = os.path.join(
+            installer.osi.recovery,
+            installer.osi.vgid,
+            "usr/standalone/firmware/arm64eBaseSystem.dmg",
+        )
+        if not _is_encrypted(image):
+            return collect_firmware(pkg)
+        # The firmware the recovery image carries is the same build's as
+        # the running macOS's own /usr/share/firmware and /usr/sbin, so it is
+        # read from there, and only when the builds match.
+        wanted = installer.manifest["ProductBuildVersion"]
+        running = installer.sysinfo.macos_build
+        if running != wanted:
+            raise AsahiAdapterError(
+                f"the {wanted} recovery image is encrypted; run the installer "
+                f"from macOS {wanted}, not {running}, to collect its firmware"
+            )
+        os.makedirs("recovery/usr")
+        module = stub.subprocess
+        try:
+            for name in ("share", "sbin"):
+                os.symlink(
+                    os.path.join(HOST_ROOT, "usr", name),
+                    os.path.join("recovery/usr", name),
+                )
+            # Only stub's own name is rebound, never the shared module.
+            stub.subprocess = _WithoutRecoveryMount(module)
+            return collect_firmware(pkg)
+        finally:
+            stub.subprocess = module
+            shutil.rmtree("recovery")
+
+    installer.collect_firmware = collect_firmware_from_an_encrypted_recovery
+
     install_files = installer.install_files
 
-    def install_files_with_omarchys_step2(cur_os):
+    def install_files_with_decrypted_images_and_omarchys_step2(cur_os):
         result = install_files(cur_os)
+        _use_decrypted_images(installer, cur_os)
         _write_step2(installer)
         return result
 
-    installer.install_files = install_files_with_omarchys_step2
+    installer.install_files = install_files_with_decrypted_images_and_omarchys_step2
     return installer
+
+
+def _collect_neo_radios(installer, pkg, collect=omarchy_mt7932.collect):
+    """Add a MacBook Neo's MT7932 Wi-Fi and Bluetooth inputs to its firmware.
+
+    The radios are experimental: without these files the Neo still installs
+    and boots, so a failure is logged and the install goes on.
+    """
+    if getattr(getattr(installer, "sysinfo", None), "device_class", "") != "j700ap":
+        return
+    try:
+        files = collect()
+    except (OSError, ValueError, subprocess.CalledProcessError, omarchy_mt7932.Mt7932Error) as error:
+        logging.warning("MacBook Neo radio firmware was not collected: %s", error)
+        return
+    for name, data in sorted(files.items()):
+        pkg.add_file(name, asahi_firmware.core.FWFile(name, data))
+    logging.info("MacBook Neo radio firmware: %d files", len(files))
+
+
+def _iboot_system_container(dutil):
+    """The raw device of the system disk's iBoot System Container, its first
+    partition (asahi-installer's find_system_disk test)."""
+    partition = dutil.disk_parts[dutil.find_system_disk()]["Partitions"][0]
+    if partition.get("Content") != "Apple_APFS_ISC":
+        raise omarchy_mesa.MesaError("the system disk does not start with its iBoot System Container")
+    return "/dev/r" + partition["DeviceIdentifier"]
+
+
+def _collect_neo_touch_id(installer, pkg, collect=omarchy_mesa.collect):
+    """Add a MacBook Neo's Touch ID calibration to its firmware.
+
+    Touch ID on the Neo is experimental too: without the calibration the Neo
+    installs and boots, so a failure is logged and the install goes on.
+    """
+    if getattr(getattr(installer, "sysinfo", None), "device_class", "") != "j700ap":
+        return
+    try:
+        files = collect(_iboot_system_container(installer.dutil))
+    except (OSError, KeyError, IndexError, omarchy_mesa.MesaError) as error:
+        logging.warning("MacBook Neo Touch ID calibration was not collected: %s", error)
+        return
+    for name, data in sorted(files.items()):
+        pkg.add_file(name, asahi_firmware.core.FWFile(name, data))
+    logging.info("MacBook Neo Touch ID calibration: %d bytes", sum(map(len, files.values())))
+
+
+@contextlib.contextmanager
+def _newer_trackpad_keys():
+    """Count C1FE multitouch keys (the J700's trackpad) as trackpads.
+
+    asahi_firmware knows C1FD trackpads and C1FB Touch Bars; the MacBook Neo's
+    J700_Multitouch.im4p keys its trackpad C1FE0,0, which converts the same way.
+    """
+    multitouch = getattr(asahi_firmware, "multitouch", None)
+    if multitouch is None:
+        yield
+        return
+    original = multitouch.device_key_to_kind
+
+    def device_key_to_kind(key):
+        if key.startswith("C1FE"):
+            return multitouch.DEVICE_KIND_TRACKPAD
+        return original(key)
+
+    multitouch.device_key_to_kind = device_key_to_kind
+    try:
+        yield
+    finally:
+        multitouch.device_key_to_kind = original
+
+
+def _is_encrypted(path):
+    with open(path, "rb") as fd:
+        return fd.read(len(AEA_MAGIC)) == AEA_MAGIC
+
+
+def _use_decrypted_images(installer, cur_os):
+    """Swap the stub's AEA images for the running macOS's decrypted ones.
+
+    A macOS 26 restore image ships its recoveryOS and ExclaveOS images
+    encrypted; the stub's recoveryOS kernel cannot mount them ("Failed to
+    mount root image"). macOS keeps the same build's images decrypted in its
+    own Recovery and Preboot volumes, and their signed root hashes are the
+    ones the stub's boot objects are personalized for.
+    """
+    image = "usr/standalone/firmware/arm64eBaseSystem.dmg"
+    stub_image = os.path.join(installer.osi.recovery, installer.osi.vgid, image)
+    if not _is_encrypted(stub_image):
+        return
+    wanted = installer.manifest["ProductBuildVersion"]
+    running = installer.sysinfo.macos_build
+    if running != wanted:
+        raise AsahiAdapterError(
+            f"the {wanted} recovery image is encrypted; run the installer "
+            f"from macOS {wanted}, not {running}, to use its decrypted copy"
+        )
+    host_image = os.path.join(cur_os.recovery, cur_os.vgid, image)
+    # A UDIF image ends in its 512-byte "koly" trailer.
+    with open(host_image, "rb") as fd:
+        fd.seek(0, os.SEEK_END)
+        trailer = b""
+        if fd.tell() >= 512:
+            fd.seek(-512, os.SEEK_END)
+            trailer = fd.read(4)
+    if trailer != b"koly":
+        raise AsahiAdapterError(
+            "the running macOS's recovery image is not a decrypted disk image"
+        )
+    copies = [(host_image, stub_image)]
+    bless2 = installer.bootcaches["bless2"]
+    restore = os.path.join(
+        installer.pb_vgid, bless2.get("RestoreBundlePath", RESTORE_BUNDLE_PATH)
+    )
+    host_restore = os.path.join(cur_os.preboot, cur_os.vgid, "restore")
+    for name in sorted(os.listdir(restore)):
+        path = os.path.join(restore, name)
+        if not os.path.isfile(path) or not _is_encrypted(path):
+            continue
+        source = os.path.join(host_restore, name)
+        if not os.path.isfile(source) or _is_encrypted(source):
+            raise AsahiAdapterError(
+                f"the running macOS has no decrypted {name} for the stub"
+            )
+        copies.append((source, path))
+    for source, target in copies:
+        # Removed first: the stub container has room for one copy at a time.
+        os.unlink(target)
+        shutil.copyfile(source, target)
 
 
 class AsahiInPlaceRepairAdapter:
@@ -850,6 +1116,13 @@ class AsahiStage1Adapter:
             self.osins.firmware_package = firmware_package
 
         self.osins.install(self.installer.ins)
+        install_board_stage1(
+            self.installer.sysinfo.device_class,
+            self.osins.pkg.read,
+            self.osins.efi_part.uuid,
+            self.installer.ins.boot_obj_path,
+            self.template.get("next_object", "m1n1/boot.bin"),
+        )
         for target in self.osins.idata_targets:
             self.installer.ins.collect_installer_data(target)
             shutil.copy(

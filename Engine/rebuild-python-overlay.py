@@ -15,7 +15,7 @@ import tempfile
 
 BASE_SHA256 = '9e9277384b6c9e8b269cc79b1b24df7bfcdcbb898a596a677b74d1d18050aebe'
 BASE_COMMIT = 'f0469cea0899f3efed8efead604174c7a53c4451'
-VERSION = 'v0.9.2-omarchy.28'
+VERSION = 'v0.9.2-omarchy.30'
 
 _SPEC = importlib.util.spec_from_file_location(
     'verify_source_lock', Path(__file__).resolve().parent / 'verify-source-lock.py')
@@ -50,9 +50,9 @@ def apply_downstream_patch(patch, path, content):
         return target.read_bytes()
 
 
-def upstream_delta(checkout, delta, archive, patch):
+def upstream_delta(checkout, delta, archive, patch, base_patch):
     # The base keeps its native runtime and m1n1, so upstream may only have changed the listed Python files.
-    VERIFY.require_upstream_delta(delta, patch.read_text())
+    VERIFY.require_upstream_delta(delta, patch.read_text(), base_patch.read_text())
     changed = git(checkout, 'diff', '--name-only', delta['base_commit'], 'HEAD').decode().splitlines()
     if sorted(changed) != sorted(item['path'] for item in delta['files']):
         raise ValueError('upstream changes since the base differ from the source lock')
@@ -64,7 +64,9 @@ def upstream_delta(checkout, delta, archive, patch):
         if sha256(base) != item['upstream_base_sha256'] or sha256(new) != item['upstream_sha256']:
             raise ValueError('upstream delta digest mismatch: ' + path)
         if item['downstream_patched']:
-            base = apply_downstream_patch(patch, path, base)
+            # The base was built with the patch of its day; rebuilding it with that exact patch must
+            # still reproduce what it shipped, while the new file takes the current patch.
+            base = apply_downstream_patch(base_patch, path, base)
             new = apply_downstream_patch(patch, path, new)
             if sha256(base) != item['base_sha256'] or sha256(new) != item['sha256']:
                 raise ValueError('patched upstream delta digest mismatch: ' + path)
@@ -99,7 +101,8 @@ def rebuild(checkout, base, output):
     actual = {str(p.relative_to(root)) for p in (root / 'overlay/src').glob('*.py')}
     if expected != actual:
         raise ValueError('Python overlay inventory differs from source lock')
-    for item in records + lock['build_recipe'] + [lock['downstream_overlay']['patch']]:
+    base_patch = lock['incremental_build']['base_patch']
+    for item in records + lock['build_recipe'] + [lock['downstream_overlay']['patch'], base_patch]:
         if sha256((root / item['path']).read_bytes()) != item['sha256']:
             raise ValueError('source lock digest mismatch: ' + item['path'])
     overlay = {Path(name).name: (root / name).read_bytes() for name in sorted(expected)}
@@ -109,7 +112,8 @@ def rebuild(checkout, base, output):
         if sha256(archive.extractfile('./installer_data.json').read()) != lock['validation_artifact']['metadata_sha256']:
             raise ValueError('base engine metadata differs from the source lock')
         delta = upstream_delta(checkout, lock['incremental_build']['upstream_delta'], archive,
-                               root / lock['downstream_overlay']['patch']['path'])
+                               root / lock['downstream_overlay']['patch']['path'],
+                               root / base_patch['path'])
         # The hook below rewrites the base archive's osinstall.py, so an upstream osinstall.py change would be lost.
         if delta.keys() & (overlay.keys() | {'osinstall.py'}):
             raise ValueError('upstream delta overlaps the downstream overlay or osinstall hook')
