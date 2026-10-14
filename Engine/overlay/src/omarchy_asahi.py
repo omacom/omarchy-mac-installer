@@ -13,6 +13,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import zipfile
 import zlib
 from pathlib import PurePosixPath
@@ -21,6 +22,7 @@ import asahi_firmware
 import osinstall
 import stub
 
+import omarchy_aea
 import omarchy_mesa
 import omarchy_mt7932
 import omarchy_planner
@@ -599,58 +601,119 @@ def _is_encrypted(path):
         return fd.read(len(AEA_MAGIC)) == AEA_MAGIC
 
 
-def _use_decrypted_images(installer, cur_os):
-    """Swap the stub's AEA images for the running macOS's decrypted ones.
+def _prepare_decrypted_images(installer, cur_os):
+    """Resolve every installed AEA image before any target disk mutation.
 
-    A macOS 26 restore image ships its recoveryOS and ExclaveOS images
-    encrypted; the stub's recoveryOS kernel cannot mount them ("Failed to
-    mount root image"). macOS keeps the same build's images decrypted in its
-    own Recovery and Preboot volumes, and their signed root hashes are the
-    ones the stub's boot objects are personalized for.
+    load_identity only reads IPSW metadata; its path setup can use the current
+    OS until install_files sets up the target volumes. Keep verified copies on
+    the host so installation needs neither another key fetch nor a live host copy.
     """
-    image = "usr/standalone/firmware/arm64eBaseSystem.dmg"
-    stub_image = os.path.join(installer.osi.recovery, installer.osi.vgid, image)
-    if not _is_encrypted(stub_image):
+    previous_os = getattr(installer, "osi", None)
+    installer.osi = cur_os
+    try:
+        installer.load_identity()
+    finally:
+        installer.osi = previous_os
+    temporary = tempfile.TemporaryDirectory(prefix="omarchy-aea-")
+    images = {}
+    try:
+        for component, entry in installer.identity["Manifest"].items():
+            if component in ("OS", "Ap,SystemVolumeCanonicalMetadata",
+                             "RestoreRamDisk", "RestoreTrustCache") or component.startswith("Cryptex"):
+                continue
+            # Upstream recompresses the OTA BaseSystem patch rather than copying
+            # this manifest component. Released IPSWs carry the complete image.
+            if component == "BaseSystem" and installer.is_ota:
+                continue
+            path = entry["Info"]["Path"]
+            with installer.open(path) as source:
+                magic = source.read(4)
+                if magic != AEA_MAGIC:
+                    continue
+                encrypted = os.path.join(temporary.name, "encrypted")
+                output = os.path.join(temporary.name, str(len(images)))
+                with open(encrypted, "wb") as target:
+                    target.write(magic)
+                    shutil.copyfileobj(source, target)
+            digest = entry.get("Digest")
+            if not isinstance(digest, bytes) or len(digest) != 48:
+                raise ValueError(f"{component} has no SHA-384 BuildManifest digest")
+            try:
+                omarchy_aea.decrypt_verified(encrypted, output, digest)
+            except omarchy_aea.DigestMismatchError:
+                raise
+            except (OSError, ValueError, subprocess.CalledProcessError) as error:
+                wanted = installer.manifest["ProductBuildVersion"]
+                running = installer.sysinfo.macos_build
+                if running != wanted:
+                    raise AsahiAdapterError(
+                        f"cannot decrypt {component} for {wanted}; public-key decryption failed, "
+                        f"and this Mac runs {running}, so no matching host copy is available"
+                    ) from error
+                host = (os.path.join(cur_os.recovery, cur_os.vgid,
+                                    "usr/standalone/firmware/arm64eBaseSystem.dmg")
+                        if component == "BaseSystem" else
+                        os.path.join(cur_os.preboot, cur_os.vgid, "restore", os.path.basename(path)))
+                logging.warning("Using matching-build host copy for %s after public-key decryption failed", component)
+                shutil.copyfile(host, output)
+                omarchy_aea.verify_sha384(output, digest)
+            images[component] = output
+            os.unlink(encrypted)
+        installer.decrypted_images = images
+        installer.decrypted_images_temp = temporary
+        if not images:
+            temporary.cleanup()
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        temporary.cleanup()
+        raise AsahiAdapterError(f"encrypted image preflight failed: {error}") from error
+    except BaseException:
+        temporary.cleanup()
+        raise
+
+
+def _use_decrypted_images(installer, cur_os):
+    """Replace installed AEA images with the manifest-verified preflight copies."""
+    stub_image = os.path.join(installer.osi.recovery, installer.osi.vgid,
+                             "usr/standalone/firmware/arm64eBaseSystem.dmg")
+    if not _is_encrypted(stub_image) and not getattr(installer, "decrypted_images", {}):
+        temporary = getattr(installer, "decrypted_images_temp", None)
+        if temporary is not None:
+            temporary.cleanup()
         return
-    wanted = installer.manifest["ProductBuildVersion"]
-    running = installer.sysinfo.macos_build
-    if running != wanted:
-        raise AsahiAdapterError(
-            f"the {wanted} recovery image is encrypted; run the installer "
-            f"from macOS {wanted}, not {running}, to use its decrypted copy"
+    try:
+        manifest = installer.identity["Manifest"]
+        by_name = {os.path.basename(entry["Info"]["Path"]): component
+                   for component, entry in manifest.items() if "Path" in entry.get("Info", {})}
+        targets = []
+        if _is_encrypted(stub_image):
+            targets.append(("BaseSystem", stub_image))
+        bless2 = installer.bootcaches["bless2"]
+        restore = os.path.join(
+            installer.pb_vgid, bless2.get("RestoreBundlePath", RESTORE_BUNDLE_PATH)
         )
-    host_image = os.path.join(cur_os.recovery, cur_os.vgid, image)
-    # A UDIF image ends in its 512-byte "koly" trailer.
-    with open(host_image, "rb") as fd:
-        fd.seek(0, os.SEEK_END)
-        trailer = b""
-        if fd.tell() >= 512:
-            fd.seek(-512, os.SEEK_END)
-            trailer = fd.read(4)
-    if trailer != b"koly":
-        raise AsahiAdapterError(
-            "the running macOS's recovery image is not a decrypted disk image"
-        )
-    copies = [(host_image, stub_image)]
-    bless2 = installer.bootcaches["bless2"]
-    restore = os.path.join(
-        installer.pb_vgid, bless2.get("RestoreBundlePath", RESTORE_BUNDLE_PATH)
-    )
-    host_restore = os.path.join(cur_os.preboot, cur_os.vgid, "restore")
-    for name in sorted(os.listdir(restore)):
-        path = os.path.join(restore, name)
-        if not os.path.isfile(path) or not _is_encrypted(path):
-            continue
-        source = os.path.join(host_restore, name)
-        if not os.path.isfile(source) or _is_encrypted(source):
-            raise AsahiAdapterError(
-                f"the running macOS has no decrypted {name} for the stub"
-            )
-        copies.append((source, path))
-    for source, target in copies:
-        # Removed first: the stub container has room for one copy at a time.
-        os.unlink(target)
-        shutil.copyfile(source, target)
+        for name in sorted(os.listdir(restore)):
+            path = os.path.join(restore, name)
+            if not os.path.isfile(path) or not _is_encrypted(path):
+                continue
+            if name not in by_name:
+                raise AsahiAdapterError(f"encrypted {name} is not in BuildManifest")
+            targets.append((by_name[name], path))
+        # Validate all sources again before removing any target image.
+        for component, target in targets:
+            source = getattr(installer, "decrypted_images", {}).get(component)
+            if source is None:
+                raise AsahiAdapterError(f"{component} was not decrypted in preflight")
+            omarchy_aea.verify_sha384(source, manifest[component].get("Digest"))
+        for component, target in targets:
+            # Removed first: the stub container has room for one copy at a time.
+            os.unlink(target)
+            shutil.copyfile(installer.decrypted_images[component], target)
+    except (OSError, ValueError) as error:
+        raise AsahiAdapterError(f"cannot install decrypted image: {error}") from error
+    finally:
+        temporary = getattr(installer, "decrypted_images_temp", None)
+        if temporary is not None:
+            temporary.cleanup()
 
 
 class AsahiInPlaceRepairAdapter:
@@ -976,6 +1039,7 @@ class AsahiStage1Adapter:
             self.installer.osinfo,
         )
         self.installer.ins.load_ipsw(ipsw)
+        _prepare_decrypted_images(self.installer.ins, self.installer.cur_os)
         self.installer.osins = self.osins
         self.preflight_complete = True
 

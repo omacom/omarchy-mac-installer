@@ -171,7 +171,7 @@
       {
         "path": "overlay/src/omarchy_asahi.py",
         "destination": "src/omarchy_asahi.py",
-        "sha256": "0efb7ffb77ce826389eb324bd8f7c09f44c40f83a32adad91badc63d276f357d"
+        "sha256": "826e4b9ec94525fdd514f16ed5b7049bc59d7884b14186e9fc31c205cba7d5a7"
       },
       {
         "path": "overlay/src/omarchy_contract.py",
@@ -206,7 +206,7 @@
       {
         "path": "overlay/tests/test_omarchy_asahi.py",
         "destination": "tests/test_omarchy_asahi.py",
-        "sha256": "aead11015d20ca12737f516806e7576e5da436f6d47f16b7307d56e1ab3a24d7"
+        "sha256": "978498ce77b5eaa2ed9072eed7c5956e6f6d15179fe39bb56a3af3e1c1461fe3"
       },
       {
         "path": "overlay/tests/test_omarchy_contract.py",
@@ -272,6 +272,16 @@
         "path": "overlay/tests/test_omarchy_mesa.py",
         "destination": "tests/test_omarchy_mesa.py",
         "sha256": "372d07d0e1860299bdf0a56b834d60748b5e130a2ef185f53ff9e8f12b3e790a"
+      },
+      {
+        "path": "overlay/src/omarchy_aea.py",
+        "destination": "src/omarchy_aea.py",
+        "sha256": "cd97d4dc13975d49d54dbcf7536f0ad9c60ad293e67cc8442c1ad0ca7d7e2a22"
+      },
+      {
+        "path": "overlay/tests/test_omarchy_aea.py",
+        "destination": "tests/test_omarchy_aea.py",
+        "sha256": "a8000a986ed3fc08e7fc23f3a69e875f5fd822bc380f5220aa60d6955dac9a36"
       }
     ]
   },
