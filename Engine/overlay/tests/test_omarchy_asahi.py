@@ -68,6 +68,7 @@ class FakeStubInstaller:
 
     def load_identity(self):
         self.bootcaches = {"bless2": {}}
+        self.identity = {"Manifest": {}}
 
     def collect_firmware(self, pkg):
         self.calls.append(("collect_firmware", pkg))
@@ -110,6 +111,7 @@ sys.path.insert(
 )
 
 from omarchy_asahi import (  # noqa: E402
+    _prepare_decrypted_images,
     _collect_neo_radios,
     _collect_neo_touch_id,
     STEP2_SCRIPT,
@@ -166,6 +168,33 @@ class AsahiStage1AdapterTests(unittest.TestCase):
 
     def tearDown(self):
         self.temporary.cleanup()
+
+    def test_encrypted_image_failures_stop_before_disk_preparation(self):
+        from omarchy_aea import DigestMismatchError
+        for error in (OSError("key fetch failed"), ValueError("bad key"),
+                      DigestMismatchError("SHA-384 mismatch")):
+            with self.subTest(error=error):
+                dutil = FakeDiskUtil([[self.free]])
+                adapter = self._adapter(FakeInstaller(dutil))
+                # Run the real preflight preparation on a small synthetic IPSW.
+                def identity(stub):
+                    stub.bootcaches = {"bless2": {}}
+                    stub.is_ota = False
+                    stub.sysinfo = SimpleNamespace(macos_build="26A434")
+                    stub.manifest = {"ProductBuildVersion": "25G83"}
+                    stub.identity = {"Manifest": {"BaseSystem": {
+                        "Info": {"Path": "BaseSystem.dmg.aea"}, "Digest": bytes(48),
+                    }}}
+                    stub.open = lambda path: io.BytesIO(b"AEA1synthetic")
+                with patch.object(FakeStubInstaller, "load_identity", identity), patch(
+                    "omarchy_asahi.omarchy_aea.decrypt_verified", side_effect=error
+                ):
+                    with self.assertRaises(AsahiAdapterError):
+                        adapter.preflight(self.plan)
+                self.assertFalse(adapter.preflight_complete)
+                with self.assertRaisesRegex(AsahiAdapterError, "preflight is required"):
+                    adapter.prepare_target(self.plan)
+                self.assertEqual(dutil.resize_calls, [])
 
     def test_preflight_accepts_the_partition_floor(self):
         metadata = self._target_metadata()
@@ -1432,14 +1461,28 @@ class DecryptedMacos26ImagesTests(unittest.TestCase):
                 )
                 self.step2_sh = str(test.step2)
                 self.manifest = {"ProductBuildVersion": ipsw_build}
+                self.is_ota = False
+                self.identity = {"Manifest": {
+                    "BaseSystem": {"Info": {"Path": "BaseSystem.dmg.aea"},
+                                   "Digest": hashlib.sha384(test.UDIF).digest()},
+                }}
+                for index, name in enumerate(restore):
+                    self.identity["Manifest"][f"Restore{index}"] = {
+                        "Info": {"Path": name},
+                        "Digest": hashlib.sha384(b"exclave plain").digest(),
+                    }
                 self.pb_vgid = str(test.stub_preboot / STUB_VG)
                 self.bootcaches = {"bless2": {}}
 
             def load_identity(self):
-                pass
+                return self.identity
+
+            def open(self, path):
+                return io.BytesIO(image if path == "BaseSystem.dmg.aea" else restore[path])
 
             def collect_firmware(self, pkg):
-                pass
+                test.firmware_called = True
+                return pkg
 
             def install_files(self, cur_os):
                 test.installed = cur_os
@@ -1447,9 +1490,69 @@ class DecryptedMacos26ImagesTests(unittest.TestCase):
         with patch("omarchy_asahi.stub.StubInstaller", Stub):
             return stub_installer("sysinfo", "dutil", "osinfo")
 
+    def prepare_and_install(self, installer):
+        _prepare_decrypted_images(installer, self.cur_os)
+        self.addCleanup(installer.decrypted_images_temp.cleanup)
+        installer.install_files(self.cur_os)
+
+    def decrypt(self, source, output, digest):
+        data = self.UDIF if digest == hashlib.sha384(self.UDIF).digest() else b"exclave plain"
+        Path(output).write_bytes(data)
+
+    def test_different_build_decrypts_recovery_and_restore_images(self):
+        installer = self.make(self.AEA, {"094-96734-085.dmg.aea": self.AEA}, host_build="26A434")
+        with patch("omarchy_asahi.omarchy_aea.decrypt_verified", self.decrypt):
+            self.prepare_and_install(installer)
+        self.assertEqual(self.stub_image.read_bytes(), self.UDIF)
+        self.assertEqual((self.stub_restore / "094-96734-085.dmg.aea").read_bytes(), b"exclave plain")
+        self.assertFalse(Path(installer.decrypted_images_temp.name).exists())
+        self.assertEqual(installer.collect_firmware("pkg"), "pkg")
+        self.assertTrue(self.firmware_called)
+
+    def test_encrypted_restore_is_decrypted_with_a_plain_recovery_image(self):
+        installer = self.make(self.UDIF, {"094-96734-085.dmg.aea": self.AEA}, host_build="26A434")
+        with patch("omarchy_asahi.omarchy_aea.decrypt_verified", self.decrypt):
+            self.prepare_and_install(installer)
+        self.assertEqual((self.stub_restore / "094-96734-085.dmg.aea").read_bytes(), b"exclave plain")
+
+    def test_digest_mismatch_aborts_even_with_a_matching_host_build(self):
+        from omarchy_aea import DigestMismatchError
+        installer = self.make(self.AEA, {})
+        with patch("omarchy_asahi.omarchy_aea.decrypt_verified", side_effect=DigestMismatchError("SHA-384 mismatch")):
+            with self.assertRaisesRegex(AsahiAdapterError, "SHA-384 mismatch"):
+                self.prepare_and_install(installer)
+        self.assertEqual(self.stub_image.read_bytes(), self.AEA)
+        self.assertFalse(hasattr(installer, "decrypted_images"))
+        self.assertFalse(self.step2.exists())
+
+    def test_matching_build_fallback_must_match_manifest_digest(self):
+        installer = self.make(self.AEA, {})
+        self.host_image.write_bytes(self.UDIF + b"wrong")
+        with self.assertRaisesRegex(AsahiAdapterError, "SHA-384"):
+            self.prepare_and_install(installer)
+        self.assertEqual(self.stub_image.read_bytes(), self.AEA)
+
+    def test_unmanifested_encrypted_restore_is_refused(self):
+        installer = self.make(self.AEA, {})
+        _prepare_decrypted_images(installer, self.cur_os)
+        self.addCleanup(installer.decrypted_images_temp.cleanup)
+        (self.stub_restore / "unknown.aea").write_bytes(self.AEA)
+        with self.assertRaisesRegex(AsahiAdapterError, "not in BuildManifest"):
+            installer.install_files(self.cur_os)
+        self.assertEqual(self.stub_image.read_bytes(), self.AEA)
+
+    def test_staged_image_is_reverified_before_target_replacement(self):
+        installer = self.make(self.AEA, {})
+        _prepare_decrypted_images(installer, self.cur_os)
+        self.addCleanup(installer.decrypted_images_temp.cleanup)
+        Path(installer.decrypted_images["BaseSystem"]).write_bytes(b"changed")
+        with self.assertRaisesRegex(AsahiAdapterError, "SHA-384"):
+            installer.install_files(self.cur_os)
+        self.assertEqual(self.stub_image.read_bytes(), self.AEA)
+
     def test_encrypted_images_are_replaced_by_the_running_macos_copies(self):
         installer = self.make(self.AEA, {"094-96734-085.dmg.aea": self.AEA, "BuildManifest.plist": b"x"})
-        installer.install_files(self.cur_os)
+        self.prepare_and_install(installer)
         self.assertIs(self.installed, self.cur_os)
         self.assertEqual(self.stub_image.read_bytes(), self.UDIF)
         self.assertEqual((self.stub_restore / "094-96734-085.dmg.aea").read_bytes(), b"exclave plain")
@@ -1459,25 +1562,25 @@ class DecryptedMacos26ImagesTests(unittest.TestCase):
 
     def test_older_firmware_is_left_alone(self):
         installer = self.make(b"koly-free plain", {"094-1.dmg": b"plain"})
-        installer.install_files(self.cur_os)
+        self.prepare_and_install(installer)
         self.assertEqual(self.stub_image.read_bytes(), b"koly-free plain")
 
     def test_a_different_running_build_is_refused(self):
         installer = self.make(self.AEA, {}, host_build="25G83")
         with self.assertRaisesRegex(AsahiAdapterError, "25G72.*25G83"):
-            installer.install_files(self.cur_os)
+            self.prepare_and_install(installer)
         self.assertEqual(self.stub_image.read_bytes(), self.AEA)
 
     def test_an_encrypted_file_without_a_decrypted_copy_is_refused(self):
         installer = self.make(self.AEA, {"094-00000-000.dmg.aea": self.AEA})
         with self.assertRaisesRegex(AsahiAdapterError, "094-00000-000.dmg.aea"):
-            installer.install_files(self.cur_os)
+            self.prepare_and_install(installer)
 
     def test_an_encrypted_running_recovery_image_is_refused(self):
         self.host_image.write_bytes(self.AEA)
         installer = self.make(self.AEA, {})
-        with self.assertRaisesRegex(AsahiAdapterError, "recovery image"):
-            installer.install_files(self.cur_os)
+        with self.assertRaisesRegex(AsahiAdapterError, "SHA-384"):
+            self.prepare_and_install(installer)
 
 
 def j700_stage1(path=b"", window=0, uuid=b""):
