@@ -43,6 +43,14 @@ jobs:
         '
     - name: Build the image
       run: "set -euo pipefail\nbash image-builder/bin/build-mac-image --inputs \"$WORK/inputs\" --cache \"$WORK/cache\" \"$WORK/out\" 2>&1 |\n  tee \"$WORK/evidence/build.log\"\n"
+    - name: Print the build logs on failure
+      if: failure()
+      run: |
+        sudo chown -R "$(id -u):$(id -g)" "$WORK/out" || true
+        for f in "$WORK"/out/logs/limine-boot.log "$WORK"/out/logs/esp-fat.log "$WORK"/out/logs/update-m1n1.log; do
+          [ -f "$f" ] || continue
+          echo "===== $f"; tail -n 150 "$f"
+        done
     - name: Check the records
       run: "set -euo pipefail\n# The container wrote the outputs as root.\nsudo chown -R \"$(id -u):$(id -g)\" \"$WORK/out\" \"$WORK/cache\"\nfor check in provenance descriptor; do\n  python3 image-builder/bin/mac-image-check\
         \ \"$check\" edge \"$WORK/out\"\ndone\n# Channel packages were verified after install from pacman's cache (builder/channel_set.py verify-installed).\ngrep -h '^verified=' \"$WORK/out/logs/packages.log\"\
