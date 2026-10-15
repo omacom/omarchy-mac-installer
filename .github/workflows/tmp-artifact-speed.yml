@@ -1,0 +1,41 @@
+name: "Throwaway: artifact speed on Namespace (never merge)"
+
+# Measures moving a 3.4 GB file between jobs on Namespace's Apple-backed
+# runner: GitHub's artifact actions against Namespace's, both directions.
+
+on:
+  pull_request:
+    paths: [.github/workflows/tmp-artifact-speed.yml]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  up:
+    runs-on: namespace-profile-arm64-linux-apple-12x32
+    steps:
+      - run: mkdir -p blob && head -c 3566823120 /dev/urandom > blob/image.zip && ls -la blob
+      - name: GitHub upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with: { name: gh-blob, path: blob, compression-level: 0, retention-days: 1 }
+      - name: Namespace upload
+        uses: namespace-actions/upload-artifact@v1
+        with: { name: ns-blob, path: blob, compression-level: 0 }
+  down:
+    needs: up
+    runs-on: namespace-profile-arm64-linux-apple-12x32
+    steps:
+      - name: Namespace download
+        uses: namespace-actions/download-artifact@v2
+        with: { name: ns-blob, path: ns }
+      - name: GitHub download
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with: { name: gh-blob, path: gh }
+  hosted-down:
+    needs: up
+    runs-on: ubuntu-24.04
+    steps:
+      - name: GitHub download on a GitHub runner
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with: { name: gh-blob, path: gh }
