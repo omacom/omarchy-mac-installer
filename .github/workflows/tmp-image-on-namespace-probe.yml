@@ -1,0 +1,21 @@
+# THROWAWAY, never merge: does the Apple-backed runner's kernel have FAT yet?
+name: 'Throwaway: FAT on the Apple runner (probe)'
+'on':
+  pull_request:
+    paths:
+    - .github/workflows/tmp-image-on-namespace-probe.yml
+permissions:
+  contents: read
+jobs:
+  fat:
+    runs-on: namespace-profile-arm64-linux-apple-12x32
+    timeout-minutes: 5
+    steps:
+    - run: |
+        uname -a
+        grep -m2 -E 'CPU implementer|CPU part' /proc/cpuinfo || true
+        echo "--- registered:"; grep -wE 'vfat|msdos|fat|exfat' /proc/filesystems || echo "no FAT registered"
+        echo "--- config:"; zcat /proc/config.gz 2>/dev/null | grep -E 'CONFIG_(VFAT|FAT|MSDOS|EXFAT)_FS|CONFIG_NLS_(CODEPAGE_437|ISO8859_1)=' || echo "no /proc/config.gz"
+        echo "--- modules:"; find /lib/modules/$(uname -r) -name 'vfat*' -o -name 'fat.ko*' 2>/dev/null | head || true
+        truncate -s 64M /tmp/f.img && sudo mkfs.vfat /tmp/f.img >/dev/null && sudo mkdir -p /mnt/f && \
+          { sudo mount -o loop /tmp/f.img /mnt/f && echo "MOUNT OK: $(findmnt -no FSTYPE /mnt/f)"; } || echo "MOUNT FAILED"
