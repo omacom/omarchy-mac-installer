@@ -95,7 +95,8 @@ done < <(
 )
 
 stage=$(mktemp -d /private/tmp/omarchy-locked-engine-build.XXXXXX)
-trap 'rm -rf -- "$stage"' EXIT
+temporary=
+trap 'rm -rf -- "$stage"; if [[ -n $temporary ]]; then rm -f -- "$temporary"; fi' EXIT
 cp -a "$checkout/." "$stage/"
 git -C "$stage" apply "$engine_root/$(jq -r '.downstream_overlay.patch.path' "$lock")"
 
@@ -143,11 +144,10 @@ source_date_epoch=$(jq -r '.build_toolchain.source_date_epoch' "$lock")
   --mtime="@$source_date_epoch" --owner=0 --group=0 --numeric-owner \
   -C "$stage/package" -cf - . | "$gzip" -n -9 >"$temporary"
 chmod 644 "$temporary"
-mv -f "$temporary" "$artifact"
-python3 "$engine_root/verify-archive-modes.py" "$artifact"
+python3 "$engine_root/verify-archive-modes.py" "$temporary"
 
-actual_size=$(stat -f '%z' "$artifact")
-actual_digest=$(/usr/bin/shasum -a 256 "$artifact")
+actual_size=$(stat -f '%z' "$temporary")
+actual_digest=$(/usr/bin/shasum -a 256 "$temporary")
 actual_digest=${actual_digest%% *}
 expected_filename=$(jq -er '.validation_artifact.filename' "$lock")
 expected_size=$(jq -er '.validation_artifact.size_bytes' "$lock")
@@ -172,4 +172,7 @@ if [[ $actual_digest != "$expected_digest" ]]; then
   echo "Built engine digest does not reproduce source lock" >&2
   exit 1
 fi
+# A failed rebuild must never replace an earlier authenticated artifact.
+mv -f "$temporary" "$artifact"
+temporary=
 printf '%s  %s  %s bytes\n' "$actual_digest" "$artifact" "$actual_size"

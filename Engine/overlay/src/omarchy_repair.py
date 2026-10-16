@@ -468,6 +468,10 @@ def _validate_manifest(manifest):
             }:
                 raise InPlaceRepairError("invalid preserved repair content")
             continue
+        capacity = next(item["size_bytes"] for item in partitions if item["role"] == role)
+        if any(identity["size_bytes"] > capacity or identity["size_bytes"] % 4096
+               for identity in (before, after)):
+            raise InPlaceRepairError("invalid repair content size")
         if (
             not isinstance(member, str)
             or not member
