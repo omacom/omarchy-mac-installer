@@ -49,9 +49,6 @@ defaults:
     shell: bash
 
 env:
-  # The draft release that holds the engine Packaging/build-app.sh pins, until
-  # the engine is hosted on mac.omarchy.org (tickets 07 and 13).
-  ENGINE_RELEASE: engine-v0.9.2-omarchy.28
   # Packaging/release/publish-app target; ticket 13 switches it to r2.
   APP_PUBLISH_TARGET: github-release
   # Catalogs the app reads: stopgap (this repository's catalog-<channel>
@@ -114,8 +111,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          name=$(sed -n 's/^engine_file_name="\(.*\)"$/\1/p' Packaging/build-app.sh)
-          digest=$(sed -n 's/^engine_digest="\([0-9a-f]\{64\}\)"$/\1/p' Packaging/build-app.sh)
+          # The engine Packaging/build-app.sh pins, from the source lock. Its
+          # draft release is engine-<version> until the engine is hosted on
+          # mac.omarchy.org (tickets 07 and 13).
+          name=$(jq -r .validation_artifact.filename Engine/source-lock.json)
+          digest=$(jq -r .validation_artifact.sha256 Engine/source-lock.json)
+          ENGINE_RELEASE="engine-$(jq -r .downstream_overlay.version Engine/source-lock.json)"
           [[ -n $name && -n $digest ]]
           mkdir -p "$RUNNER_TEMP/engine"
           gh release download "$ENGINE_RELEASE" -R "$GITHUB_REPOSITORY" -p "$name" -D "$RUNNER_TEMP/engine"

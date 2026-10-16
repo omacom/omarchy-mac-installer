@@ -15,7 +15,6 @@ import tempfile
 
 BASE_SHA256 = '9e9277384b6c9e8b269cc79b1b24df7bfcdcbb898a596a677b74d1d18050aebe'
 BASE_COMMIT = 'f0469cea0899f3efed8efead604174c7a53c4451'
-VERSION = 'v0.9.2-omarchy.28'
 
 _SPEC = importlib.util.spec_from_file_location(
     'verify_source_lock', Path(__file__).resolve().parent / 'verify-source-lock.py')
@@ -103,7 +102,8 @@ def rebuild(checkout, base, output):
         if sha256((root / item['path']).read_bytes()) != item['sha256']:
             raise ValueError('source lock digest mismatch: ' + item['path'])
     overlay = {Path(name).name: (root / name).read_bytes() for name in sorted(expected)}
-    overlay['version.tag'] = (VERSION + '\n').encode()
+    # The name is the lock's; Engine/engine_pin.py chooses it.
+    overlay['version.tag'] = (lock['downstream_overlay']['version'] + '\n').encode()
     with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
         # The engine carries its own installer metadata; the per-payload copy in the repository is a different file.
         if sha256(archive.extractfile('./installer_data.json').read()) != lock['validation_artifact']['metadata_sha256']:

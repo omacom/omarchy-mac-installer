@@ -352,7 +352,7 @@ class CatalogInputTests(unittest.TestCase):
             self.assertEqual(part["url"], base + part["fileName"])
         self.assertEqual(inputs["installer_data"]["url"], base + "installer_data.json")
         catalog = load("catalog_release", SCRIPTS / "catalog_release.py")
-        engine = json.loads((SCRIPTS.parent / ".github" / "mac-release-pipeline.json").read_text())["engine"]
+        engine = catalog.pipeline_engine(json.loads((SCRIPTS.parent / ".github" / "mac-release-pipeline.json").read_text())["engine"])
         installer = {"minimumVersion": "2.1.0", "latestVersion": "2.1.0", "downloadURL": self.BASE.format("v2.1.0") + "app.dmg"}
         document = catalog.build_catalog("edge", self.image, payload, engine, inputs["installer_data"],
                                          fixture.evidence(self.sha256, RUN_URL), installer,

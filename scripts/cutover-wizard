@@ -204,11 +204,11 @@ OS_TAG="os-v4.0.2-mac.1.20260902"
 APP_VERSION="${OMARCHY_APP_VERSION:-2.1.0}"
 APP_BUILD="${OMARCHY_APP_BUILD_NUMBER:-28}"
 PAYLOAD="omarchy-2026.09.02-aarch64-apple-silicon-asahi-os-package.zip"
-# The engine is whatever every build pins in Packaging/build-app.sh, read from
+# The engine is whatever every build pins in Engine/source-lock.json, read from
 # there so a change to the pinned engine never has to be repeated here.
-ENGINE=$(sed -n 's/^engine_file_name="\(.*\)"$/\1/p' "$APP_DIR/Packaging/build-app.sh")
+ENGINE=$(plutil -extract validation_artifact.filename raw -o - "$APP_DIR/Engine/source-lock.json")
 [[ $ENGINE == installer-*.tar.gz ]] || {
-  echo "cutover-wizard: can't read the pinned engine from Packaging/build-app.sh" >&2
+  echo "cutover-wizard: can't read the pinned engine from Engine/source-lock.json" >&2
   exit 1
 }
 ENGINE_SIZE=$(stat -f %z "$APP_DIR/Engine/artifacts/$ENGINE" 2>/dev/null) || {

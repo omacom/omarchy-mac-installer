@@ -641,22 +641,27 @@ class Config(unittest.TestCase):
         self.config = json.loads(CONFIG.read_text())
 
     def test_the_engine_is_the_one_the_app_pins(self):
-        engine = self.config["engine"]
-        build_app = (ROOT / "Packaging" / "build-app.sh").read_text()
-        self.assertIn(f'engine_file_name="{engine["fileName"]}"', build_app)
-        self.assertIn(f'engine_digest="{engine["sha256"]}"', build_app)
+        # The config names no engine: the run takes the one the source lock
+        # pins, which build-app.sh and the app also read.
+        self.assertEqual(set(self.config["engine"]), {"downstreamRevision"})
+        engine = catalog.pipeline_engine(self.config["engine"])
         lock = json.loads((ROOT / "Engine" / "source-lock.json").read_text())
         self.assertEqual((lock["validation_artifact"]["filename"], lock["validation_artifact"]["size_bytes"],
                           lock["validation_artifact"]["sha256"], lock["downstream_overlay"]["version"]),
                          (engine["fileName"], engine["sizeBytes"], engine["sha256"], engine["version"]))
+        self.assertEqual(engine["url"], f"https://github.com/{catalog.stopgap_repo()}/releases/download/"
+                                        f"engine-{engine['version']}/{engine['fileName']}")
         template = json.loads((SCRIPTS / "release-inputs.template.json").read_text())
         self.assertEqual(engine["downstreamRevision"], template["downstream_revision"])
-        catalog.check_engine(engine)
+
+    def test_the_config_cannot_pin_an_engine_of_its_own(self):
+        with self.assertRaises(catalog.Refusal):
+            catalog.pipeline_engine({**self.config["engine"], "version": "v0.9.2-omarchy.28"})
 
     def test_the_app_block_is_unset_or_one_the_catalog_takes(self):
         self.assertEqual(set(self.config), {"engine", "installer"})
         if self.config["installer"] is not None:
-            catalog.check_installer(self.config["installer"], self.config["engine"]["version"])
+            catalog.check_installer(self.config["installer"])
 
 
 
@@ -669,6 +674,7 @@ class CatalogInputs(unittest.TestCase):
         self.directory = Path(tempfile.mkdtemp(prefix="omarchy-release-pipeline-"))
         self.addCleanup(shutil.rmtree, self.directory)
         self.engine = json.loads(CONFIG.read_text())["engine"]
+        self.pinned = catalog.pipeline_engine(self.engine)
 
     def run_step(self, installer, dry_run: str, engine=None) -> tuple[int, str]:
         config = self.directory / "config.json"
@@ -696,7 +702,8 @@ class CatalogInputs(unittest.TestCase):
     def test_a_malformed_block_stops_a_real_run(self):
         for installer, engine in (({**self.installer(), "minimumVersion": "2.0.0"}, None),
                                   ({**self.installer(), "downloadURL": "https://example.invalid/app.dmg"}, None),
-                                  (self.installer(), {**self.engine, "sha256": "nope"})):
+                                  (self.installer(), {**self.engine, "downstreamRevision": "nope"}),
+                                  (self.installer(), {**self.engine, "sha256": "0" * 64})):
             with self.subTest(installer=installer, engine=engine):
                 self.assertNotEqual(self.run_step(installer, "false", engine)[0], 0)
 
@@ -704,7 +711,7 @@ class CatalogInputs(unittest.TestCase):
         status, output = self.run_step(self.installer(), "false")
         self.assertEqual(status, 0, output)
         lines = dict(line.split("=", 1) for line in output.splitlines() if "=" in line and not line.startswith("::"))
-        self.assertEqual(json.loads(lines["engine"]), self.engine)
+        self.assertEqual(json.loads(lines["engine"]), self.pinned)
         self.assertEqual(json.loads(lines["installer"]), self.installer())
 
 if __name__ == "__main__":

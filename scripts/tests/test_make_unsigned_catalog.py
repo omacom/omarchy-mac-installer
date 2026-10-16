@@ -12,6 +12,7 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "make-unsigned-catalog.py"
 TEMPLATE = Path(__file__).resolve().parents[1] / "release-inputs.template.json"
+LOCK = Path(__file__).resolve().parents[2] / "Engine" / "source-lock.json"
 MANIFEST = Path(__file__).resolve().parents[1] / "supported-models.json"
 M3_MACS = [
     "apple,j433", "apple,j434", "apple,j504", "apple,j613", "apple,j615",
@@ -30,7 +31,10 @@ class CatalogGeneratorTests(unittest.TestCase):
         self.assets = self.directory / "assets"
         self.assets.mkdir()
         self.inputs = json.loads(TEMPLATE.read_text())
-        for key in ("engine_name", "metadata_name", "payload_name"):
+        self.lock = json.loads(LOCK.read_text())
+        self.engine_name = self.lock["validation_artifact"]["filename"]
+        (self.assets / self.engine_name).write_bytes(b"engine_name" * 64)
+        for key in ("metadata_name", "payload_name"):
             (self.assets / self.inputs[key]).write_bytes(key.encode() * 64)
 
     def write_inputs(self, document: dict | None = None) -> Path:
@@ -63,9 +67,9 @@ class CatalogGeneratorTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(fragment, result.stderr)
 
-    def test_recommendation_engine_rejects_old_installer_minimum(self):
+    def test_every_catalog_rejects_an_installer_minimum_before_2_1(self):
         self.inputs["installer"]["minimum_version"] = "2.0.10"
-        self.assertRejected(self.inputs, "requires installer.minimum_version >= 2.1.0")
+        self.assertRejected(self.inputs, "needs installer.minimum_version >= 2.1.0")
 
     def test_emits_schema_four_without_an_expiry(self) -> None:
         result = self.generate()
@@ -140,8 +144,21 @@ class CatalogGeneratorTests(unittest.TestCase):
 
     def test_a_missing_inputs_key_is_rejected(self) -> None:
         document = dict(self.inputs)
-        del document["engine_version"]
+        del document["metadata_name"]
         self.assertRejected(document, "missing keys")
+
+    def test_the_engine_is_the_source_locks(self) -> None:
+        self.assertNotIn("engine_name", self.inputs)
+        result = self.generate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        model = json.loads((self.directory / "catalog.json").read_text())["models"][0]
+        self.assertEqual(model["engineVersion"], self.lock["downstream_overlay"]["version"])
+        self.assertEqual(model["engineArtifact"]["fileName"], self.engine_name)
+
+    def test_inputs_cannot_name_another_engine(self) -> None:
+        for key in ("engine_name", "engine_version"):
+            with self.subTest(key):
+                self.assertRejected({**self.inputs, key: "v0.9.2-omarchy.27"}, "unknown keys")
 
     def test_a_minimum_newer_than_the_latest_is_rejected(self) -> None:
         document = json.loads(json.dumps(self.inputs))

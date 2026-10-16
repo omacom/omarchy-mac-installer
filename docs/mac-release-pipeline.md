@@ -18,7 +18,7 @@ A dry run uploads to a `dryrun-` scratch release and deletes it, and signs no ca
 - `build` outputs `name` (also the image artifact's name), `payload` (the zip's file name) and `sha256`.
 - `acceptance` uploads the artifact `acceptance-evidence`, holding `acceptance-evidence.json` ([format](mac-acceptance-evidence.md)), and outputs `result`, `evidence-artifact` and `evidence-run-id` (this run). It also keeps the harness's logs as `acceptance-harness-logs`. The pipeline's `runner` input (empty by default) overrides the VM job's runner.
 - `upload` downloads the image and evidence artifacts from this run. After a real upload it outputs `payload` and `installer-data` (the catalog's inputs, built from the files it uploaded and verified) and `evidence` (the record it checked).
-- `catalog-inputs` outputs the `engine` and `installer` blocks of `.github/mac-release-pipeline.json`.
+- `catalog-inputs` outputs the catalog's `engine` block (the engine `Engine/source-lock.json` pins, with the config's `downstreamRevision`) and the `installer` block of `.github/mac-release-pipeline.json`.
 
 ## Secrets
 
@@ -28,5 +28,5 @@ The catalog takes the evidence record the upload checked, and the upload took it
 
 ## `.github/mac-release-pipeline.json`
 
-- `engine`: the catalog's engine block ([format](catalog-release.md#inputs)). It is the engine `Packaging/build-app.sh` pins, published as the `engine-v0.9.2-omarchy.28` release. Ticket 13 moves it to `mac.omarchy.org/v1/engine/`. A test keeps this block in step with `build-app.sh` and `Engine/source-lock.json`.
+- `engine`: only `{"downstreamRevision"}`. The run's engine is the one `Engine/source-lock.json` pins, the only place the engine is pinned ([Engine versions](engine-versions.md)); `catalog-inputs` adds its version, file name, size and digest, and its URL in the `engine-<version>` release (`catalog_release.pipeline_engine`). Ticket 13 moves the archive to `mac.omarchy.org/v1/engine/`.
 - `installer`: the app compatibility block, `{"minimumVersion", "latestVersion", "downloadURL"}`. Until an app release from `mac-app-release.yml` is published, it is `null`, and on a real run `catalog-inputs` refuses with a message saying so, before the upload, so nothing is made public. Set it to that release's version and `.dmg` URL.

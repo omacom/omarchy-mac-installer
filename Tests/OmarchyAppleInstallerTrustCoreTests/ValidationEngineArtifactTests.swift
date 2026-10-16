@@ -5,23 +5,30 @@
   @testable import OmarchyAppleInstallerTrustCore
 
   final class ValidationEngineArtifactTests: XCTestCase {
-    func testM3CapableInspectionIdentityIsPinnedExactly() {
-      XCTAssertEqual(
-        ValidationEngineArtifactLocator.version,
-        "v0.9.2-omarchy.28"
+    func testInspectionIdentityIsTheSourceLockEngine() throws {
+      // OmarchyEnginePinPlugin generates the pin from the lock at build
+      // time; this proves the compiled pin is the lock's.
+      let lockURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("Engine/source-lock.json")
+      let lock = try XCTUnwrap(
+        JSONSerialization.jsonObject(with: Data(contentsOf: lockURL))
+          as? [String: Any]
       )
-      XCTAssertEqual(
-        ValidationEngineArtifactLocator.fileName,
-        "installer-v0.9.2-omarchy.28.tar.gz"
-      )
-      XCTAssertEqual(
-        ValidationEngineArtifactLocator.expectedDigest,
-        "sha256:0cf1aa87760f90a545298b7cef737c9b497f2cad421d79ac59f557a81f2eb146"
-      )
-      XCTAssertEqual(
-        ValidationEngineArtifactLocator.expectedSizeBytes,
-        17_843_348
-      )
+      let overlay = try XCTUnwrap(lock["downstream_overlay"] as? [String: Any])
+      let artifact = try XCTUnwrap(lock["validation_artifact"] as? [String: Any])
+      let version = try XCTUnwrap(overlay["version"] as? String)
+      let fileName = try XCTUnwrap(artifact["filename"] as? String)
+      let digest = try XCTUnwrap(artifact["sha256"] as? String)
+      let size = try XCTUnwrap(artifact["size_bytes"] as? NSNumber)
+
+      XCTAssertEqual(ValidationEngineArtifactLocator.version, version)
+      XCTAssertEqual(ValidationEngineArtifactLocator.fileName, fileName)
+      XCTAssertEqual(ValidationEngineArtifactLocator.fileName, "installer-\(version).tar.gz")
+      XCTAssertEqual(ValidationEngineArtifactLocator.expectedDigest, "sha256:\(digest)")
+      XCTAssertEqual(ValidationEngineArtifactLocator.expectedSizeBytes, size.uint64Value)
     }
 
     func testEnvironmentOverrideSelectsExactValidationArtifactIdentity()

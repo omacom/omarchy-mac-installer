@@ -17,13 +17,11 @@
   /// recommendations separate from the safety limits used after staging.
   /// An installation engine fix ships in a catalog without rebuilding
   /// and re-notarizing the app. Nothing may require them to be equal.
+  ///
+  /// The pin itself (`version`, `fileName`, `expectedDigest`,
+  /// `expectedSizeBytes`) is generated from `Engine/source-lock.json` at
+  /// build time by OmarchyEnginePinPlugin.
   public struct ValidationEngineArtifactLocator: Sendable {
-    public static let version = "v0.9.2-omarchy.28"
-    public static let fileName = "installer-v0.9.2-omarchy.28.tar.gz"
-    public static let expectedDigest =
-      "sha256:0cf1aa87760f90a545298b7cef737c9b497f2cad421d79ac59f557a81f2eb146"
-    public static let expectedSizeBytes: UInt64 = 17_843_348
-
     public init() {}
 
     public func locate() throws -> PinnedAsahiEngineArchive {

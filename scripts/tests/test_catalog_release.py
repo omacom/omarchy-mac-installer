@@ -318,7 +318,7 @@ class CatalogReleaseTests(ReleaseTestCase):
 
     def test_refuses_another_channel_or_image_name(self) -> None:
         result = self.run_tool("prepare", "--channel", "stable", "--image", IMAGE, "--payload", "x",
-                               "--engine", "x", "--installer-data", "x", "--out", str(self.directory / "o"))
+                               "--engine", "x", "--installer-data", "x", "--installer", "x", "--out", str(self.directory / "o"))
         self.assert_refused(result, "rc and stable come from promotion")
         with self.assertRaisesRegex(release.Refusal, "image must be"):
             release.check_image_name("omarchy-mac-edge-latest", "edge")
@@ -805,6 +805,7 @@ class PromotionTests(ReleaseTestCase):
         self.assertEqual(self.sign(self.directory / "newer" / "catalog-rc.json", out="newer-signed").returncode, 0)
         self.assertEqual(self.publish("rc", self.directory / "newer-signed" / "catalog-rc.signed.json").returncode, 0)
         self.assert_refused(self.promote("rc", "edge", LATER, "older"), "does not follow the published rc")
+
 
 
 if __name__ == "__main__":

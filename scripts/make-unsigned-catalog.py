@@ -8,7 +8,8 @@ repository.
 
 Every per-release value comes from an inputs file (`--inputs`), so cutting a
 release never edits this script. `scripts/release-inputs.template.json` holds
-the current values. The inputs must list exactly the Macs in
+the current values. The engine is always the one `Engine/source-lock.json`
+pins. The inputs must list exactly the Macs in
 `scripts/supported-models.json`: every M1, M2 and M3 Mac, none refused.
 
 The catalog pins whole-file digests. When the payload was split for release
@@ -42,9 +43,7 @@ SCHEMA_VERSION = 4
 REQUIRED_INPUT_KEYS = frozenset(
     {
         "payload_name",
-        "engine_name",
         "metadata_name",
-        "engine_version",
         "evidence_revision",
         "asahi_installer_tag",
         "asahi_installer_revision",
@@ -54,6 +53,8 @@ REQUIRED_INPUT_KEYS = frozenset(
         "installer",
     }
 )
+# The only place the engine is pinned (docs/engine-versions.md).
+SOURCE_LOCK = Path(__file__).resolve().parents[1] / "Engine" / "source-lock.json"
 REQUIRED_INSTALLER_KEYS = frozenset(
     {"minimum_version", "latest_version", "download_url"}
 )
@@ -183,6 +184,9 @@ def load_inputs(path: Path) -> dict:
     unknown = keys - REQUIRED_INPUT_KEYS
     if unknown:
         raise SystemExit(f"inputs file has unknown keys: {', '.join(sorted(unknown))}")
+    lock = json.loads(SOURCE_LOCK.read_text())
+    document["engine_name"] = lock["validation_artifact"]["filename"]
+    document["engine_version"] = lock["downstream_overlay"]["version"]
 
     for key in (
         "payload_name",
@@ -253,11 +257,10 @@ def load_inputs(path: Path) -> dict:
         raise SystemExit(
             "inputs installer.minimum_version is newer than installer.latest_version"
         )
-    # Engines with recommendation fields require the compatible decoder and
-    # reserve-policy UI. Refuse a catalog that sends older apps into decoding.
-    engine = re.fullmatch(r"v0\.9\.2-omarchy\.(\d+)", document["engine_version"])
-    if engine and int(engine.group(1)) >= 18 and parse_version(installer["minimum_version"]) < (2, 1, 0):
-        raise SystemExit("this engine requires installer.minimum_version >= 2.1.0")
+    # Every engine since .18 sends recommendation fields that only app 2.1.0
+    # and later decode, so every catalog turns older apps away.
+    if parse_version(installer["minimum_version"]) < (2, 1, 0):
+        raise SystemExit("every catalog needs installer.minimum_version >= 2.1.0")
     download_url = installer["download_url"]
     if not isinstance(download_url, str) or not download_url.startswith("https://"):
         raise SystemExit(f"inputs installer.download_url must be https: {download_url}")

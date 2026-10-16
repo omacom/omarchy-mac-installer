@@ -235,20 +235,42 @@ def check_engine(document: object) -> dict:
     return resolved
 
 
+def pipeline_engine(document: object) -> dict:
+    """The engine block for .github/mac-release-pipeline.json's run: the pin
+    from Engine/source-lock.json, the only place the engine is pinned, plus the
+    config's downstreamRevision. The archive is served from its engine-<version>
+    release of this repository until mac.omarchy.org hosts it."""
+    document = check_keys(document, "engine", {"downstreamRevision"})
+    lock = json.loads(SOURCE_LOCK.read_text())
+    version = lock["downstream_overlay"]["version"]
+    artifact = lock["validation_artifact"]
+    engine = {
+        "version": version,
+        "url": f"https://github.com/{stopgap_repo()}/releases/download/engine-{version}/{artifact['filename']}",
+        "fileName": artifact["filename"],
+        "sizeBytes": artifact["size_bytes"],
+        "sha256": artifact["sha256"],
+        "downstreamRevision": document["downstreamRevision"],
+    }
+    check_engine(engine)
+    return engine
+
+
 def version_tuple(value: str) -> tuple[int, ...]:
     return tuple(int(part) for part in value.split("."))
 
 
-def check_installer(document: object, engine_version: str) -> dict:
+def check_installer(document: object) -> dict:
     document = check_keys(document, "installer", {"minimumVersion", "latestVersion", "downloadURL"})
     for key in ("minimumVersion", "latestVersion"):
         if not isinstance(document[key], str) or not INSTALLER_VERSION.match(document[key]):
             raise Refusal(f"installer.{key} must look like X.Y.Z")
     if version_tuple(document["minimumVersion"]) > version_tuple(document["latestVersion"]):
         raise Refusal("installer.minimumVersion is newer than installer.latestVersion")
-    engine = re.fullmatch(r"v0\.9\.2-omarchy\.(\d+)", engine_version)
-    if engine and int(engine.group(1)) >= 18 and version_tuple(document["minimumVersion"]) < (2, 1, 0):
-        raise Refusal("this engine requires installer.minimumVersion >= 2.1.0")
+    # Every engine since .18 sends recommendation fields that only app 2.1.0
+    # and later decode, so every catalog turns older apps away.
+    if version_tuple(document["minimumVersion"]) < (2, 1, 0):
+        raise Refusal("every catalog needs app 2.1.0 or later: installer.minimumVersion must be at least 2.1.0")
     check_url(document["downloadURL"], "installer.downloadURL", installer_bases())
     return document
 
@@ -348,7 +370,7 @@ def build_catalog(
     engine: dict,
     metadata: dict,
     evidence: object,
-    installer: dict | None,
+    installer: dict,
     now: datetime.datetime,
 ) -> dict:
     check_channel(channel)
@@ -357,10 +379,7 @@ def build_catalog(
     metadata = check_artifact(metadata, "installer_data")
     engine = check_engine(engine)
     check_evidence(evidence, payload["sha256"])
-    if installer is not None:
-        installer = check_installer(installer, engine["version"])
-    elif re.fullmatch(r"v0\.9\.2-omarchy\.(1[89]|[2-9][0-9]|[1-9][0-9]{2,})", engine["version"]):
-        raise Refusal("this engine needs app 2.1.0 or later: pass installer with minimumVersion >= 2.1.0")
+    installer = check_installer(installer)
 
     def plain(artifact: dict) -> dict:
         return {"sourceURL": artifact["url"], "fileName": artifact["fileName"], "sizeBytes": artifact["sizeBytes"]}
@@ -399,8 +418,7 @@ def build_catalog(
         "sequence": int(now.timestamp()),
         "issuedAt": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    if installer is not None:
-        catalog["installer"] = installer
+    catalog["installer"] = installer
     catalog["models"] = models
     errors = supported_models.catalog_errors(catalog)
     if errors:
@@ -874,7 +892,7 @@ def command_prepare(arguments) -> None:
     engine = load_json(arguments.engine, "engine")
     metadata = load_json(arguments.installer_data, "installer_data")
     evidence = load_json(arguments.evidence, "evidence") if arguments.evidence else None
-    installer = load_json(arguments.installer, "installer") if arguments.installer else None
+    installer = load_json(arguments.installer, "installer")
     catalog = build_catalog(channel, arguments.image, payload, engine, metadata, evidence, installer, now)
     if arguments.verify_remote:
         verify_remote_artifact(check_artifact(payload, "payload", True), "payload")
@@ -1095,7 +1113,7 @@ def parse_arguments(argv: list[str]):
     prepare.add_argument("--engine", type=Path, required=True)
     prepare.add_argument("--installer-data", type=Path, required=True)
     prepare.add_argument("--evidence", type=Path)
-    prepare.add_argument("--installer", type=Path)
+    prepare.add_argument("--installer", type=Path, required=True)
     prepare.add_argument("--verify-remote", action="store_true")
     prepare.add_argument("--check-live", action="store_true")
     prepare.add_argument("--host", default="github-release")

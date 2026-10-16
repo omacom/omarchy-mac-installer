@@ -34,7 +34,7 @@ All JSON inputs are strict: unknown keys are refused. Digests are 64 lowercase h
 - `payload` (ticket 07's upload output for the image zip): `{"url", "fileName", "sizeBytes", "sha256", "parts"?}`. `parts` (2 to 16, for a host with a file size limit) is a list of `{"url", "fileName", "sizeBytes", "sha256"}` in order; their sizes sum to `sizeBytes` and their bytes join into `sha256`. The whole-file `url` is informational when parts are given.
 - `installer-data`: the image's `installer_data.json` as `{"url", "fileName", "sizeBytes", "sha256"}`.
 - `engine`: `{"version", "url", "fileName", "sizeBytes", "sha256", "downstreamRevision"}`, optionally `asahiInstallerTag`, `asahiInstallerRevision` and `asahiInstallerDataRevision`, which default to `Engine/source-lock.json`.
-- `installer`: `{"minimumVersion", "latestVersion", "downloadURL"}`, the app compatibility block. Required for engines from `v0.9.2-omarchy.18` (every current engine), whose `minimumVersion` must be 2.1.0 or later; `downloadURL` is under `.../v1/installer/` or a non-catalog release of this repository.
+- `installer`: `{"minimumVersion", "latestVersion", "downloadURL"}`, the app compatibility block. Required: every engine since `.18` sends recommendation fields only app 2.1.0 and later decode, so `minimumVersion` must be 2.1.0 or later; `downloadURL` is under `.../v1/installer/` or a non-catalog release of this repository.
 - `evidence`: the VM evidence record below.
 - `dry-run`: defaults to true.
 

@@ -270,7 +270,7 @@
     },
     {
       "path": "rebuild-python-overlay.py",
-      "sha256": "3cc29ff5c7bd834b40a50ef2271417efcd33bc7bc747b11c743d5ba2042017c2"
+      "sha256": "cfe0ff65a9e198bfb2e7276ea6b7a44edec677862f60c837bb4821cefea0c9c4"
     }
   ],
   "validation_artifact": {

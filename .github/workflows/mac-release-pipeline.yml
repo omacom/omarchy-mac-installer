@@ -9,7 +9,8 @@ name: Mac release pipeline
 #               Namespace's Apple-backed Linux ARM64 runner).
 #               Writes the evidence record, attests it when it passed, and
 #               fails unless it passed.
-#   catalog-inputs  the engine and app blocks from .github/mac-release-pipeline.json;
+#   catalog-inputs  the engine pinned in Engine/source-lock.json and the app
+#               block from .github/mac-release-pipeline.json;
 #               a real run without an app release stops here, before anything
 #               is public
 #   upload      mac-upload.yml, only after passing evidence: in the publish
@@ -142,21 +143,25 @@ jobs:
             echo "::error::$config names no app release (installer); set it to a published app release (mac-app-release.yml) before a catalog can be signed"
             exit 1
           fi
-          # The catalog's own checks, so a malformed block stops here too.
-          python3 -I - "$config" <<'PY'
+          # The engine is the one Engine/source-lock.json pins; the config adds
+          # only its downstreamRevision. The catalog's own checks run on both
+          # blocks, so a malformed one stops here too.
+          engine=$(python3 -I - "$config" <<'PY'
           import importlib.util, json, sys
           spec = importlib.util.spec_from_file_location("catalog_release", "scripts/catalog_release.py")
           release = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(release)
           config = json.load(open(sys.argv[1]))
           try:
-              release.check_engine(config["engine"])
+              engine = release.pipeline_engine(config["engine"])
               if config["installer"] is not None:
-                  release.check_installer(config["installer"], config["engine"]["version"])
+                  release.check_installer(config["installer"])
           except (release.Refusal, KeyError, TypeError) as error:
               sys.exit(f"::error::{sys.argv[1]}: {error}")
+          print(json.dumps(engine, separators=(",", ":")))
           PY
-          echo "engine=$(jq -c .engine "$config")" | tee -a "$GITHUB_OUTPUT"
+          )
+          echo "engine=$engine" | tee -a "$GITHUB_OUTPUT"
           echo "installer=$(jq -c .installer "$config")" | tee -a "$GITHUB_OUTPUT"
 
   upload:

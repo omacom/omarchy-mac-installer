@@ -46,8 +46,16 @@ helper_identifier="$INSTALLER_HELPER_IDENTIFIER"
 app_name="$INSTALLER_APP_NAME.app"
 app_executable_name="OmarchyAppleInstallerApp"
 daemon_plist_name="$helper_identifier.plist"
-engine_file_name="installer-v0.9.2-omarchy.28.tar.gz"
-engine_digest="0cf1aa87760f90a545298b7cef737c9b497f2cad421d79ac59f557a81f2eb146"
+# The engine is pinned only in the source lock (docs/engine-versions.md).
+engine_lock="$package_directory/Engine/source-lock.json"
+engine_file_name=$(plutil -extract validation_artifact.filename raw -o - "$engine_lock") \
+  || fail "the source lock names no engine archive"
+engine_digest=$(plutil -extract validation_artifact.sha256 raw -o - "$engine_lock") \
+  || fail "the source lock has no engine digest"
+[[ $engine_file_name =~ ^installer-v[0-9A-Za-z+._-]+\.tar\.gz$ ]] \
+  || fail "the source lock's engine archive name is invalid"
+[[ $engine_digest =~ ^[0-9a-f]{64}$ ]] \
+  || fail "the source lock's engine digest is invalid"
 
 if [[ $signing_identity == "-" ]]; then
   client_requirement="identifier \"$app_identifier\""
