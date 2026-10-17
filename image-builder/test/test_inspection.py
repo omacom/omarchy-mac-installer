@@ -85,6 +85,32 @@ class InspectionTest(unittest.TestCase):
         self.assertEqual(report["supported_models"], list(fixtures.MODELS))
         self.assertEqual(report["hardware_setup"], "build")
 
+    def test_incidental_neo_dtb_does_not_admit_neo_with_legacy_boot_chain(self):
+        candidates = inspection.Candidates(self.candidates)
+        boot_owner = candidates.boot_owners["usr/lib/asahi-boot/u-boot-nodtb.bin"]
+        original = candidates.listing(boot_owner)
+        candidates._listings[boot_owner] = original + ["usr/lib/asahi-boot/dtb/t8140-j700.dtb"]
+        report = {}
+        inspection.check_supported_models(self.root, candidates, report)
+        self.assertNotIn("t8140-j700", report["supported_models"])
+
+    def test_neo_candidate_admits_only_neo_and_binds_its_profile(self):
+        directory = self.root.parent / "neo-input"
+        imported = self.root.parent / "neo-import"
+        receipt = fixtures.make_set(directory, self.signer, hardware_profile="neo")
+        fixtures.import_set(directory, imported, self.signer, receipt)
+        candidates = inspection.Candidates(imported)
+        report = {}
+        inspection.check_supported_models(self.root, candidates, report)
+        self.assertEqual(report["supported_models"], ["t8140-j700"])
+        summary = imported / "import.json"
+        summary.chmod(0o644)
+        value = __import__("json").loads(summary.read_text())
+        value["hardware_profile"] = "legacy"
+        summary.write_text(__import__("json").dumps(value))
+        with self.assertRaisesRegex(inspection.InspectionError, "authenticated manifest"):
+            inspection.Candidates(imported)
+
     def test_m1n1_stage2_mismatches(self):
         cases = {
             "another m1n1": dict(m1n1=b"some other m1n1 build"),
@@ -629,7 +655,7 @@ class ClosureInspectionTest(unittest.TestCase):
                 report = inspection.inspect(root, candidates, "edge", trust=signer.trust)
                 self.assertEqual(report["checks"]["candidate-files"]["result"], "passed", report["checks"]["candidate-files"])
                 self.assertEqual(report["checks"]["candidate-versions"]["result"], "passed")
-                self.assertIn("of the 9 runtime and boot packages", report["checks"]["candidate-files"]["detail"])
+                self.assertIn("of the 9 required packages", report["checks"]["candidate-files"]["detail"])
                 (root / "usr/share/icons/Yaru/scalable/actions/go-next-symbolic.svg").unlink()
                 local = next((root / "var/lib/pacman/local").glob("yaru-icon-theme-*"))
                 (local / "desc").write_text((local / "desc").read_text().replace("26.04-1", "26.04-2"))
@@ -690,6 +716,7 @@ class RuntimeLayoutInspectionTest(unittest.TestCase):
 
 
 class ChannelImageInspectionTest(unittest.TestCase):
+    hardware_profile = "legacy"
     """A public image built from an edge channel set (builder/channel_set.py)."""
 
     @classmethod
@@ -699,10 +726,10 @@ class ChannelImageInspectionTest(unittest.TestCase):
         cls.candidate = fixtures.Signer(cls.base / "candidate")
         cls.channel = fixtures.Signer(cls.base / "channel", "Omarchy fixture <pkgs@example.invalid>")
         cls.trust = fixtures.channel_trust(cls.base, cls.candidate, cls.channel)
-        database, sha256 = fixtures.make_channel(cls.base / "edge", cls.channel)
+        database, sha256 = fixtures.make_channel(cls.base / "edge", cls.channel, hardware_profile=cls.hardware_profile)
         channel_set = fixtures.load("channel_set", "builder/channel_set.py")
         cls.set = cls.base / "set"
-        cls.summary = channel_set.snapshot(database, sha256, "edge", cls.base / "edge/packages", cls.set, cls.trust)
+        cls.summary = channel_set.snapshot(database, sha256, "edge", cls.base / "edge/packages", cls.set, cls.trust, cls.hardware_profile)
         cls.good = cls.base / "root"
         fixtures.make_root(cls.good, cls.set, "e1b0e5e9b")
 
@@ -769,6 +796,15 @@ class ChannelImageInspectionTest(unittest.TestCase):
     def test_the_factory_must_be_sealed_for_the_channel_set(self):
         fixtures.write(self.factory, "var/lib/omarchy/factory-sealed", "format=2\ncandidate_set=x\ncandidate_source_commit=y\n")
         self.assertFails("factory", "records another channel set")
+
+
+class NeoChannelImageInspectionTest(ChannelImageInspectionTest):
+    hardware_profile = "neo"
+
+    def test_supported_models_remain_neo_only(self):
+        report = self.inspect()
+        self.assertEqual(report["hardware_profile"], "neo")
+        self.assertEqual(report["supported_models"], ["t8140-j700"])
 
 
 class TestImagePinTest(unittest.TestCase):

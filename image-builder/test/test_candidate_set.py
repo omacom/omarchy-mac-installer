@@ -54,6 +54,41 @@ class CandidateSetTest(unittest.TestCase):
         self.assertEqual({p["group"] for p in imported["packages"]}, {"runtime", "boot"})
         self.assertFalse((self.work / "output/candidate-signing-key.asc").exists())
 
+    def test_architecture_independent_support_still_requires_a_signed_source(self):
+        directory, receipt = self.variant(hardware_profile="neo", arches={"aurora-audio": "any", "alsa-ucm-conf-aurora": "any"})
+        summary = self.verify(directory, receipt)
+        self.assertEqual({p["name"] for p in summary["packages"] if p["group"] == "support"},
+                         set(fixtures.POLICY["hardware_profiles"]["neo"]["support_packages"]))
+
+    def test_missing_support_is_rejected_even_with_stock_audio_closure(self):
+        directory, receipt = self.variant(
+            hardware_profile="neo",
+            names=[n for n in fixtures.NEO_VERSIONS if n != "aurora-audio"] + ["asahi-audio"],
+            versions={"asahi-audio": "4.1.1-1"})
+        with self.assertRaisesRegex(ValueError, "missing aurora-audio"):
+            self.verify(directory, receipt)
+
+    def test_neo_profile_requires_each_support_package(self):
+        for name in fixtures.POLICY["hardware_profiles"]["neo"]["support_packages"]:
+            with self.subTest(package=name):
+                directory = self.work / name
+                receipt = fixtures.make_set(directory, self.signer, hardware_profile="neo",
+                    names=[n for n in fixtures.NEO_VERSIONS if n != name])
+                with self.assertRaisesRegex(ValueError, "missing " + name):
+                    self.verify(directory, receipt)
+                shutil.rmtree(self.work / "output", ignore_errors=True)
+
+    def test_unknown_signed_profile_and_missing_neo_device_tree_fail_closed(self):
+        directory, receipt = self.variant(manifest_edit=lambda m: m.update(hardware_profile="unreviewed"))
+        with self.assertRaisesRegex(ValueError, "unknown hardware profile"):
+            self.verify(directory, receipt)
+        shutil.rmtree(self.work / "output", ignore_errors=True)
+        directory = self.work / "no-neo-dtb"
+        receipt = fixtures.make_set(directory, self.signer, hardware_profile="neo",
+                                    contents=fixtures.default_contents())
+        with self.assertRaisesRegex(ValueError, "requires the J700"):
+            self.verify(directory, receipt)
+
     def test_output_is_created_exclusively(self):
         (self.work / "output").mkdir()
         with self.assertRaises(FileExistsError):

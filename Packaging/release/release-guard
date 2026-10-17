@@ -233,7 +233,12 @@ class Guard:
                     self.signed_entitlements(where, path)
             for name in subdirectories:
                 if name.endswith(".app"):
-                    self.check_app(base / name, f"{label}/{(base / name).relative_to(top)}")
+                    nested = base / name
+                    nested_label = f"{label}/{nested.relative_to(top)}"
+                    if self.is_recovery_template(nested):
+                        self.check_recovery_template(nested, nested_label)
+                    else:
+                        self.check_app(nested, nested_label)
 
     def archived_entitlements(self, where: str, data: bytes) -> None:
         """An archived Mach-O's signed entitlements, read from a private copy."""
@@ -251,6 +256,41 @@ class Guard:
                                 capture_output=True)
         if b"get-task-allow" in result.stdout:
             self.find(where, "a get-task-allow entitlement in its signature")
+
+    def is_recovery_template(self, app: Path) -> bool:
+        if len(app.parents) < 4:
+            return False
+        outer = app.parents[3]
+        expected = outer / "Contents/Resources/RecoveryTemplate" / (
+            self.values["INSTALLER_RECOVERY_APP_NAME"] + ".app")
+        return outer.name.endswith(".app") and app == expected
+
+    def check_recovery_template(self, app: Path, label: str) -> None:
+        if app.is_symlink():
+            self.find(label, "the Recovery template is a symbolic link")
+            return
+        try:
+            info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            self.find(label, "the Recovery template Info.plist is missing or unreadable")
+            return
+        expected = {
+            "CFBundleIdentifier": "org.aurorasilicon.omarchy.recovery.recovery",
+            "CFBundleExecutable": "OmarchyRecovery",
+            "CFBundleDisplayName": self.values["INSTALLER_RECOVERY_APP_NAME"],
+            "OmarchyRecoveryBuildMode": "recovery",
+            "OmarchyRecoveryDataLayout": "external-install-data-v1",
+        }
+        for key, value in expected.items():
+            if info.get(key) != value:
+                self.find(label, "invalid Recovery template " + key)
+        executable = app / "Contents/MacOS/OmarchyRecovery"
+        if not executable.is_file() or executable.is_symlink():
+            self.find(label, "Recovery executable is missing or linked")
+        for name in ("install-config.json", "AuraPayloads"):
+            path = app / "Contents/Resources" / name
+            if path.exists() or path.is_symlink():
+                self.find(label, "Recovery template contains installation-specific " + name)
 
     # ── the app's identity ──────────────────────────────────────────────────
     def check_app(self, app: Path, label: str) -> None:

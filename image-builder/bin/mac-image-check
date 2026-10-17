@@ -54,6 +54,8 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "builder"))
+import recovery_app  # noqa: E402
 ROOT_UUID = "4f4d5801-524f-4f54-8000-000000000001"
 BOOT_UUID = "4f4d5801-424f-4f54-8000-000000000001"
 ESP_UUID = "4F4D-5801"
@@ -129,10 +131,12 @@ def require(condition: bool, message: str) -> None:
         raise CheckError(message)
 
 
-def expected_metadata(package: str) -> dict:
+def expected_metadata(package: str, hardware_profile: str = "legacy", native_recovery: bool = False) -> dict:
+    require(hardware_profile in ("legacy", "neo"), "unknown hardware profile")
     return {
         "os_list": [
             {
+                **({"recovery_gui": "omarchy-native-v1"} if native_recovery else {}),
                 "boot_object": "m1n1.bin",
                 "default_os_name": "Omarchy",
                 "icon": ICON,
@@ -154,7 +158,9 @@ def expected_metadata(package: str) -> dict:
                     {"image": "boot.img", "name": "Boot", "size": f"{BOOT_SIZE}B", "type": "Linux"},
                     {"expand": True, "image": "root.img", "name": "Root", "size": f"{ROOT_SIZE}B", "type": "Linux"},
                 ],
-                "supported_fw": ["13.5", "14.8.3"],
+                "supported_fw": ["26.6.2"] if hardware_profile == "neo" else ["13.5", "14.8.3"],
+                "allowed_device_classes": ["j700ap"] if hardware_profile == "neo" else None,
+                "excluded_device_classes": [] if hardware_profile == "neo" else ["j700ap"],
             }
         ]
     }
@@ -207,7 +213,8 @@ def check_plaintext_root(header: bytes, where: str) -> None:
     check_root_superblock(header, where)
 
 
-def check_payload(lane: str, package: Path, installer_data: Path, profile: str = "release") -> dict[str, str]:
+def check_payload(lane: str, package: Path, installer_data: Path, profile: str = "release",
+                  hardware_profile: str | None = None, recovery_digest: str | None = None) -> dict[str, str]:
     check_profile(lane, profile)
     name = package.name
     match = PAYLOAD_NAME.fullmatch(name)
@@ -218,7 +225,15 @@ def check_payload(lane: str, package: Path, installer_data: Path, profile: str =
         metadata = json.loads(installer_data.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise CheckError(f"{installer_data} is not JSON") from error
-    require(metadata == expected_metadata(name), f"{installer_data} is not the installer_data for {name}")
+    require(isinstance(metadata, dict) and isinstance(metadata.get("os_list"), list)
+            and len(metadata["os_list"]) == 1 and isinstance(metadata["os_list"][0], dict),
+            "installer_data must name exactly one OS")
+    if hardware_profile is None:
+        hardware_profile = "neo" if metadata.get("os_list", [{}])[0].get("allowed_device_classes") == ["j700ap"] else "legacy"
+    native_recovery = metadata.get("os_list", [{}])[0].get("recovery_gui") == "omarchy-native-v1"
+    require(recovery_digest is None or native_recovery == bool(recovery_digest),
+            "Recovery metadata does not match the pinned inputs")
+    require(metadata == expected_metadata(name, hardware_profile, native_recovery), f"{installer_data} is not the installer_data for {name}")
 
     try:
         archive = zipfile.ZipFile(package)
@@ -246,12 +261,23 @@ def check_payload(lane: str, package: Path, installer_data: Path, profile: str =
                 f"unexpected member {info.filename}",
             )
             members[info.filename] = info
-        missing = sorted(REQUIRED_MEMBERS - set(members))
+        if native_recovery:
+            try:
+                recovery_app.validate_zip(archive, recovery_digest)
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                raise CheckError(f"invalid native Recovery payload: {error}") from error
+        else:
+            require(not any(n.startswith(recovery_app.PREFIX) for n in members),
+                    "Recovery app present without native Recovery metadata")
+        required = set(REQUIRED_MEMBERS)
+        if hardware_profile == "neo":
+            required.update(("esp/aurora/stage1-j700.bin", "esp/m1n1/boot-j700.bin"))
+        missing = sorted(required - set(members))
         require(not missing, "missing members: " + ", ".join(missing))
         require("esp/omarchy" in directories, "missing members: esp/omarchy/")
         require(not any(name.startswith("esp/omarchy/") for name in members), "the image carries install.conf")
         require(".builder" not in {PurePosixPath(n).name for n in members}, "the ESP keeps the builder marker")
-        for member in REQUIRED_MEMBERS:
+        for member in required:
             require(members[member].file_size > 0, f"{member} is empty")
         for member, capacity in (("boot.img", BOOT_SIZE), ("root.img", ROOT_SIZE)):
             size = members[member].file_size
@@ -259,6 +285,17 @@ def check_payload(lane: str, package: Path, installer_data: Path, profile: str =
             require(size % 4096 == 0, f"{member} is not a multiple of 4 KiB")
         esp_bytes = sum(info.file_size for member, info in members.items() if member.startswith("esp/"))
         require(esp_bytes <= ESP_SIZE, f"the ESP tree is {esp_bytes} bytes, over its {ESP_SIZE}-byte partition")
+        if hardware_profile == "neo":
+            stage1 = archive.read("esp/aurora/stage1-j700.bin")
+            magic = b"AURORA-S1-CFG01\0"
+            require(stage1.endswith(b"STACKBOT") and stage1.count(magic) == 1,
+                    "Neo Stage 1 is missing its configuration block")
+            offset = stage1.index(magic) + len(magic)
+            require(offset + struct.calcsize("<II40s192s") + 4 <= len(stage1) - 8
+                    and struct.unpack_from("<I", stage1, offset)[0] == 1,
+                    "Neo Stage 1 has an invalid configuration block")
+            require(archive.read("esp/m1n1/boot-j700.bin") == archive.read("esp/m1n1/boot.bin"),
+                    "Neo Stage 2 differs from the common bundle")
 
         keep = {
             "boot.img": 0x488,
@@ -438,7 +475,14 @@ def runtime_providers(candidates: Path | None) -> dict[str, str]:
     if candidates is None:
         return {}
     summary = json.loads((Path(candidates) / "import.json").read_text())
-    return {p["role"]: p["name"] for p in summary["packages"] if p.get("role", p["name"]) != p["name"]}
+    providers = {p["role"]: p["name"] for p in summary["packages"] if p.get("role", p["name"]) != p["name"]}
+    if summary.get("hardware_profile", "legacy") == "neo":
+        providers.update({"m1n1-aurora": "aura", "uboot-asahi": "uboot-aurora"})
+        for name in ("aurora-audio", "alsa-ucm-conf-aurora", "speakerguardd", "omarchy-aurora-firmware"):
+            require(any(p["name"] == name and p["group"] == "support" for p in summary["packages"]),
+                    "Neo support package is missing: " + name)
+            providers[name] = name
+    return providers
 
 
 def check_state(root: Path, providers: dict[str, str] | None = None) -> None:
@@ -453,7 +497,7 @@ def check_state(root: Path, providers: dict[str, str] | None = None) -> None:
         require((root / destination.lstrip("/")).is_file(), f"{destination} is missing")
     packages = installed_packages(root)
     packages |= {role for role, name in (providers or {}).items() if name in packages}
-    missing = sorted(set(IMAGE_PACKAGES) - packages)
+    missing = sorted((set(IMAGE_PACKAGES) | set(providers or {})) - packages)
     require(not missing, f"the image lacks {missing}")
     require(not (root / "var/lib/systemd/random-seed").exists(), "the image keeps a random seed")
     require(not list((root / "etc/ssh").glob("ssh_host_*")) if (root / "etc/ssh").is_dir() else True,
@@ -740,7 +784,14 @@ def check_provenance(lane: str, directory: Path) -> None:
     require(report.get("lab_access_sha256") == fields.get("lab_access_sha256", [None])[0],
             "INSPECTION's lab access digest does not match PROVENANCE")
     check_image_target_record(report, fields, profile, channel)
-    check_payload(lane, payload, installer_data, profile)
+    hardware_profile = fields.get("hardware_profile", ["legacy"])[0]
+    require(report.get("hardware_profile", "legacy") == hardware_profile,
+            "INSPECTION hardware profile does not match PROVENANCE")
+    require(hardware_profile in ("legacy", "neo"), "invalid hardware profile")
+    require(not channel or hardware_profile == fields.get("input.hardware_profile", ["legacy"])[0],
+            "channel hardware profile does not match the pinned inputs")
+    check_payload(lane, payload, installer_data, profile, hardware_profile,
+                  fields.get("input.recovery_app_manifest_sha256", [""])[0])
 
 
 def is_channel(fields: dict[str, list[str]], prefix: str = "") -> bool:
@@ -835,7 +886,19 @@ def check_descriptor(lane: str, directory: Path) -> None:
     payload = payload_in(directory, lane)
     installer_data = directory / "installer_data.json"
     require(installer_data.is_file(), "installer_data.json is not beside IMAGE")
-    digests = check_payload(lane, payload, installer_data, profile)
+    require(provenance_fields.get("hardware_profile", ["legacy"]) == fields.get("hardware_profile", ["legacy"]),
+            "IMAGE hardware profile does not match PROVENANCE")
+    for record, label in ((fields, "IMAGE"), (provenance_fields, "PROVENANCE")):
+        if "hardware_profile" in record:
+            once(record, "hardware_profile", label)
+    require(not channel or fields.get("hardware_profile", ["legacy"]) == input_fields.get("hardware_profile", ["legacy"]),
+            "IMAGE hardware profile does not match the pinned inputs")
+    for key in ("recovery_app_manifest_sha256",):
+        require(fields.get(key) == input_fields.get(key)
+                and provenance_fields.get("input." + key) == input_fields.get(key),
+                f"IMAGE {key} does not match the pinned inputs")
+    digests = check_payload(lane, payload, installer_data, profile, fields.get("hardware_profile", ["legacy"])[0],
+                            input_fields.get("recovery_app_manifest_sha256", [""])[0])
     recorded = {}
     for value in fields.get("image_sha256", []):
         require("|" in value, "IMAGE has a malformed image_sha256")

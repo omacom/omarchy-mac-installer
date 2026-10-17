@@ -65,7 +65,7 @@ TOOLCHAIN=(pacman arch-install-scripts btrfs-progs e2fsprogs dosfstools libarchi
 
 usage() {
   cat <<'USAGE'
-Usage: bin/build-mac-image --inputs FILE [--candidates DIR] [--cache DIR] [--lab-access DIR] [--dry-run] OUT
+Usage: bin/build-mac-image --inputs FILE [--candidates DIR] [--cache DIR] [--lab-access DIR] [--recovery-app DIR] [--dry-run] OUT
 
 Builds the Apple Silicon image for the candidate set in DIR from the inputs
 record FILE (bin/mac-image-inputs resolve) into the empty or missing directory
@@ -77,6 +77,10 @@ public one (the release profile, no test image pin). --cache holds the
 verified root filesystem, databases and package archives between runs, so a
 later build from the same record installs the same bytes. --dry-run checks the
 inputs and the candidate set and prints what would be built.
+
+--recovery-app DIR supplies the native Recovery build directory pinned when
+resolving the inputs. The signed app and its inventory are copied unchanged
+into the ESP payload; the image declares the native Recovery installer flow.
 
 --lab-access DIR builds a lab test image (edge lane only): DIR holds the lab
 controller's public keys (authorized_keys), optionally the lab user (user,
@@ -186,12 +190,14 @@ record_kind() {
 # and archives fetched now: each must be that database's, signed by the Omarchy
 # package key.
 import_channel_set() {
-  local inputs=$1 key field
+  local inputs=$1 key field hardware_profile
   shift
+  hardware_profile=$(record_field hardware_profile "$inputs")
   mkdir "$host_work/channel-packages"
   "$BASH" "$ROOT/bin/mac-image-inputs" packages "$inputs" "$host_work/channel-packages" "$@"
   python3 "$ROOT/builder/channel_set.py" import --db "$host_work/dbs/omarchy.db" \
     --db-sha256 "$(record_field omarchy_db_sha256 "$inputs")" --lane "$(record_field omarchy_channel "$inputs")" \
+    --hardware-profile "${hardware_profile:-legacy}" \
     --packages "$host_work/channel-packages" --output "$host_work/candidates" >"$host_work/import.txt" ||
     fail "the channel set does not verify against the inputs record"
   rm -rf "$host_work/channel-packages"
@@ -204,17 +210,18 @@ import_channel_set() {
 }
 
 host_main() {
-  local inputs="" candidates="" cache="" lab_access="" out commit status clean=true started=$SECONDS dry_run=false
-  local cache_mounts=() lab_mounts=() kind
+  local inputs="" candidates="" cache="" lab_access="" recovery_app="" out commit status clean=true started=$SECONDS dry_run=false
+  local cache_mounts=() lab_mounts=() recovery_mounts=() kind recovery_digest
   while (($#)); do
     case $1 in
-      --inputs|--candidates|--cache|--lab-access)
+      --inputs|--candidates|--cache|--lab-access|--recovery-app)
         (($# > 1)) && [[ -n $2 ]] || usage_error "$1 requires a value"
         case $1 in
           --inputs) inputs=$2 ;;
           --candidates) candidates=$2 ;;
           --cache) cache=$2 ;;
           --lab-access) lab_access=$2 ;;
+          --recovery-app) recovery_app=$2 ;;
         esac
         shift 2
         ;;
@@ -251,6 +258,15 @@ host_main() {
   trap 'stop_build; exit 130' INT
   trap 'stop_build; exit 143' TERM
   trap 'stop_build; exit 129' HUP
+  recovery_digest=$(record_field recovery_app_manifest_sha256 "$inputs")
+  if [[ -n $recovery_digest ]]; then
+    [[ -n $recovery_app ]] || fail "inputs require --recovery-app"
+    python3 "$ROOT/builder/recovery_app.py" "$recovery_app" --sha256 "$recovery_digest" \
+      --output "$host_work/recovery-app" >/dev/null || fail "Recovery app does not match the inputs"
+    recovery_mounts=(-v "$host_work/recovery-app:/recovery-app:ro")
+  else
+    [[ -z $recovery_app ]] || fail "--recovery-app is not pinned in the inputs"
+  fi
   if [[ $kind == channel ]]; then
     # The pinned database first, then the archives it names, verified and
     # frozen before any container.
@@ -311,7 +327,7 @@ host_main() {
   # interruption reaches the traps above at once.
   docker run --rm --cidfile "$host_work/cid" --privileged --platform linux/arm64 \
     -v "$ROOT:/src:ro" -v "$inputs:/inputs:ro" -v "$host_work/candidates:/candidates:ro" \
-    -v "$host_work/dbs:/dbs:ro" -v "$out:/out" -v /work "${cache_mounts[@]}" "${lab_mounts[@]}" \
+    -v "$host_work/dbs:/dbs:ro" -v "$out:/out" -v /work "${cache_mounts[@]}" "${lab_mounts[@]}" "${recovery_mounts[@]}" \
     -e MAC_IMAGE_BUILDER_COMMIT="$commit" \
     -e MAC_IMAGE_BUILDER_CLEAN="$clean" \
     -e MAC_IMAGE_BUILDER_IMAGE="$(docker image inspect --format '{{.Id}}' "$host_image")" \
@@ -772,9 +788,19 @@ runtime_lists() {
 }
 
 qualified() {
-  local name package
+  local name package replacement
   for name in "$@"; do
-    package=$(jq -r --arg name "$name" 'first(.packages[] | select(.name == $name or .role == $name) | .name) // empty' \
+    replacement=$name
+    case $name in
+      m1n1-aurora) replacement=aura ;;
+      uboot-asahi) replacement=uboot-aurora ;;
+      mesa) replacement=mesa-aurora ;;
+      vulkan-asahi) replacement=vulkan-aurora ;;
+      asahi-bless) replacement=aurora-bless ;;
+      asahi-audio) replacement=aurora-audio ;;
+      alsa-ucm-conf-asahi) replacement=alsa-ucm-conf-aurora ;;
+    esac
+    package=$(jq -r --arg name "$name" --arg replacement "$replacement" 'first(.packages[] | select(.name == $replacement or .name == $name or .role == $name) | .name) // empty' \
       "$candidates/import.json")
     if [[ -n $package ]]; then
       printf 'omarchy-candidates/%s\n' "$package"
@@ -788,14 +814,15 @@ qualified() {
 # they lack (an x86-only application) are recorded in PROVENANCE and not
 # installed; a name they carry that does not resolve stops the build.
 available_base() {
-  local name
+  local name request
   base_names=()
   unavailable=()
   local output
   while read -r name; do
-    if output=$(target_pacman -Sp --print-format x "$name" 2>&1); then
-      base_names+=("$name")
-    elif grep -Fq "target not found: $name" <<<"$output"; then
+    request=$(qualified "$name")
+    if output=$(target_pacman -Sp --print-format x "$request" 2>&1); then
+      base_names+=("$request")
+    elif grep -Fq "target not found: $request" <<<"$output"; then
       unavailable+=("$name")
     else
       fail "$name from the runtime's package lists does not resolve: $(tail -n 1 <<<"$output")"
@@ -809,10 +836,17 @@ available_base() {
 # is pulled in, and the set resolves at all.
 precheck_transaction() {
   local resolved refused name
+  # The selected Neo profile requires its complete reviewed support stack.
+  if [[ $(jq -r '.hardware_profile // "legacy"' "$candidates/import.json") == neo ]]; then
+    for name in $(jq -r '.hardware_profiles.neo.support_packages[]' "$ROOT/builder/candidate-trust/policy.json"); do
+      jq -e --arg name "$name" '.packages[] | select(.name == $name and .group == "support")' \
+        "$candidates/import.json" >/dev/null || fail "Neo support package is missing: $name"
+    done
+  fi
   available_base
   resolved=$(target_pacman -Sp --print-format '%r %n %v' "${BOOTSTRAP[@]}" "${PLATFORM_PACKAGES[@]}" \
-    "$(qualified omarchy)" "$(qualified omarchy-settings)" "${base_names[@]}" "${APPLE_AUDIO[@]}" \
-    $(qualified "${apple_names[@]}" $(candidate_names boot)) 2>>"$logs/precheck.log") ||
+    "$(qualified omarchy)" "$(qualified omarchy-settings)" "${base_names[@]}" $(qualified "${APPLE_AUDIO[@]}") \
+    $(qualified "${apple_names[@]}" $(candidate_names boot) $(candidate_names support)) 2>>"$logs/precheck.log") ||
     fail "the package set does not resolve against the pinned databases (logs/precheck.log)"
   printf '%s\n' "$resolved" >"$logs/precheck.log"
   while read -r name; do
@@ -920,8 +954,8 @@ install_runtime() {
 install_apple_set() {
   local installed name version
   mount_api
-  target_pacman -S $(qualified "${apple_names[@]}" $(candidate_names boot)) "${PLATFORM_PACKAGES[@]}" \
-    "${APPLE_AUDIO[@]}" >>"$logs/install.log" 2>&1 || fail "could not install the Apple set (logs/install.log)"
+  target_pacman -S $(qualified "${apple_names[@]}" $(candidate_names boot) $(candidate_names support)) "${PLATFORM_PACKAGES[@]}" \
+    $(qualified "${APPLE_AUDIO[@]}") >>"$logs/install.log" 2>&1 || fail "could not install the Apple set (logs/install.log)"
   unmount_api
   installed=$(pacman --dbpath "$target/var/lib/pacman" -Q)
   while read -r name version; do
@@ -1219,6 +1253,8 @@ configure_image() {
   isolated_chroot "$target" env LC_ALL=C update-m1n1 >"$logs/update-m1n1.log" 2>&1 ||
     fail "update-m1n1 failed (logs/update-m1n1.log)"
   activate_limine
+  stage_neo_boot_payloads
+  stage_recovery_app
   arm_first_boot
   # Recorded once the boot setup, which could change packages, is done.
   record_packages
@@ -1234,6 +1270,30 @@ configure_image() {
   keep_installed_databases
   find "$target/var/cache/pacman/pkg" -mindepth 1 -delete
   probe_first_boot
+}
+
+# Copy the frozen, signed template byte-for-byte. Installation-specific data is
+# written beside it by the installer, never into this distributed app.
+stage_recovery_app() {
+  local digest destination="$target/boot/efi/aurora/recovery"
+  digest=$(field recovery_app_manifest_sha256)
+  [[ -n $digest ]] || return 0
+  mkdir -p "$(dirname "$destination")"
+  python3 "$ROOT/builder/recovery_app.py" /recovery-app --sha256 "$digest" --output "$destination" >/dev/null ||
+    fail "could not stage the pinned Recovery app"
+}
+
+# Board payloads come from the same authenticated Aura package as Stage 2.
+# Keep the established board-specific engine contract until common-image
+# qualification is recorded; do not claim qualification for other Macs.
+stage_neo_boot_payloads() {
+  [[ $(jq -r '.hardware_profile // "legacy"' "$candidates/import.json") == neo ]] || return 0
+  local stage1="$target/usr/share/aura/stage1/aura-raw.bin"
+  local stage2="$target/boot/efi/m1n1/boot.bin"
+  [[ -s $stage1 && ! -L $stage1 && -s $stage2 && ! -L $stage2 ]] ||
+    fail "the Neo image lacks matched Aura Stage 1 and Stage 2 payloads"
+  install -Dm644 "$stage1" "$target/boot/efi/aurora/stage1-j700.bin"
+  install -Dm644 "$stage2" "$target/boot/efi/m1n1/boot-j700.bin"
 }
 
 # Repository names in pacman configuration FILE, in its order.
@@ -1492,17 +1552,26 @@ payload_name() {
 }
 
 write_installer_data() {
+  local hardware_profile
+  hardware_profile=$(jq -r '.hardware_profile // "legacy"' "$candidates/import.json")
+  local firmware=("${SUPPORTED_FW[@]}")
+  [[ $hardware_profile != neo ]] || firmware=(26.6.2)
   jq -S -n --arg package "$1" --argjson esp "$ESP_SIZE" --argjson boot "$BOOT_SIZE" --argjson root "$ROOT_SIZE" \
-    --arg volume_id "$ESP_VOLUME_ID" --args '{os_list: [{
+    --arg volume_id "$ESP_VOLUME_ID" \
+    --arg recovery_app_manifest "$(field recovery_app_manifest_sha256)" \
+    --arg hardware_profile "$hardware_profile" --args '{os_list: [{
       name: "Omarchy MX Mac", default_os_name: "Omarchy", omarchy_target: "apple-silicon-full-os",
       boot_object: "m1n1.bin", next_object: "m1n1/boot.bin", package: $package, icon: "omarchy-volume.icns",
       supported_fw: $ARGS.positional,
+      allowed_device_classes: (if $hardware_profile == "neo" then ["j700ap"] else null end),
+      excluded_device_classes: (if $hardware_profile == "legacy" then ["j700ap"] else [] end),
       partitions: [
         {name: "EFI", type: "EFI", size: "\($esp)B", format: "fat", volume_id: $volume_id,
           copy_firmware: true, copy_installer_data: true, source: "esp"},
         {name: "Boot", type: "Linux", size: "\($boot)B", image: "boot.img"},
-        {name: "Root", type: "Linux", size: "\($root)B", expand: true, image: "root.img"}]}]}' \
-    "${SUPPORTED_FW[@]}" >"$2"
+        {name: "Root", type: "Linux", size: "\($root)B", expand: true, image: "root.img"}]}
+      + (if $recovery_app_manifest != "" then {recovery_gui: "omarchy-native-v1"} else {} end)]}' \
+    "${firmware[@]}" >"$2"
 }
 
 # The key a reproduced build must match: every installed package's name,
@@ -1530,6 +1599,7 @@ write_provenance() {
       "$candidates/import.json"
     printf 'hardware_setup=%s\n' "$hardware_setup"
     printf 'test_image_pin=%s\n' "$test_image_pin"
+    printf 'hardware_profile=%s\n' "$(jq -r '.hardware_profile // "legacy"' "$candidates/import.json")"
     [[ $profile == release ]] || printf 'profile=%s\nlab_access_sha256=%s\n' "$profile" "$lab_access_sha256"
     while read -r name; do
       [[ -z $name ]] || printf 'unavailable=%s\n' "$name"
@@ -1560,6 +1630,9 @@ image_inputs() {
     echo candidate_set candidate_source_commit candidate_signer candidate_receipt_sha256 \
       candidate_manifest_sha256 omarchy_channel
   fi
+  if [[ -n $(field recovery_app_manifest_sha256) ]]; then
+    echo recovery_app_manifest_sha256
+  fi
 }
 
 # IMAGE, on standard output.
@@ -1574,6 +1647,7 @@ write_image() {
     done
     printf 'hardware_setup=%s\n' "$hardware_setup"
     printf 'test_image_pin=%s\n' "$test_image_pin"
+    printf 'hardware_profile=%s\n' "$(jq -r '.hardware_profile // "legacy"' "$candidates/import.json")"
     [[ $profile == release ]] || printf 'profile=%s\nlab_access_sha256=%s\n' "$profile" "$lab_access_sha256"
     printf 'package_set_sha256=%s\n' "$package_set_digest"
     printf 'built=%s\n' "$built"

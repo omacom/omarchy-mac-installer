@@ -26,10 +26,17 @@ The Application Support line also frees any image the old app downloaded. A Mac 
 | `Sources/`, `Tests/`, `Package.swift` | Swift macOS app, trust core, helper, simulation and tests |
 | `Engine/` | Pinned Asahi source lock, Python overlay, build tooling and tests |
 | `Packaging/` | App and macOS package assembly |
+| [`Recovery/`](Recovery/README.md) | Omarchy Step 2 GUI preview, standalone macOS 13 target and app packaging |
 | `Release/` | Inherited public trust root and release descriptor |
 | `scripts/` | Catalog and release tools, with fixture tests |
 | `test/` | Portable aggregate runner and extracted packaging tests |
 | `evidence/` | Recorded journal fixture required by the Swift tests and preview |
+
+## Apple restore inputs
+
+Firmware preparation needs HTTPS access to Apple's restore-image CDN (`updates.cdn-apple.com`) and, for AEA-encrypted inputs, Apple's public release-key service (`wkms-public.apple.com` or `fcs-keys-pub-prod.cdn-apple.com`). An offline Linux image bundle does not remove that Apple-input dependency. The helper requests only the admitted FCS key URL from the archive metadata; it sends no installation credentials. Range extraction checks the recipe, response extent, ciphertext authentication and resulting file hashes before publishing any firmware.
+
+The helper is built from the [Swift source in this repository](Engine/RestoreImage/README.md), ported from Eryk Wieliczko's MIT implementation. Its recorded source hashes, toolchain, two-build comparison and binary digest are checked alongside the engine source lock. The helper requires macOS 14 or newer; the installer app already requires macOS 15 or newer.
 
 ## Supported Macs
 

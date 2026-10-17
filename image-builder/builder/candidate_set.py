@@ -152,6 +152,29 @@ def load_policy(trust=TRUST):
     return policy
 
 
+def hardware_policy(policy, profile='legacy'):
+    """Only trusted policy defines package requirements; signed manifests select them.
+
+    Channel images retain the qualified legacy boot chain. Neo candidates opt in
+    explicitly and cannot silently switch the boot chain of other Macs.
+    """
+    require(profile in ('legacy', 'neo'), 'unknown hardware profile')
+    if profile == 'legacy':
+        return policy
+    require(profile in policy.get('hardware_profiles', {}), 'hardware profile is not configured')
+    return dict(policy, **policy['hardware_profiles'][profile])
+
+
+def required_owners(profile='legacy'):
+    require(profile in ('legacy', 'neo'), 'unknown hardware profile')
+    owners = dict(REQUIRED_OWNERS)
+    if profile == 'neo':
+        owners['usr/lib/asahi-boot/m1n1.bin'] = 'aura'
+        owners['usr/share/aura/stage1/aura-raw.bin'] = 'aura'
+        owners['usr/lib/asahi-boot/u-boot-nodtb.bin'] = 'uboot-aurora'
+    return owners
+
+
 def set_digest(manifest):
     lines = sorted((f"{p['name']} {p['version']} {p['filename']} {p['sha256']}\n" for p in manifest['packages']),
                    key=lambda line: line.encode())
@@ -217,20 +240,25 @@ def from_channel(origin, filename):
             and origin.get('channel') == f'omacom {match[1]} aarch64' and 'commit' not in origin)
 
 
-def verify_payloads(payloads):
+def verify_payloads(payloads, profile='legacy'):
     """Every file has one owner, and each boot payload the image needs its expected one."""
     owners = {}
     for name, paths in sorted(payloads.items()):
         for path in paths:
             require(path not in owners, f'candidate payload ownership conflict: {path} ({owners.get(path)}, {name})')
             owners[path] = name
-    for path, owner in REQUIRED_OWNERS.items():
+    for path, owner in required_owners(profile).items():
         require(owners.get(path) == owner, f'{path} is not in {owner}')
     kernels = [p for p in payloads.get('linux-aurora', ()) if PurePosixPath(p).match('usr/lib/modules/*/vmlinuz')]
     require(len(kernels) == 1, 'linux-aurora does not carry one kernel')
     release = PurePosixPath(kernels[0]).parts[3]
     dtbs = [p for p in payloads['linux-aurora'] if PurePosixPath(p).match(f'usr/lib/modules/{release}/dtbs/*.dtb')]
     require(dtbs, 'linux-aurora carries no device trees')
+    if profile == 'neo':
+        require(any(PurePosixPath(path).name == 't8140-j700.dtb' for path in dtbs),
+                'Neo profile requires the J700 kernel device tree')
+        require('usr/lib/asahi-boot/dtb/t8140-j700.dtb' in payloads.get('uboot-aurora', ()),
+                'Neo profile requires the J700 U-Boot device tree')
     require(not any('omarchy-arm-repository.key' in path for path in owners), 'a fork repository key is in the set')
     return owners
 
@@ -241,7 +269,6 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
     require(HEX40.fullmatch(source_commit) is not None, 'invalid source commit')
     require(root.is_dir() and not root.is_symlink(), 'unsafe input directory')
     policy = load_policy(trust)
-    runtime, boot = set(policy['runtime_packages']), set(policy['boot_packages'])
     destination.mkdir(mode=0o700)  # Exclusive: a failed import is never reused.
     for name in ('signing.json', 'signing.json.sig', 'manifest.json'):
         copy_file(root, name, destination)
@@ -266,12 +293,16 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
                 and source.get('repository') in policy['source_repositories']
                 and source.get('commit') == source_commit, 'wrong build manifest')
         require(data.get('set_sha256') == set_digest(data) == receipt.get('set_sha256'), 'set digest mismatch')
+        profile = data.get('hardware_profile', 'legacy')
+        policy = hardware_policy(policy, profile)
+        runtime, boot = set(policy['runtime_packages']), set(policy['boot_packages'])
+        support = set(policy.get('support_packages', []))
         packages = data['packages']
         names = [p['name'] for p in packages]
         require(len(set(names)) == len(names), 'duplicate package in the set')
         require(not set(names) & set(policy['refused_packages']), 'refused package in the set')
-        require(runtime | boot <= set(names), 'wrong package set: missing '
-                + ', '.join(sorted(runtime | boot - set(names))))
+        require(runtime | boot | support <= set(names), 'wrong package set: missing '
+                + ', '.join(sorted((runtime | boot | support) - set(names))))
         declared = data.get('platform_sources', {})
         require(isinstance(declared, dict), 'invalid platform sources')
         for name, commit in declared.items():
@@ -316,7 +347,7 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
                             and HEX40.fullmatch(revision) is not None, 'mixed package sources: ' + name)
                     origins[name] = 'channel ' + revision
                 commits[name] = revision
-            elif name in boot:
+            elif name in boot | support:
                 require((origin.get('repository') == policy['boot_repository']
                          and HEX40.fullmatch(origin.get('commit', '')) is not None) or from_channel(origin, filename),
                         'unknown boot package source: ' + name)
@@ -330,7 +361,7 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
             versions[name] = package['version']
             payloads[name] = payload_paths(path)
             fields_of[name] = fields
-        verify_payloads(payloads)
+        verify_payloads(payloads, profile)
         require(versions['omarchy'] == versions['omarchy-settings'], 'mixed desktop versions')
         settings_pin = 'omarchy-settings=' + versions['omarchy-settings'].rsplit('-', 1)[0]
         require(settings_pin in fields_of['omarchy'].get('depend', []), 'missing settings version pin')
@@ -343,6 +374,7 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
                 'the Apple package list lacks the add-on or boot package')
     summary = {
         'schema': 1,
+        'hardware_profile': profile,
         'set': data['set'],
         'candidate_only': data['candidate_only'] is True,
         'source_commit': source_commit,
@@ -351,7 +383,7 @@ def snapshot(root, destination, receipt_sha256, source_commit, manifest_sha256=N
         'manifest_sha256': receipt['manifest_sha256'],
         'set_sha256': data['set_sha256'],
         'packages': [{'name': p['name'], 'version': p['version'], 'filename': p['filename'], 'sha256': p['sha256'],
-                      'group': 'runtime' if p['name'] in runtime else 'boot' if p['name'] in boot else 'closure',
+                      'group': 'runtime' if p['name'] in runtime else 'boot' if p['name'] in boot else 'support' if p['name'] in support else 'closure',
                       'origin': origins[p['name']],
                       **({'source_commit': commits[p['name']]} if p['name'] in runtime else {})} for p in packages],
     }

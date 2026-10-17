@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -100,7 +101,7 @@ def patched_paths(patch: str) -> set[str]:
     return set(re.findall(r"^diff --git a/(\S+) b/\S+$", patch, re.MULTILINE))
 
 
-def require_upstream_delta(delta: dict, patch: str) -> None:
+def require_upstream_delta(delta: dict, patch: str, base_patch: str) -> None:
     required = {
         "path",
         "downstream_patched",
@@ -116,6 +117,7 @@ def require_upstream_delta(delta: dict, patch: str) -> None:
     if not isinstance(delta["files"], list) or not delta["files"]:
         raise ValueError("invalid upstream delta lock record")
     patched = patched_paths(patch)
+    base_patched = patched_paths(base_patch)
     seen = set()
     for record in delta["files"]:
         if (
@@ -144,6 +146,8 @@ def require_upstream_delta(delta: dict, patch: str) -> None:
             raise ValueError(
                 "downstream patch coverage differs from source lock: " + path
             )
+        if record["downstream_patched"] and path not in base_patched:
+            raise ValueError("base patch coverage differs from source lock: " + path)
         if not record["downstream_patched"] and (
             record["base_sha256"] != record["upstream_base_sha256"]
             or record["sha256"] != record["upstream_sha256"]
@@ -200,6 +204,21 @@ def verify_upstream(engine_root: Path, lock: dict, checkout: Path) -> None:
     )
 
 
+def require_restore_image(engine_root: Path) -> None:
+    identity = json.loads((engine_root / 'source-lock.json').read_text()).get('restore_image_source', {})
+    if (set(identity) != {'repository', 'commit', 'path', 'build_record'}
+            or identity['repository'] != 'https://github.com/aurora-silicon/omarchy-mac'
+            or not COMMIT.fullmatch(identity['commit'])
+            or identity['path'] != 'Engine/RestoreImage'
+            or identity['build_record'] != 'RestoreImage/build-record.json'):
+        raise ValueError('invalid Swift restore-image source identity')
+    spec = importlib.util.spec_from_file_location(
+        'restore_image_provenance', engine_root / 'verify-restore-image.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.verify(engine_root)
+
+
 def verify(engine_root: Path, checkout: Path) -> None:
     lock = json.loads(
         (engine_root / "source-lock.json").read_text(encoding="utf-8")
@@ -209,6 +228,7 @@ def verify(engine_root: Path, checkout: Path) -> None:
     if lock.get("source_acquisition") != "verified-git-object-graph":
         raise ValueError("source lock must require verified Git objects")
     require_validation_artifact(lock.get("validation_artifact", {}))
+    require_restore_image(engine_root)
     verify_upstream(engine_root, lock, checkout)
 
     overlay = lock["downstream_overlay"]
@@ -226,9 +246,12 @@ def verify(engine_root: Path, checkout: Path) -> None:
             raise ValueError("overlay destination is invalid")
     for item in lock["build_recipe"]:
         require_digest(engine_root, item, "build recipe")
+    base_patch = lock["incremental_build"]["base_patch"]
+    require_digest(engine_root, base_patch, "base patch")
     require_upstream_delta(
         lock["incremental_build"]["upstream_delta"],
         (engine_root / overlay["patch"]["path"]).read_text(encoding="utf-8"),
+        (engine_root / base_patch["path"]).read_text(encoding="utf-8"),
     )
 
 

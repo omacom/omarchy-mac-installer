@@ -64,19 +64,26 @@ pass "only the set and the empty [omarchy-aarch64] come from disk; the rest from
 candidates=$scratch/candidates
 mkdir -p "$candidates"
 cat >"$candidates/import.json" <<'EOF'
-{"packages": [
+{"hardware_profile": "neo", "packages": [
   {"name": "omarchy", "version": "4.0.0-1", "filename": "omarchy-4.0.0-1-aarch64.pkg.tar.xz", "group": "runtime"},
   {"name": "omarchy-settings", "version": "4.0.0-1", "filename": "s.pkg.tar.xz", "group": "runtime"},
   {"name": "omarchy-mac", "version": "0.1.0-1", "filename": "m.pkg.tar.xz", "group": "runtime"},
   {"name": "omarchy-mac-boot", "version": "20260921-10", "filename": "b.pkg.tar.xz", "group": "runtime"},
   {"name": "linux-aurora", "version": "7.0-1", "filename": "k.pkg.tar.zst", "group": "boot"},
-  {"name": "m1n1-aurora", "version": "1.6.1-1", "filename": "n.pkg.tar.zst", "group": "boot"},
-  {"name": "uboot-asahi", "version": "2026.07-1", "filename": "u.pkg.tar.zst", "group": "boot"}
+  {"name": "aura", "version": "1.6.1-1", "filename": "n.pkg.tar.zst", "group": "boot"},
+  {"name": "uboot-aurora", "version": "2026.07-1", "filename": "u.pkg.tar.zst", "group": "boot"},
+  {"name": "aurora-audio", "version": "4.1.aurora2-1", "filename": "audio.pkg.tar.zst", "group": "support"},
+  {"name": "alsa-ucm-conf-aurora", "version": "10.aurora2-1", "filename": "ucm.pkg.tar.zst", "group": "support"},
+  {"name": "speakerguardd", "version": "0.1.0.aurora2-1", "filename": "guard.pkg.tar.zst", "group": "support"},
+  {"name": "omarchy-aurora-firmware", "version": "20261014-2", "filename": "fw.pkg.tar.zst", "group": "support"},
+  {"name": "mesa-aurora", "version": "26.3-1", "filename": "mesa.pkg.tar.zst", "group": "support"},
+  {"name": "vulkan-aurora", "version": "26.3-1", "filename": "vulkan.pkg.tar.zst", "group": "support"},
+  {"name": "aurora-bless", "version": "0.4-1", "filename": "bless.pkg.tar.zst", "group": "support"}
 ]}
 EOF
-[[ $(qualified uboot-asahi limine gum | paste -sd' ' -) == "omarchy-candidates/uboot-asahi limine gum" ]] ||
+[[ $(qualified uboot-aurora limine gum | paste -sd' ' -) == "omarchy-candidates/uboot-aurora limine gum" ]] ||
   fail "set packages are installed by their repository-qualified name"
-pass "a plain uboot-asahi request cannot resolve to asahi-alarm: set packages are qualified"
+pass "a plain uboot-aurora request cannot resolve to asahi-alarm: set packages are qualified"
 
 # What omarchy-pkg-defaults composes before the Apple list: base, then aarch64 when the runtime ships it.
 mkdir -p "$scratch/runtime/usr/share/omarchy/install"
@@ -205,9 +212,9 @@ target_pacman() {
     return
   fi
   printf '%s\n' "$@" >"$scratch/requested"
-  for name in omarchy omarchy-settings omarchy-mac omarchy-mac-boot linux-aurora m1n1-aurora uboot-asahi; do
-    if [[ $resolution == stolen && $name == uboot-asahi ]]; then
-      echo "asahi-alarm uboot-asahi 2026.07.asahi1-1"
+  for name in omarchy omarchy-settings omarchy-mac omarchy-mac-boot linux-aurora aura uboot-aurora aurora-audio alsa-ucm-conf-aurora speakerguardd omarchy-aurora-firmware mesa-aurora vulkan-aurora aurora-bless; do
+    if [[ $resolution == stolen && $name == uboot-aurora ]]; then
+      echo "asahi-alarm uboot-aurora 2026.07.asahi1-1"
     else
       echo "omarchy-candidates $name 1-1"
     fi
@@ -218,16 +225,27 @@ target_pacman() {
 logs=$scratch/logs
 mkdir -p "$logs"
 (fail() { builder_fail "$@"; }; precheck_transaction) >/dev/null || fail "a set that resolves from itself passes the pre-check"
+cp "$candidates/import.json" "$scratch/complete-support.json"
+for required_support in aurora-audio alsa-ucm-conf-aurora speakerguardd omarchy-aurora-firmware mesa-aurora vulkan-aurora aurora-bless; do
+  jq --arg name "$required_support" '.packages |= map(select(.name != $name))' \
+    "$scratch/complete-support.json" >"$candidates/import.json"
+  if (fail() { builder_fail "$@"; }; precheck_transaction) >/dev/null 2>&1; then
+    fail "Neo image accepted missing $required_support"
+  fi
+done
+cp "$scratch/complete-support.json" "$candidates/import.json"
+pass "Neo images reject incomplete support packages before transactions"
+
 (fail() { builder_fail "$@"; }; precheck_transaction; printf '%s\n' "${base_names[@]}" >"$scratch/base"; printf '%s\n' "${unavailable[@]}" >"$scratch/missing") >/dev/null
 [[ $(<"$scratch/base") == hyprland && $(<"$scratch/missing") == obs-studio ]] ||
   fail "base names the pinned repositories lack are left out and recorded"
-for name in omarchy omarchy-settings omarchy-mac omarchy-mac-boot linux-aurora m1n1-aurora uboot-asahi; do
+for name in omarchy omarchy-settings omarchy-mac omarchy-mac-boot linux-aurora aura uboot-aurora aurora-audio alsa-ucm-conf-aurora speakerguardd omarchy-aurora-firmware mesa-aurora vulkan-aurora aurora-bless; do
   grep -Fxq "omarchy-candidates/$name" "$scratch/requested" || fail "the pre-check resolves $name by its qualified name"
   ! grep -Fxq "$name" "$scratch/requested" || fail "the pre-check also asks for a plain $name"
 done
 grep -Fxq hyprland "$scratch/requested" && ! grep -Fxq obs-studio "$scratch/requested" ||
   fail "the pre-check resolves the base names the repositories carry, and only those"
-grep -Fxq alsa-ucm-conf-asahi "$scratch/requested" && grep -Fxq asahi-audio "$scratch/requested" ||
+grep -Fxq omarchy-candidates/alsa-ucm-conf-aurora "$scratch/requested" && grep -Fxq omarchy-candidates/aurora-audio "$scratch/requested" ||
   fail "the pre-check resolves the speaker stack's profiles and DSP chain"
 pass "the pre-check passes a set that resolves from itself and records base names the repositories lack"
 runtime_list() {
@@ -261,7 +279,7 @@ mkdir -p "$target"
 mount_api() { :; }
 unmount_api() { :; }
 chown() { :; }
-pacman() { printf 'omarchy 4.0.0-1\nomarchy-settings 4.0.0-1\nomarchy-mac 0.1.0-1\nomarchy-mac-boot 20260921-10\nlinux-aurora 7.0-1\nm1n1-aurora 1.6.1-1\nuboot-asahi 2026.07-1\n'; }
+pacman() { printf 'omarchy 4.0.0-1\nomarchy-settings 4.0.0-1\nomarchy-mac 0.1.0-1\nomarchy-mac-boot 20260921-10\nlinux-aurora 7.0-1\naura 1.6.1-1\nuboot-aurora 2026.07-1\naurora-audio 4.1.aurora2-1\nalsa-ucm-conf-aurora 10.aurora2-1\nspeakerguardd 0.1.0.aurora2-1\nomarchy-aurora-firmware 20261014-2\nmesa-aurora 26.3-1\nvulkan-aurora 26.3-1\naurora-bless 0.4-1\n'; }
 target_pacman() {
   [[ -e $target/var/lib/omarchy/image/target ]] && manifest=yes || manifest=no
   printf '%s manifest=%s\n' "$*" "$manifest" >>"$scratch/transactions"
@@ -276,11 +294,11 @@ mapfile -t transactions <"$scratch/transactions"
   fail "the first transaction is the base and omarchy-settings alone, before the manifest: ${transactions[0]}"
 [[ ${transactions[1]} == "-S omarchy-candidates/omarchy hyprland manifest=yes" ]] ||
   fail "the runtime comes next, after the manifest: ${transactions[1]}"
-for name in omarchy-mac omarchy-mac-boot linux-aurora m1n1-aurora uboot-asahi; do
+for name in omarchy-mac omarchy-mac-boot linux-aurora aura uboot-aurora; do
   [[ " ${transactions[2]} " == *" omarchy-candidates/$name "* ]] || fail "the Apple set installs $name by its qualified name"
 done
-[[ " ${transactions[2]} " == *" alsa-ucm-conf-asahi asahi-audio "* ]] ||
-  fail "the Apple set installs alsa-ucm-conf-asahi and asahi-audio: ${transactions[2]}"
+[[ " ${transactions[2]} " == *" omarchy-candidates/alsa-ucm-conf-aurora omarchy-candidates/aurora-audio "* ]] ||
+  fail "the Apple set installs canonical Aurora profiles and audio: ${transactions[2]}"
 pass "omarchy-settings installs alone, then the manifest, the runtime and the Apple set, set packages by qualified name"
 pass "the Apple set carries the speaker stack's model profiles and DSP chain"
 
@@ -694,7 +712,7 @@ cat >"$channel/candidates/import.json" <<'EOF2'
   {"name": "omarchy-dev", "role": "omarchy", "version": "4.0.0.r6971.g492b883-1", "filename": "d.pkg.tar.zst", "group": "runtime"},
   {"name": "omarchy-settings-dev", "role": "omarchy-settings", "version": "4.0.0.r6971.g492b883-1", "filename": "s.pkg.tar.zst", "group": "runtime"},
   {"name": "omarchy-mac", "role": "omarchy-mac", "version": "0.1.4-1", "filename": "m.pkg.tar.zst", "group": "runtime", "source_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-  {"name": "uboot-asahi", "version": "2026.07-1", "filename": "u.pkg.tar.zst", "group": "boot"}
+  {"name": "uboot-aurora", "version": "2026.07-1", "filename": "u.pkg.tar.zst", "group": "boot"}
 ]}
 EOF2
 (
@@ -705,8 +723,8 @@ EOF2
   [[ $(record_kind "$channel/inputs") == channel && $(record_kind "$scratch/inputs") == candidate ]] ||
     fail "a record with channel_set names a channel set, any other a candidate set"
   [[ $(set_kind) == channel && $(set_name) == "omarchy-edge-${db_sha:0:12}" ]] || fail "the container reads the channel set's name"
-  [[ $(qualified omarchy omarchy-settings omarchy-mac uboot-asahi gum | paste -sd' ' -) == \
-    "omarchy-candidates/omarchy-dev omarchy-candidates/omarchy-settings-dev omarchy-candidates/omarchy-mac omarchy-candidates/uboot-asahi gum" ]] ||
+  [[ $(qualified omarchy omarchy-settings omarchy-mac uboot-aurora gum | paste -sd' ' -) == \
+    "omarchy-candidates/omarchy-dev omarchy-candidates/omarchy-settings-dev omarchy-candidates/omarchy-mac omarchy-candidates/uboot-aurora gum" ]] ||
     fail "a runtime role installs the channel package that fills it: $(qualified omarchy omarchy-settings | paste -sd' ' -)"
   [[ $(candidate_archive omarchy) == d.pkg.tar.zst && $(candidate_archive omarchy-dev) == d.pkg.tar.zst ]] ||
     fail "the runtime's lists are read from the package that fills the omarchy role"
@@ -851,3 +869,38 @@ if command -v pacman >/dev/null 2>&1; then
 else
   echo "skip - pacman resolution of the repository order (no pacman on this host)"
 fi
+
+# Neo stages a matched, authenticated board contract; legacy images keep theirs.
+(
+  candidates=$scratch/neo-boot-inputs
+  target=$scratch/neo-boot-target
+  mkdir -p "$candidates" "$target/usr/share/aura/stage1" "$target/boot/efi/m1n1"
+  echo '{"hardware_profile":"neo"}' >"$candidates/import.json"
+  printf 'authenticated raw Stage 1' >"$target/usr/share/aura/stage1/aura-raw.bin"
+  printf 'assembled Stage 2' >"$target/boot/efi/m1n1/boot.bin"
+  stage_neo_boot_payloads
+  cmp "$target/usr/share/aura/stage1/aura-raw.bin" "$target/boot/efi/aurora/stage1-j700.bin" || exit 1
+  cmp "$target/boot/efi/m1n1/boot.bin" "$target/boot/efi/m1n1/boot-j700.bin" || exit 1
+  rm "$target/usr/share/aura/stage1/aura-raw.bin"
+  if (fail() { builder_fail "$@"; }; stage_neo_boot_payloads) >/dev/null 2>&1; then
+    exit 1
+  fi
+  rm "$target/boot/efi/aurora/stage1-j700.bin" "$target/boot/efi/m1n1/boot-j700.bin"
+  echo '{"hardware_profile":"legacy"}' >"$candidates/import.json"
+  stage_neo_boot_payloads
+  [[ ! -e $target/boot/efi/aurora/stage1-j700.bin && ! -e $target/boot/efi/m1n1/boot-j700.bin ]]
+) || fail "Neo boot payloads are missing, mismatched, or staged for a legacy image"
+pass "Neo stages matched board payloads and rejects missing Aura Stage 1; legacy stages none"
+
+# Neo's base runtime requests must resolve to the same reviewed stack as Apple requests.
+(
+  candidates=$scratch/neo-runtime-inputs
+  mkdir -p "$candidates"
+  printf '%s\n' '{"packages":[{"name":"mesa-aurora"},{"name":"vulkan-aurora"},{"name":"aurora-bless"}]}' >"$candidates/import.json"
+  [[ $(qualified mesa vulkan-asahi asahi-bless | paste -sd' ' -) == "omarchy-candidates/mesa-aurora omarchy-candidates/vulkan-aurora omarchy-candidates/aurora-bless" ]] || exit 1
+  runtime_lists() { printf '%s\n' mesa; }
+  target_pacman() { [[ $* == "-Sp --print-format x omarchy-candidates/mesa-aurora" ]]; }
+  available_base
+  [[ ${base_names[*]} == "omarchy-candidates/mesa-aurora" ]]
+) || fail "Neo base package request bypasses the reviewed Mesa archive"
+pass "Neo base and Apple runtime requests use the reviewed Mesa, Vulkan and bless packages"

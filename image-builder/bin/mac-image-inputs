@@ -20,7 +20,7 @@ DEFAULT_ALARM_SERVER='https://ca.us.mirror.archlinuxarm.org/$arch/$repo'
 
 usage() {
   cat <<'USAGE'
-Usage: bin/mac-image-inputs resolve FILE (--candidates DIR | --channel-set) [--channel edge|rc|stable]
+Usage: bin/mac-image-inputs resolve FILE (--candidates DIR | --channel-set) [--channel edge|rc|stable] [--hardware-profile legacy|neo] [--recovery-app DIR]
          [--omarchy-server URL] [--asahi-alarm-server URL] [--alarm-server URL] [--cache DIR]
        bin/mac-image-inputs check FILE
        bin/mac-image-inputs rootfs FILE DEST [--cache DIR]
@@ -38,6 +38,9 @@ Usage: bin/mac-image-inputs resolve FILE (--candidates DIR | --channel-set) [--c
               policy's channel runtime and boot packages, each archive checked
               against that database and the Omarchy package key
               (builder/channel_set.py); the record names it channel_set=.
+              --hardware-profile neo selects Neo boot/support packages; legacy
+              remains the default. --recovery-app DIR pins the native Recovery
+              build inventory; supply that directory again to build-mac-image.
   check       FILE is a canonical record; prints it
   rootfs      put the record's root filesystem at DEST after checking its
               signature and recorded sha256
@@ -81,11 +84,13 @@ record_body() {
   if [[ -n ${channel_set:-} ]]; then
     printf 'channel_set=%s\nchannel_signer=%s\nchannel_manifest_sha256=%s\n' \
       "$channel_set" "$channel_signer" "$channel_manifest"
+    [[ ${hardware_profile:-legacy} == legacy ]] || printf 'hardware_profile=%s\n' "$hardware_profile"
   else
     printf 'candidate_set=%s\ncandidate_source_commit=%s\ncandidate_signer=%s\n' \
       "$candidate_set" "$candidate_source_commit" "$candidate_signer"
     printf 'candidate_receipt_sha256=%s\ncandidate_manifest_sha256=%s\n' "$candidate_receipt" "$candidate_manifest"
   fi
+  [[ -z ${recovery_app_manifest:-} ]] || printf 'recovery_app_manifest_sha256=%s\n' "$recovery_app_manifest"
   printf 'omarchy_channel=%s\nomarchy_server=%s\nomarchy_db_sha256=%s\n' "$omarchy_channel" "$omarchy_server" "$omarchy_db"
   printf 'asahi_alarm_server=%s\nasahi_alarm_db_sha256=%s\n' "$asahi_alarm_server" "$asahi_alarm_db"
   printf 'alarm_server=%s\n' "$alarm_server"
@@ -123,6 +128,8 @@ load_record() {
       channel_set) channel_set=$value ;;
       channel_signer) channel_signer=$value ;;
       channel_manifest_sha256) channel_manifest=$value ;;
+      hardware_profile) hardware_profile=$value ;;
+      recovery_app_manifest_sha256) recovery_app_manifest=$value ;;
       omarchy_channel) omarchy_channel=$value ;;
       omarchy_server) omarchy_server=$value ;;
       omarchy_db_sha256) omarchy_db=$value ;;
@@ -139,6 +146,9 @@ load_record() {
   done <"$file"
   [[ ${resolved_at:-} =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ &&
     ${omarchy_channel:-} =~ ^(edge|rc|stable)$ && ${omarchy_db:-} =~ $hex ]] || fail "$file is not an inputs record"
+  [[ ${hardware_profile:-legacy} == legacy || ${hardware_profile:-legacy} == neo ]] || fail "invalid hardware profile"
+  [[ -n ${channel_set:-} || ${hardware_profile:-legacy} == legacy ]] || fail "hardware profile belongs to channel inputs"
+  [[ -z ${recovery_app_manifest:-} || $recovery_app_manifest =~ $hex ]] || fail "invalid Recovery app digest"
   # Either a candidate set or a channel set, never parts of both. A channel set
   # is named for its channel and the database it was resolved from.
   if [[ -n ${channel_set:-} ]]; then
@@ -209,7 +219,7 @@ fetch_rootfs() {
 fetch_channel_packages() {
   local db=$1 dest=$2 server=${omarchy_server//\$arch/aarch64} filename name filenames
   server=${server//\$repo/omarchy}
-  filenames=$(python3 "$ROOT/builder/channel_set.py" files --db "$db" --lane "$omarchy_channel") ||
+  filenames=$(python3 "$ROOT/builder/channel_set.py" files --db "$db" --lane "$omarchy_channel" --hardware-profile "${hardware_profile:-legacy}") ||
     fail "the channel database names no set"
   while read -r filename; do
     for name in "$filename" "$filename.sig"; do
@@ -229,6 +239,9 @@ fetch_channel_packages() {
 resolve() {
   local file=$1 described repository sha
   resolved_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  if [[ -n $recovery_app ]]; then
+    recovery_app_manifest=$(python3 "$ROOT/builder/recovery_app.py" "$recovery_app") || fail "invalid Recovery app input"
+  fi
   if [[ -z $channel_mode ]]; then
     described=$(python3 "$ROOT/builder/candidate_set.py" describe --input "$candidates") ||
       fail "the candidate set in $candidates does not verify"
@@ -246,7 +259,7 @@ resolve() {
     mkdir "$work/packages"
     fetch_channel_packages "$work/db/omarchy.db" "$work/packages"
     described=$(python3 "$ROOT/builder/channel_set.py" describe --db "$work/db/omarchy.db" --lane "$omarchy_channel" \
-      --packages "$work/packages") || fail "the channel set in omarchy.db does not verify"
+      --packages "$work/packages" --hardware-profile "${hardware_profile:-legacy}") || fail "the channel set in omarchy.db does not verify"
     channel_set=$(sed -n 's/^set=//p' <<<"$described")
     channel_signer=$(sed -n 's/^signer=//p' <<<"$described")
     channel_manifest=$(sed -n 's/^manifest_sha256=//p' <<<"$described")
@@ -289,15 +302,21 @@ esac
 positionals=()
 cache="" candidates="" channel_mode="" channel=edge omarchy_server="" asahi_alarm_server=$DEFAULT_ASAHI_ALARM_SERVER
 alarm_server=$DEFAULT_ALARM_SERVER
+hardware_profile=legacy recovery_app=""
 while (($#)); do
   case $1 in
-    --cache|--candidates|--channel|--omarchy-server|--asahi-alarm-server|--alarm-server)
+    --cache|--candidates|--channel|--hardware-profile|--recovery-app|--omarchy-server|--asahi-alarm-server|--alarm-server)
       (($# > 1)) && [[ -n $2 ]] || usage_error "$1 requires a value"
       [[ $mode == resolve || ( $1 == --cache && ( $mode == rootfs || $mode == dbs || $mode == packages ) ) ]] ||
         usage_error "$1 does not apply to $mode"
       case $1 in
         --cache) cache=$2 ;;
         --candidates) candidates=$2 ;;
+        --recovery-app) recovery_app=$2 ;;
+        --hardware-profile)
+          [[ $2 == legacy || $2 == neo ]] || usage_error "hardware profile must be legacy or neo"
+          hardware_profile=$2
+          ;;
         --channel)
           [[ $2 == edge || $2 == rc || $2 == stable ]] || usage_error "the channel must be edge, rc or stable"
           channel=$2
@@ -327,6 +346,7 @@ trap 'rm -rf "$work"' EXIT
 
 case $mode in
   resolve)
+    [[ -n $channel_mode || $hardware_profile == legacy ]] || usage_error "--hardware-profile requires --channel-set"
     if [[ -n $channel_mode ]]; then
       [[ -z $candidates ]] || usage_error "--candidates and --channel-set exclude each other"
     else

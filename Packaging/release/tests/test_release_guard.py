@@ -113,6 +113,50 @@ class ReleaseGuardTest(unittest.TestCase):
                         f"no finding mentions {fragment!r}: {findings}")
 
     # ── the cases ───────────────────────────────────────────────────────────
+    def recovery_template(self):
+        app = self.app / "Contents/Resources/RecoveryTemplate" / (VALUES["INSTALLER_RECOVERY_APP_NAME"] + ".app")
+        (app / "Contents/MacOS").mkdir(parents=True)
+        (app / "Contents/Resources").mkdir()
+        self.write_plist(app / "Contents/Info.plist", {
+            "CFBundleIdentifier": "org.aurorasilicon.omarchy.recovery.recovery",
+            "CFBundleExecutable": "OmarchyRecovery",
+            "CFBundleDisplayName": VALUES["INSTALLER_RECOVERY_APP_NAME"],
+            "OmarchyRecoveryBuildMode": "recovery",
+            "OmarchyRecoveryDataLayout": "external-install-data-v1",
+        })
+        (app / "Contents/MacOS/OmarchyRecovery").write_bytes(b'recovery executable fixture')
+        return app
+
+    def test_public_app_can_bundle_its_native_recovery_template(self):
+        self.recovery_template()
+        self.assertEqual(self.findings(), [])
+
+    def test_recovery_preview_or_foreign_bundle_is_rejected(self):
+        app = self.recovery_template()
+        for key, bad in (("OmarchyRecoveryBuildMode", "preview"), ("CFBundleIdentifier", "invalid.foreign")):
+            path = app / "Contents/Info.plist"
+            before = path.read_bytes()
+            info = plistlib.loads(before)
+            info[key] = bad
+            self.write_plist(path, info)
+            self.assertRefused('invalid Recovery template ' + key)
+            path.write_bytes(before)
+
+    def test_recovery_template_may_not_contain_an_installations_configuration(self):
+        app = self.recovery_template()
+        (app / "Contents/Resources/install-config.json").write_text('{}')
+        self.assertRefused('installation-specific install-config.json')
+
+    def test_recovery_binary_contents_are_still_scanned(self):
+        app = self.recovery_template()
+        (app / "Contents/MacOS/OmarchyRecovery").write_bytes(b'<key>get-task-allow</key>')
+        self.assertRefused('get-task-allow')
+
+    def test_an_unexpected_nested_app_does_not_get_recovery_treatment(self):
+        app = self.recovery_template()
+        app.rename(self.app / "Contents/Resources/Unexpected.app")
+        self.assertRefused('bundle identifier')
+
     def test_a_public_app_is_clean(self) -> None:
         self.assertEqual(self.findings(), [])
 

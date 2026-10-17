@@ -32,6 +32,14 @@ The image is public: the `release` profile, no test image pin (`test_image_pin=`
 
 A build takes about 15 minutes and 25 GB of disk. On a host with a desktop session, an automounter (udiskie, gvfs) would mount the filesystems the build puts on loop devices, and ask for a password to do it: run the build as root or with passwordless sudo, and it hides every loop device from udisks with a transient udev rule while it runs. Without either, it refuses to run beside an automounter. devmon and udevil mount without udisks, so the build always refuses to run beside them.
 
+### Hardware scope
+
+Channel inputs and candidate manifests without `hardware_profile` keep the existing `m1n1-aurora` / `uboot-asahi` boot chain. They exclude `j700ap` from installer admission even if a package happens to contain its DTB.
+
+A signed candidate manifest can select `"hardware_profile": "neo"`. Normal edge inputs select the same profile with `mac-image-inputs resolve inputs --channel-set --hardware-profile neo`; omission retains the legacy profile and existing records remain valid. Neo channel builds keep the official signing key and the `omarchy-dev`/`omarchy-settings-dev` runtime roles. Trusted policy then requires `aura`, `uboot-aurora`, `aurora-audio`, `alsa-ucm-conf-aurora`, `speakerguardd`, `omarchy-aurora-firmware`, `mesa-aurora`, `vulkan-aurora` and `aurora-bless`, with J700 DTBs in both kernel and U-Boot archives. The builder stages that package’s raw Stage 1 as `esp/aurora/stage1-j700.bin` and a byte-identical copy of the inspected Stage 2 as `esp/m1n1/boot-j700.bin`. Its firmware list is `26.6.2`. Such an image admits only `j700ap`; it does not qualify Aura on M1/M2/M3. The profile is bound by the authenticated manifest and recorded in import, inspection, IMAGE, PROVENANCE and the installer’s board restrictions. Neo remains blocked until those authenticated packages and their qualification are available; it does not block legacy channel builds.
+
+The native Recovery app is an explicit input from `Recovery/build-recovery.sh`: pass `--recovery-app /path/to/recovery-template` to both `mac-image-inputs resolve` and `build-mac-image`. The directory must contain the unchanged `Omarchy Installer.app` and `omarchy-recovery-app.json`. Resolution pins the inventory digest; the build freezes and rechecks every listed file before starting a container. The app and manifest are copied into `esp/aurora/recovery/`, and installer metadata declares `recovery_gui: omarchy-native-v1`. Payload and provenance checks reject missing, changed or unrecorded templates. Portable validation checks inventory and layout; the native build and macOS installer verify the code signature. Per-install account and volume data stays outside the signed app. This input does not change Stage 1 admission or qualify additional boards.
+
 ### Image name
 
 The image is named `omarchy-mac-<lane>-<YYYY.MM.DD>-<package set id>` (`mac-image-check name edge OUT`): the date its inputs were resolved (the payload's date) and the first 12 hex digits of `package_set_sha256`, the digest of every installed package's name, version and archive sha256. A rebuild of the same packages on the same day gets the same name; any changed package changes it.
@@ -91,6 +99,27 @@ Inspection is not boot qualification. After the owner's first login on the Mac, 
 - `/var/lib/omarchy/image/deferred-steps` is gone: the deferred hardware setup finished (if not, `/var/log/omarchy-install.log` names the step it stopped at)
 - `pacman -Q alsa-ucm-conf-asahi asahi-audio` lists both, and in the owner's session `wpctl status` shows the model's `audio_effect.<model>-convolver` (on the M2 Max, `j416-convolver`) as the default sink, not a `stereo-fallback` one
 
+## Neo external-display defaults
+
+The Aurora J700 stack uses the ordinary `t8140-j700.dtb` for external displays.
+The kernel supplies the native bandwidth offsets from its T8140 hardware
+profile, and m1n1 enables the external controller only after validating the
+inherited firmware and its dependency group. Installer images must carry both
+sides of this handoff; no `appledrm.experimental_h17p_external*` command-line
+arguments or replacement test DTB are required.
+
+The first qualified defaults are Linux `d08fd52e1619` and m1n1 `f3ac615eb137`.
+Neo booted the packaged stack with no display arguments and automatically
+activated a Samsung Odyssey G81SF at 3840×2160, 60 Hz while retaining its
+internal display. Higher refresh rates, other monitors, reversed cable
+orientation and suspend need separate qualification. Keep the firmware's mode
+and bandwidth validation intact.
+
+Neo's external-display bandwidth ceiling is equivalent to 3840×2160 at 60 Hz.
+2560×1440 at 120 Hz and 1920×1080 at 240 Hz fit that budget; modes exceeding
+the 4K60 budget must remain filtered. These lower-resolution refresh rates
+have not yet been qualified by this installer's hardware tests.
+
 ## Build identity
 
 A booted Mac names the build it came from in `/var/lib/omarchy/image/target` (`target.booted` after its first boot; `@factory` carries the same bytes, so a factory reset keeps it). After the provenance lines above, the builder appends, once the package set is recorded and before `@factory` is sealed:
@@ -125,3 +154,9 @@ The zip's own sha256 cannot be here, since root.img holds this file. To map a re
 ## Sources
 
 `bin/` is mx-mac's image builder from maralcbr/omarchy-pkgs `asahi-quattro` at `7e2f6cfe` (`bin/build-mac-image`, `bin/mac-image-inputs`, `bin/mac-image-check`, and `mac-image-finalize` as `builder/finalize-root`), adapted to the candidate set. `builder/candidate_set.py`, `builder/apple_limine.py` and `builder/verify_installed_system.py` come from the candidate importer, Limine contract and installed-system verifier of this repository's #2.
+
+## Aurora package source
+
+Images admitting Neo require the authenticated edge candidates `aurora-audio`, `alsa-ucm-conf-aurora`, `speakerguardd`, and `omarchy-aurora-firmware`. Their recipes and firmware ordering assets live in `omacom/omarchy-pkgs` (PR #1101); this repository does not rebuild private copies. Support packages retain signature, archive digest, source, and metadata checks; only this category accepts architecture `any`. Missing support fails before package transactions. Boot payload owners are the canonical `aura` and `uboot-aurora` packages.
+
+`omarchy-aurora-firmware` currently requires a systemd initramfs and rejects unsupported busybox hook sets at build time. Its canonical package also contains regulatory.db admission and rate-limited unsupported-country fallback. Aura remains blocked from package publication until the exact source pin has native build, matched Stage 1/Stage 2 boot, repair and upgrade evidence; this installer does not bypass that gate.

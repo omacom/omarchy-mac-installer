@@ -50,7 +50,7 @@ CHANNEL_PACKAGES = [
 ]
 PACKAGES = [
     ("omarchy", "4.0.0-1", "omarchy-candidates", "omarchy-4.0.0-1-aarch64.pkg.tar.xz", "3" * 64),
-    ("uboot-asahi", "2026.07-1", "omarchy-candidates", "uboot-asahi-2026.07-1-aarch64.pkg.tar.zst", "4" * 64),
+    ("uboot-aurora", "2026.07-1", "omarchy-candidates", "uboot-aurora-2026.07-1-aarch64.pkg.tar.zst", "4" * 64),
     ("glibc", "2.43-1", "core", "glibc-2.43-1-aarch64.pkg.tar.xz", "5" * 64),
 ]
 
@@ -67,7 +67,7 @@ def package_set(packages) -> str:
 def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="passed", image_edit=None,
           profile=(), provenance_profile=None, name=None, inspection_digest=None, target_edit=None,
           sources=(("omarchy", "a" * 40),), runtime_sources=None, provenance_edit=None, legacy=False,
-          inputs=INPUTS, pin=None, report_edit=None) -> None:
+          inputs=INPUTS, pin=None, report_edit=None, hardware_profile="legacy", recovery_app=None) -> None:
     """A build directory as build-mac-image writes it; LEGACY, as a build before builds recorded their identity.
     With CHANNEL_INPUTS, a channel build: the image target names the channel set and database, INSPECTION the
     set it inspected, and PIN (the test image pin, empty for a public image) is recorded."""
@@ -75,8 +75,8 @@ def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="pas
     channel = "channel_set" in inputs
     name = name or (LAB_NAME if lab else NAME)
     zip_path = out / name
-    fixtures.write_payload(zip_path, check.BOOT_UUID, check.ROOT_UUID)
-    (out / "installer_data.json").write_text(json.dumps(check.expected_metadata(name)))
+    fixtures.write_payload(zip_path, check.BOOT_UUID, check.ROOT_UUID, hardware_profile=hardware_profile, recovery_app=recovery_app)
+    (out / "installer_data.json").write_text(json.dumps(check.expected_metadata(name, hardware_profile, recovery_app is not None)))
     if channel:
         target = {"channel_set": inputs["channel_set"], "channel_db_sha256": inputs["omarchy_db_sha256"]}
     else:
@@ -88,7 +88,7 @@ def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="pas
         del target["package_set_sha256"], target["built"]
     if target_edit:
         target = target_edit(target)
-    report = {"result": inspection, "runtime_sources": dict(sources) if runtime_sources is None else runtime_sources}
+    report = {"hardware_profile": hardware_profile, "result": inspection, "runtime_sources": dict(sources) if runtime_sources is None else runtime_sources}
     if target is not None:
         report["image_target"] = target
     digest = inspection_digest or next((l.split("=", 1)[1] for l in profile if l.startswith("lab_access_sha256=")), None)
@@ -105,7 +105,7 @@ def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="pas
     lines += [f"input.{k}={v}" for k, v in inputs.items()]
     lines += [f"candidate={n}|{v}|{f}|{s}" for n, v, _, f, s in candidates]
     lines += [f"candidate_source={n}|{c}" for n, c in sources]
-    lines += ["hardware_setup=build", *([] if pin is None else [f"test_image_pin={pin}"]),
+    lines += [f"hardware_profile={hardware_profile}", "hardware_setup=build", *([] if pin is None else [f"test_image_pin={pin}"]),
               *(profile if provenance_profile is None else provenance_profile),
               f"package_set_sha256={package_set(packages)}", *([] if legacy else [f"built={BUILT}"]),
               f"package_count={len(packages)}"]
@@ -115,10 +115,10 @@ def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="pas
     if provenance_edit:
         lines = provenance_edit(lines)
     (out / "PROVENANCE").write_text("\n".join(lines) + "\n")
-    digests = check.check_payload("edge", zip_path, out / "installer_data.json", "lab" if name == LAB_NAME else "release")
+    digests = check.check_payload("edge", zip_path, out / "installer_data.json", "lab" if name == LAB_NAME else "release", hardware_profile)
     image = ["format=2", "lane=edge", "platform=apple-silicon", "builder_commit=" + "c" * 40, "builder_tree_clean=true",
-             *[f"{k}={v}" for k, v in inputs.items()],
-             "hardware_setup=build", *([] if pin is None else [f"test_image_pin={pin}"]), *profile,
+             *[f"{k}={v}" for k, v in inputs.items() if k != "hardware_profile"],
+             f"hardware_profile={hardware_profile}", "hardware_setup=build", *([] if pin is None else [f"test_image_pin={pin}"]), *profile,
              f"package_set_sha256={package_set(packages)}",
              *([] if legacy else [f"built={BUILT}"]),
              *[f"image_sha256={m}|{d}" for m, d in sorted(digests.items())], f"input_digest={sha(out / 'inputs')}"]
@@ -160,6 +160,41 @@ class ChannelBuildDirectoryTest(unittest.TestCase):
         self.assertEqual({p.split("|")[1]: p.split("|")[5] for p in provenance["package"]},
                          {n: s for n, _, _, _, s in CHANNEL_PACKAGES}, "PROVENANCE records every package's digest")
 
+    def test_neo_channel_profile_matches_inputs_inspection_and_payload(self):
+        self.build(inputs=dict(CHANNEL_INPUTS, hardware_profile="neo"), hardware_profile="neo")
+        check.check_provenance("edge", self.out)
+        check.check_descriptor("edge", self.out)
+
+    def test_channel_profile_cannot_be_changed_after_input_resolution(self):
+        self.build(inputs=CHANNEL_INPUTS, hardware_profile="neo")
+        with self.assertRaisesRegex(check.CheckError, "pinned inputs"):
+            check.check_provenance("edge", self.out)
+
+    def test_native_recovery_inventory_is_bound_to_image_inputs(self):
+        recovery = Path(self.tmp.name) / "recovery"
+        digest = fixtures.make_recovery_app(recovery)
+        inputs = dict(CHANNEL_INPUTS, hardware_profile="neo", recovery_app_manifest_sha256=digest)
+        self.build(inputs=inputs, hardware_profile="neo", recovery_app=recovery)
+        check.check_provenance("edge", self.out)
+        check.check_descriptor("edge", self.out)
+        # A coherent output cannot silently substitute another recorded input.
+        self.build(inputs=dict(inputs, recovery_app_manifest_sha256="0" * 64),
+                   hardware_profile="neo", recovery_app=recovery)
+        for mode in ("provenance", "descriptor"):
+            with self.subTest(mode=mode), self.assertRaisesRegex(check.CheckError, "pinned input"):
+                getattr(check, f"check_{mode}")("edge", self.out)
+
+    def test_descriptor_binds_profile_to_actual_inputs_not_only_the_copy(self):
+        self.build(inputs=dict(CHANNEL_INPUTS, hardware_profile="neo"), hardware_profile="neo")
+        inputs = self.out / "inputs"
+        inputs.write_text(inputs.read_text().replace("hardware_profile=neo\n", ""))
+        for filename, key in (("IMAGE", "input_digest"), ("PROVENANCE", "inputs_sha256")):
+            path = self.out / filename
+            path.write_text("\n".join(f"{key}={sha(inputs)}" if line.startswith(key + "=") else line
+                                      for line in path.read_text().splitlines()) + "\n")
+        with self.assertRaisesRegex(check.CheckError, "pinned inputs"):
+            check.check_descriptor("edge", self.out)
+
     def test_a_channel_build_carries_no_test_image_pin(self):
         self.build(pin="omarchy omarchy-mac omarchy-settings")
         for mode in ("provenance", "descriptor"):
@@ -193,11 +228,21 @@ class ChannelBuildDirectoryTest(unittest.TestCase):
             with self.subTest(mode=mode), self.assertRaisesRegex(check.CheckError, "names no single set"):
                 getattr(check, f"check_{mode}")("edge", self.out)
 
+    def test_payload_board_scope_must_match_the_recorded_hardware_profile(self):
+        self.build()
+        metadata = self.out / "installer_data.json"
+        metadata.write_text(json.dumps(check.expected_metadata(NAME, "neo")))
+        fixtures.write_payload(self.out / NAME, check.BOOT_UUID, check.ROOT_UUID, hardware_profile="neo")
+        check.check_payload("edge", self.out / NAME, metadata, hardware_profile="neo")
+        with self.assertRaisesRegex(check.CheckError, "not the installer_data"):
+            check.check_payload("edge", self.out / NAME, metadata, hardware_profile="legacy")
+
     def test_the_payload_passes_the_engine_contract(self):
         self.build()
         metadata = json.loads((self.out / "installer_data.json").read_text())
         engine = json.loads((ROOT.parent / "Engine/installer_data.json").read_text())
-        engine["os_list"][0]["package"] = NAME
+        engine["os_list"][0].update(package=NAME, allowed_device_classes=None,
+                                    excluded_device_classes=["j700ap"])
         self.assertEqual(metadata, engine)
 
     def test_a_public_image_is_named_for_its_lane_date_and_package_set(self):
@@ -247,9 +292,9 @@ class BuildDirectoryTest(unittest.TestCase):
             check.image_name("edge", self.out)
 
     def test_a_candidate_installed_from_another_repository(self):
-        packages = [PACKAGES[0], ("uboot-asahi", "2026.07-1", "asahi-alarm", PACKAGES[1][3], PACKAGES[1][4]), PACKAGES[2]]
+        packages = [PACKAGES[0], ("uboot-aurora", "2026.07-1", "asahi-alarm", PACKAGES[1][3], PACKAGES[1][4]), PACKAGES[2]]
         build(self.out, packages=packages)
-        with self.assertRaisesRegex(check.CheckError, "uboot-asahi from the candidate set"):
+        with self.assertRaisesRegex(check.CheckError, "uboot-aurora from the candidate set"):
             check.check_provenance("edge", self.out)
 
     def test_a_failed_inspection(self):
@@ -364,7 +409,7 @@ class BuildDirectoryTest(unittest.TestCase):
             "twice": dict(sources=(("omarchy", "a" * 40), ("omarchy", "a" * 40)), runtime_sources={"omarchy": "a" * 40}),
             "not a set package": dict(sources=(("omarchy", "a" * 40), ("glibc", "a" * 40))),
             "not a commit": dict(sources=(("omarchy", "a" * 39),)),
-            "not inspection's": dict(runtime_sources={"omarchy": "a" * 40, "uboot-asahi": "b" * 40}),
+            "not inspection's": dict(runtime_sources={"omarchy": "a" * 40, "uboot-aurora": "b" * 40}),
             "another runtime commit": dict(sources=(("omarchy", "b" * 40),)),
         }
         for label, change in cases.items():
@@ -376,7 +421,7 @@ class BuildDirectoryTest(unittest.TestCase):
                     check.check_provenance("edge", self.out)
         shutil.rmtree(self.out)
         self.out.mkdir()
-        build(self.out, sources=(("omarchy", "a" * 40), ("uboot-asahi", "b" * 40)))
+        build(self.out, sources=(("omarchy", "a" * 40), ("uboot-aurora", "b" * 40)))
         check.check_provenance("edge", self.out)
 
     def test_a_changed_payload(self):

@@ -170,3 +170,44 @@ if "$BASH" "$inputs" resolve "$work/new" --channel-set --candidates "$work" >"$w
 fi
 grep -Fq "exclude each other" "$work/out" || fail "resolve says --channel-set and --candidates exclude each other"
 pass "resolve takes a candidate set or the channel, not both"
+
+# Neo profile is optional and canonical; omitted means the unchanged legacy set.
+awk '{ print } /^channel_manifest_sha256=/ { print "hardware_profile=neo" }' "$work/channel-inputs" >"$work/neo-inputs"
+"$BASH" "$inputs" check "$work/neo-inputs" | cmp -s - "$work/neo-inputs" || fail "Neo profile record checks"
+refuse "an unknown hardware profile" sed 's/hardware_profile=neo/hardware_profile=other/' "$work/neo-inputs"
+refuse "a redundant legacy profile" sed 's/hardware_profile=neo/hardware_profile=legacy/' "$work/neo-inputs"
+refuse "a candidate profile field" awk '{ print } /^candidate_manifest_sha256=/ { print "hardware_profile=neo" }' "$work/inputs"
+if "$BASH" "$inputs" resolve "$work/new" --candidates "$work" --hardware-profile neo >"$work/out" 2>&1; then
+  fail "resolve accepts a channel profile on candidate inputs"
+fi
+grep -Fq -- "--hardware-profile requires --channel-set" "$work/out" || fail "candidate/profile failure reason"
+pass "Neo channel profile is pinned without changing existing records"
+
+awk -v digest="$(hex 9)" '{ print } /^hardware_profile=/ { print "recovery_app_manifest_sha256=" digest }' "$work/neo-inputs" >"$work/recovery-inputs"
+"$BASH" "$inputs" check "$work/recovery-inputs" | cmp -s - "$work/recovery-inputs" || fail "Recovery input digest roundtrips"
+refuse "a malformed Recovery digest" sed 's/recovery_app_manifest_sha256=.*/recovery_app_manifest_sha256=short/' "$work/recovery-inputs"
+refuse "a repeated Recovery digest" awk '{ print } /^recovery_app_manifest_sha256=/ { print }' "$work/recovery-inputs"
+pass "Recovery inventory digest is canonical and pinned"
+
+# Package fetch uses the recorded Neo profile, including its support packages.
+neo_db=$(cd "$ROOT" && python3 -c '
+import sys
+sys.path.insert(0, "test")
+import fixtures
+from pathlib import Path
+names = [fixtures.CHANNEL_NAMES.get(role, role) for role in fixtures.NEO_VERSIONS]
+database, sha256 = fixtures.make_channel(Path(sys.argv[1]), None, unsigned=names, hardware_profile="neo")
+print(sha256)
+' "$work/neo/edge")
+cp "$work/neo/edge/omarchy.db" "$work/cache/db/$neo_db.db"
+for archive in "$work"/neo/edge/packages/*.pkg.tar.*; do
+  cp "$archive" "$work/cache/pkg/"
+  printf 'signature\n' >"$work/cache/pkg/${archive##*/}.sig"
+done
+sed -e "s/channel_set=.*/channel_set=omarchy-edge-${neo_db:0:12}/" \
+  -e "s/omarchy_db_sha256=.*/omarchy_db_sha256=$neo_db/" "$work/neo-inputs" >"$work/neo-fetch-inputs"
+mkdir "$work/neo-packages"
+"$BASH" "$inputs" packages "$work/neo-fetch-inputs" "$work/neo-packages" --cache "$work/cache" || fail "Neo packages fetch"
+expected=$(cd "$work/neo/edge/packages" && ls | sort)
+[[ $(cd "$work/neo-packages" && ls | grep -v '\.sig$' | sort) == "$expected" ]] || fail "Neo fetch selects exact profile packages"
+pass "Neo package fetch propagates the pinned hardware profile"

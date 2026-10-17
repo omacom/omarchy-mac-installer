@@ -19,6 +19,77 @@
       XCTAssertEqual(plan.targetMacOSBytes, 994_662_584_320)
     }
 
+    func testANeoInstallWithItsMacos26StubIsRecognised() throws {
+      let disk = FakeRemovalDisk(F.neoMacos26(), install: F.convergedInstall)
+      let plan = try OmarchyRemovalPlan(disks: disk)
+      XCTAssertEqual(plan.kind, .installation)
+      XCTAssertEqual(
+        plan.members.map(\.uuid),
+        [F.convergedInstall.stub, F.convergedInstall.esp] + F.convergedInstall.linux)
+    }
+
+    func testANeoStubBootingAurorasJ700Stage1IsRecognised() throws {
+      let disk = FakeRemovalDisk(F.neoMacos26(), install: F.convergedInstall)
+      disk.files!.stubBootObject = Self.auroraStage1(esp: F.convergedInstall.esp.lowercased())
+      let plan = try OmarchyRemovalPlan(disks: disk)
+      XCTAssertEqual(plan.kind, .installation)
+      XCTAssertEqual(
+        plan.members.map(\.uuid),
+        [F.convergedInstall.stub, F.convergedInstall.esp] + F.convergedInstall.linux)
+    }
+
+    func testAnAuroraStage1MustNameThisESP() {
+      assertRejectedAuroraStage1(Self.auroraStage1(esp: F.id(77).lowercased()))
+    }
+
+    func testAnAuroraStage1MustHaveAValidCRC() {
+      assertRejectedAuroraStage1(
+        Self.auroraStage1(esp: F.convergedInstall.esp.lowercased(), corruptCRC: true))
+    }
+
+    func testAnAuroraStage1MustUseASupportedConfigVersion() {
+      assertRejectedAuroraStage1(
+        Self.auroraStage1(esp: F.convergedInstall.esp.lowercased(), version: 2))
+    }
+
+    func testAnAuroraStage1MustContainExactlyOneConfigBlock() {
+      let image = Self.auroraStage1(esp: F.convergedInstall.esp.lowercased())
+      assertRejectedAuroraStage1(image + image)
+    }
+
+    private func assertRejectedAuroraStage1(
+      _ bootObject: Data, file: StaticString = #filePath, line: UInt = #line
+    ) {
+      let disk = FakeRemovalDisk(F.neoMacos26(), install: F.convergedInstall)
+      disk.files!.stubBootObject = bootObject
+      do {
+        _ = try OmarchyRemovalPlan(disks: disk)
+        XCTFail("Invalid Aurora Stage 1 was accepted", file: file, line: line)
+      } catch {
+        XCTAssertTrue(
+          (error as? RemovalFailure)?.message.contains(
+            "the m1n1 boot object in its startup container doesn’t point to this EFI partition")
+            ?? false, "\(error)", file: file, line: line)
+      }
+    }
+
+    /// Aurora's J700 Stage 1 as aurora-silicon/m1n1 tools/fill_stage1_config.py
+    /// fills it: asahi's m1n1 version marker, one config block, a STACKBOT tail.
+    static func auroraStage1(esp: String, version: UInt32 = 1, corruptCRC: Bool = false) -> Data {
+      func le(_ value: UInt32) -> [UInt8] {
+        (0..<4).map { UInt8(truncatingIfNeeded: value >> (8 * $0)) }
+      }
+      var body = le(version) + le(5000)
+      body += Array(esp.utf8) + [UInt8](repeating: 0, count: 40 - esp.utf8.count)
+      let path = Array(";m1n1/boot.bin".utf8)
+      body += path + [UInt8](repeating: 0, count: 192 - path.count)
+      var image = Data("m1n1 stage 1 ##m1n1_ver##v1.6.1\0 code STACKBOT data ".utf8)
+      image.append(Data("AURORA-S1-CFG01\0".utf8))
+      image.append(contentsOf: body + le(RemovalEvidence.crc32(body) ^ (corruptCRC ? 1 : 0)))
+      image.append(Data(" more code STACKBOT".utf8))
+      return image
+    }
+
     func testOlderOmarchyMacInstallIsRecognisedWithItsOneRootPartition() throws {
       let disk = FakeRemovalDisk(F.alarm(), install: F.alarmInstall)
       let plan = try OmarchyRemovalPlan(disks: disk)
