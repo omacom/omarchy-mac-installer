@@ -214,6 +214,9 @@ class CatalogReleaseTests(ReleaseTestCase):
             )
             self.assertEqual(model.get("previewNote"), untested.get(model["deviceIdentifier"]))
         self.assertTrue(untested, "M3 Macs are marked untested")
+        # Both M3 MacBook Airs are qualified (evidence/apple-silicon/2026-10-18-m3-air-qualification).
+        notes = {model["deviceIdentifier"]: model.get("previewNote") for model in catalog["models"]}
+        self.assertEqual((notes["apple,j613"], notes["apple,j615"]), (None, None))
 
         signed = self.sign(catalog_path)
         self.assertEqual(signed.returncode, 0, signed.stderr)

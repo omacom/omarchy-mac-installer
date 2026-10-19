@@ -9,9 +9,9 @@ board that stays out and why. `developer` names each board only a developer
 build's sealed catalog may add, with its own image; channel catalogs never
 carry one, so check-catalog rejects it like any unknown board.
 
-board that stays out and why. `untested` marks the supported Macs that no
-image has been installed on yet (the M3 generation), with the note a catalog
-shows for each.
+`untested` marks the supported Macs that no image has been installed on yet
+(the M3 generation except the M3 MacBook Airs), with the note a catalog shows
+for each.
 
 Usage:
   supported_models.py check-catalog FILE   exit 1 unless FILE covers every Mac
