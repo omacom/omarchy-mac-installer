@@ -16,6 +16,7 @@ import subprocess
 from xml.parsers.expat import ExpatError
 
 FIRMWARE_NAME = "apple/mesacal-j700.bin"
+ROOT_KEY_NAME = "apple/msrk-j700.bin"
 # The iBoot System Container is about 550 MB; refuse anything far larger.
 CONTAINER_MAXIMUM = 1 << 30
 # <sys/disk.h>: _IOR('d', 24, uint32_t) and _IOR('d', 25, uint64_t).
@@ -59,6 +60,61 @@ def _children(data, start, end):
 def _ia5(data, child):
     tag, start, end = child
     return bytes(data[start:end]) if tag == 0x16 else None
+
+
+def root_key(data):
+    """Preserve a complete combined root-key record supplied by a local collector.
+
+    This only checks the envelope. It does not establish the issuer chain or
+    sensor binding, and never builds a replacement manifest or trust bundle.
+    """
+    def children(start, end):
+        fields = []
+        for field in _children(data, start, end):
+            if len(fields) >= 1024:
+                raise ValueError("too many root-key fields")
+            fields.append(field)
+        return fields
+
+    try:
+        if not 0 < len(data) <= 16 << 20:
+            raise ValueError("invalid root-key size")
+        outer = _tlv(data, 0)
+        if outer[0] != 0x30 or outer[2] != len(data):
+            raise ValueError("invalid combined envelope")
+        fields = children(outer[1], outer[2])
+        if (len(fields) != 3 or _ia5(data, fields[0]) != b"comb"
+                or fields[1][0] != 0x30 or fields[2][0] != 0x30):
+            raise ValueError("root key requires its complete combined envelope")
+        record = children(fields[1][1], fields[1][2])
+        security = children(fields[2][1], fields[2][2])
+        if (len(record) != 2 or _ia5(data, record[0]) != b"fdrd"
+                or record[1][0] != 4 or len(security) != 2
+                or _ia5(data, security[0]) != b"secb" or security[1][0] != 4
+                or security[1][1] == security[1][2]):
+            raise ValueError("missing root-key record or trust bundle")
+        image = _tlv(data, record[1][1])
+        if image[0] != 0x30 or image[2] != record[1][2]:
+            raise ValueError("invalid embedded root-key image")
+        parts = children(image[1], image[2])
+        if (len(parts) != 3 or _ia5(data, parts[0]) != b"IMG4"
+                or parts[1][0] != 0x30 or parts[2][0] != 0xA0):
+            raise ValueError("missing signed root-key envelope")
+        payload = children(parts[1][1], parts[1][2])
+        if (len(payload) != 4 or _ia5(data, payload[0]) != b"IM4P"
+                or _ia5(data, payload[1]) != b"MSRk" or payload[2][0] != 0x16
+                or payload[2][1] == payload[2][2] or payload[3][0] != 4
+                or payload[3][1] == payload[3][2]):
+            raise ValueError("invalid root-key payload")
+        wrapper = children(parts[2][1], parts[2][2])
+        if len(wrapper) != 1 or wrapper[0][0] != 0x30:
+            raise ValueError("invalid root-key manifest wrapper")
+        manifest = children(wrapper[0][1], wrapper[0][2])
+        if len(manifest) < 2 or _ia5(data, manifest[0]) != b"IM4M":
+            raise ValueError("missing root-key manifest")
+    except (ValueError, IndexError) as error:
+        raise MesaError(f"invalid signed sensor root key: {error}") from error
+    return bytes(data)
 
 
 def fsc2_calibrations(data):
@@ -190,9 +246,12 @@ def device_size(fd, ioctl=fcntl.ioctl):
     return block_size * block_count
 
 
-def collect(device):
+def collect(device, *, root_key_record=None):
     """{firmware path: bytes} for this Mac's Touch ID, read from the raw
     iBoot System Container device, never written."""
+    # The production adapter deliberately supplies no root-key record until a
+    # device-local sealed source has been identified and hardware-qualified.
+    root = root_key(root_key_record) if root_key_record is not None else None
     fd = os.open(device, os.O_RDONLY)
     try:
         size = device_size(fd)
@@ -207,4 +266,7 @@ def collect(device):
             container += block
     finally:
         os.close(fd)
-    return {FIRMWARE_NAME: calibration(container)}
+    files = {FIRMWARE_NAME: calibration(container)}
+    if root is not None:
+        files[ROOT_KEY_NAME] = root
+    return files
