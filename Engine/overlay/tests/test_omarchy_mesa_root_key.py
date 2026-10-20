@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 import sys
 import tempfile
 import unittest
@@ -9,10 +10,10 @@ from omarchy_mesa import MesaError, ROOT_KEY_NAME, collect, root_key
 from test_omarchy_mesa import der, ia5, img4
 
 
-def root_image():
+def root_image(extra_manifest_fields=0):
     payload = der(0x30, ia5("IM4P") + ia5("MSRk") + ia5("1.0")
                   + der(4, b"synthetic key payload"))
-    manifest = der(0xA0, der(0x30, ia5("IM4M") + der(2, b"\0")))
+    manifest = der(0xA0, der(0x30, ia5("IM4M") + der(2, b"\0") + der(0x30, b"") * extra_manifest_fields))
     return der(0x30, ia5("IMG4") + payload + manifest)
 
 
@@ -39,10 +40,14 @@ class RootKeyEnvelopeTests(unittest.TestCase):
             data.replace(b"MSRk", b"FSC2"), data.replace(b"IM4M", b"none"),
             data.replace(b"secb", b"none"),
             combined_root(der(0x30, ia5("IMG4"))),
-            der(0x30, der(0x30, b"") * 1025),
         ):
             with self.subTest(candidate=candidate[:24]), self.assertRaises(MesaError):
                 root_key(candidate)
+
+    def test_manifest_field_limit_is_enforced(self):
+        candidate = combined_root(root_image(extra_manifest_fields=1023))
+        with self.assertRaisesRegex(MesaError, "too many root-key fields"):
+            root_key(candidate)
 
     def test_collect_includes_only_an_explicit_complete_root_key(self):
         with tempfile.TemporaryDirectory() as directory:

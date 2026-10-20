@@ -9,3 +9,5 @@ The production adapter deliberately does not supply this optional argument yet. 
 Before merging, compare the complete result against an accepted capture from the same Touch ID-equipped Neo, confirm sensor binding, and verify a sensor session after a cold boot and fresh installer run. Keep keys and captures private. The currently available Neo has no Touch ID, and the previously tested sensor-equipped machine and its capture are unavailable. Synthetic fixture acceptance is not hardware qualification.
 
 This work is separate from country-policy extraction and encryption recovery. It does not change either path or enable fingerprint setup by default.
+
+The root-key record is device-private. Its required mode is root-owned `0600` in staging and on the installed system; containing private staging directories use `0700`. Automatic collection must remain inactive until the archive writer and installation path preserve that mode. General world-readable firmware defaults are unsuitable for this record.
