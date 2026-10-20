@@ -184,7 +184,16 @@ class CollectTests(unittest.TestCase):
         self.write(mt.IZUBA, 'IZUBA_wifi.cfg', config().encode())
         # Synthetic power tables, and the policy pins they derive.
         write_tables(self.root / mt.IZUBA)
-        pins = mock.patch.dict(omarchy_mt7932_policy.PINNED_OUTPUT, synthetic_pins())
+        original_derive = omarchy_mt7932_policy.derive
+        expected_inventory = omarchy_mt7932_policy.inventory_digest(
+            original_derive(synthetic_tables(), pins=None, input_pins=None))
+        def derive(tables, *args, **kwargs):
+            kwargs.setdefault('inventory_pin', expected_inventory)
+            return original_derive(tables, *args, **kwargs)
+        builder = mock.patch.object(omarchy_mt7932_policy, 'derive', derive)
+        builder.start()
+        self.addCleanup(builder.stop)
+        pins = mock.patch.dict(omarchy_mt7932_policy.PINNED_OUTPUT, synthetic_pins(), clear=True)
         pins.start()
         self.addCleanup(pins.stop)
         inputs = mock.patch.dict(omarchy_mt7932_policy.PINNED_INPUT, {

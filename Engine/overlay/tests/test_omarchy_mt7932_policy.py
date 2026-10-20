@@ -269,7 +269,7 @@ class FiveRecordTests(unittest.TestCase):
 class DeriveTests(unittest.TestCase):
     """derive() turns the five tables into parser-gated world-XZ and US files."""
 
-    def test_synthetic_tables_derive_both_policies(self):
+    def test_synthetic_tables_derive_required_policies(self):
         files = policy.derive(synthetic_tables(), pins=None, input_pins=None)
         self.assertEqual(sorted(files), [
             "mediatek/mt7932/policy/US.bin", "mediatek/mt7932/policy/world-XZ.bin",
@@ -299,11 +299,11 @@ class DeriveTests(unittest.TestCase):
         with self.assertRaisesRegex(policy.PolicyError, "world-XZ.bin is not the pinned policy"):
             policy.derive(tables, input_pins=None)
         pins = synthetic_pins()
-        self.assertEqual(policy.derive(tables, pins=pins, input_pins=None), policy.derive(tables, pins=None, input_pins=None))
+        self.assertEqual(policy.derive(tables, pins=pins, input_pins=None, inventory_pin=None), policy.derive(tables, pins=None, input_pins=None))
         wrong = dict(pins)
         wrong["mediatek/mt7932/policy/US.bin"] = "0" * 64
         with self.assertRaisesRegex(policy.PolicyError, "US.bin is not the pinned policy"):
-            policy.derive(tables, pins=wrong, input_pins=None)
+            policy.derive(tables, pins=wrong, input_pins=None, inventory_pin=None)
 
     def test_version_lines_and_joins_are_checked(self):
         tables = synthetic_tables()
@@ -360,6 +360,30 @@ class DeriveTests(unittest.TestCase):
         self.assertEqual(policy.join_status("us", power, sar, common, rows), "invalid")
         self.assertEqual(policy.join_status("GB", power, sar, common, {"GB"}), "missing power,sar,common-path")
 
+    def test_inventory_detects_changes_outside_individual_pins(self):
+        files = {"baseline.bin": b"baseline", "DE.bin": b"power values"}
+        pins = {"baseline.bin": hashlib.sha256(files["baseline.bin"]).hexdigest()}
+        expected = policy.inventory_digest(files)
+        policy.verify_outputs(files, pins, expected)
+        self.assertEqual(expected, policy.inventory_digest(dict(reversed(list(files.items())))))
+        files["DE.bin"] = b"different power values"
+        with self.assertRaisesRegex(policy.PolicyError, "complete policy inventory"):
+            policy.verify_outputs(files, pins, expected)
+
+    def test_every_individually_pinned_country_must_exist(self):
+        files = policy.derive(synthetic_tables(), pins=None, input_pins=None)
+        files["mediatek/mt7932/policy/CA.bin"] = b"synthetic country policy"
+        pins = {name: hashlib.sha256(blob).hexdigest() for name, blob in files.items()}
+        expected = policy.inventory_digest(files)
+        del files["mediatek/mt7932/policy/CA.bin"]
+        with self.assertRaisesRegex(policy.PolicyError, "missing pinned policy CA.bin"):
+            policy.verify_outputs(files, pins, expected)
+
+    def test_derivation_checks_a_pin_even_when_its_country_is_missing(self):
+        pins = {"mediatek/mt7932/policy/CA.bin": "0" * 64}
+        with self.assertRaisesRegex(policy.PolicyError, "missing pinned policy CA.bin"):
+            policy.derive(synthetic_tables(), pins=pins, input_pins=None, inventory_pin=None)
+
     def test_read_tables_reads_the_five_names(self):
         with tempfile.TemporaryDirectory() as directory:
             write_tables(directory)
@@ -374,6 +398,7 @@ class PinnedTablesTests(unittest.TestCase):
     def test_the_25g83_tables_derive_the_pinned_policy(self):
         files = policy.derive(policy.read_tables(os.environ["OMARCHY_NEO_IZUBA"]))
         self.assertEqual(len(files), 244)
+        self.assertEqual(policy.inventory_digest(files), policy.PINNED_INVENTORY)
         index = "\n".join(sorted(files)) + "\n"
         self.assertEqual(hashlib.sha256(index.encode()).hexdigest(),
                          "32b3392b3b5afeb7bd7002771d6ed0b863ea269618ae67717a8f5a8d43ddb1d0")

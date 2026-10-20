@@ -32,7 +32,8 @@ macOS's. Input and output checks guard the derivation:
   used only by a country outside the original world/US pair.
 - PINNED_OUTPUT checks the qualified world, US and Canada results. Every
   complete country is generated from the same authenticated tables and
-  checked with policy_parse before publication.
+  checked with policy_parse before publication. PINNED_INVENTORY checks the
+  path and blob digest of every generated policy, including untested countries.
 
 Apple sends six table-2 records (2.4 GHz channels 9 to 14) for every
 country. The stock mt7932_policy_parse accepts six only for XZ and requires
@@ -89,6 +90,9 @@ PINNED_OUTPUT = {
     "mediatek/mt7932/policy/US.bin": "9e519590d4a66972cfd7909132f3567c7b47a5252f89d345c1e7083a7d5bb9fe",
     "mediatek/mt7932/policy/CA.bin": "cf6f05261985ae48efa4c2802d645c26e6fb13d7eed3a5a64888ef372497f0da",
 }
+
+# SHA-256 of sorted ASCII "path<TAB>blob-sha256<LF>" records for all 244 outputs.
+PINNED_INVENTORY = "37419c03c0ba222d60eb78fdbdf9fed9ef1d005ef76a8bae0255d4a978defd5d"
 
 TEMPLATE_SECTIONS = frozenset({"MH"})
 NOT_LINUX_COUNTRY = frozenset({"X0", "X2", "X3"})
@@ -1375,12 +1379,30 @@ def _text(tables, name):
         raise SchemaError("grammar") from error
 
 
-def derive(tables, pins=PINNED_OUTPUT, input_pins=PINNED_INPUT):
+def inventory_digest(policies):
+    records = "".join(f"{path}\t{hashlib.sha256(policies[path]).hexdigest()}\n"
+                      for path in sorted(policies))
+    return hashlib.sha256(records.encode("ascii")).hexdigest()
+
+
+def verify_outputs(policies, pins, inventory_pin):
+    for path, expected in pins.items():
+        if path not in policies:
+            raise PolicyError(f"missing pinned policy {os.path.basename(path)}")
+        digest = hashlib.sha256(policies[path]).hexdigest()
+        if digest != expected:
+            raise PolicyError(f"{os.path.basename(path)} is not the pinned policy (sha256 {digest})")
+    if inventory_pin is not None and inventory_digest(policies) != inventory_pin:
+        raise PolicyError("complete policy inventory does not match the pinned output")
+
+
+def derive(tables, pins=PINNED_OUTPUT, input_pins=PINNED_INPUT,
+           inventory_pin=PINNED_INVENTORY):
     """{firmware path: bytes} for every complete country, each parser-gated.
 
-    `tables` maps each table's file name to its bytes. With `pins`, each
-    known outputs must match their pinned sha256; tests pass None for synthetic
-    tables. Other countries use the same authenticated, version-checked inputs.
+    `tables` maps each table's file name to its bytes. With `pins`, every
+    pinned output must be present and match, and the complete inventory must
+    match `inventory_pin`. Tests pass None for synthetic output checks.
     """
     if input_pins is not None:
         for name in TABLES:
@@ -1415,11 +1437,9 @@ def derive(tables, pins=PINNED_OUTPUT, input_pins=PINNED_INPUT):
             blob = five_record_table2(blob)
         if policy_parse(blob, country.encode("ascii")) != 0:
             raise PolicyError(f"{country} policy does not parse")
-        if pins is not None and path in pins:
-            digest = hashlib.sha256(blob).hexdigest()
-            if digest != pins.get(path):
-                raise PolicyError(f"{os.path.basename(path)} is not the pinned policy (sha256 {digest})")
         policies[path] = blob
+    if pins is not None:
+        verify_outputs(policies, pins, inventory_pin)
     return policies
 
 

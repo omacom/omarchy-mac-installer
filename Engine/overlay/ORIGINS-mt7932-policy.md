@@ -25,3 +25,5 @@ Added in this repository: the five-record transform for non-XZ countries, `deriv
 ## No Apple data
 
 This code and its tests contain no Apple firmware or power-table data. The tests use synthetic tables only. The installer derives the policy files at install time from the Apple tables it fetches for that Mac, so no policy file is distributed with the engine.
+
+The pinned 25G83 inputs derive 244 policies. A canonical SHA-256 inventory covers every sorted path and blob digest; world, US and Canada additionally have individual pins, and every individually pinned output must exist. Only those three have Neo bring-up evidence. Reference-extractor parity and parser acceptance do not constitute hardware qualification of the remaining countries; the expanded coverage is an explicit part of maintainer review.
