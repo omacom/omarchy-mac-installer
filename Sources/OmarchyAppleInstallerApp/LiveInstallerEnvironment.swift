@@ -26,6 +26,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
   private var selectedLane = ReleaseChannel.stable.rawValue
   private let prefetch = PayloadPrefetchOrchestrator()
   private var plannedPayload: StagedInstallerArtifact?
+  private let tryExportShelf = TryOmarchyExportShelf.home()
 
   private func accountClient() throws -> AuthenticatedEngineXPCSubmitter {
     let configuration = try InstallerReleaseConfigurationLocator().loadFromMainBundle()
@@ -170,6 +171,16 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       previouslyAcceptedCatalog: previouslyAccepted
     )
   }
+
+  func tryOmarchyExports() async -> TryOmarchyExportsDisplay {
+    await tryExportShelf.look()
+  }
+
+  func verifyTryOmarchyExport(id: String) async -> TryOmarchyExportCheck {
+    await tryExportShelf.verify(id: id)
+  }
+
+  func cancelTryOmarchyExportCheck() { tryExportShelf.cancelVerification() }
 
   /// Every channel's catalog, checked side by side for this Mac. A channel
   /// whose rollback state cannot be read counts as unverifiable rather than

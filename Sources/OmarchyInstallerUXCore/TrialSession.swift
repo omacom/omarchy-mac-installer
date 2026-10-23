@@ -21,6 +21,8 @@
     func shutDown()
     /// Moves the VM in the default folder to the Trash.
     func deleteVM() throws
+    /// A finished export waits in the VM's outbox, published when it stops.
+    func hasExportInOutbox() -> Bool
     /// The kit's bridged-networking daemon, which this app registers as itself.
     func bridgedNetwork() -> TrialBridgedNetwork
     func registerBridgedNetwork() throws
@@ -246,9 +248,11 @@
     private var afterExit: [() -> Void] = []
     private var launched = false
     private var vmBytesRefresh: Task<Void, Never>?
-    /// Migrate to Native's notice, before a native install that leaves the
-    /// VM's files where they are.
+    /// Migrate to Native's sheet, which brings an export of the VM's home
+    /// into the install.
     public private(set) var showsMigrationNotice = false
+    /// Omarchy holds a finished export that its shutdown publishes.
+    public private(set) var exportWaitsInOutbox = false
     /// The space last read, for the landing page.
     private var lastSpace: TrialSpace?
     private var pendingInstall: (() -> Void)?
@@ -510,8 +514,7 @@
     }
 
     /// The left button and the menu item. Once a VM exists they read Migrate
-    /// to Native, which first says that moving the VM's files is still to
-    /// come.
+    /// to Native, which first offers to bring an export of the VM's home.
     public func chooseInstall(then install: @escaping () -> Void) {
       guard canInstall else { return }
       guard hasVM else {
@@ -519,13 +522,25 @@
         return
       }
       pendingInstall = install
+      exportWaitsInOutbox = isActive && environment.hasExportInOutbox()
       showsMigrationNotice = true
       showsWindow = true
     }
 
-    /// Install Without Migrating: the VM stays where it is, and the install
-    /// goes ahead as Install on this Mac does.
-    public func installWithoutMigrating() {
+    /// Shut Down Omarchy, while an export waits in the VM: the launcher
+    /// publishes it as Omarchy stops, and `then` runs once it has.
+    public func shutDownToPublishExport(then completion: @escaping () -> Void) {
+      guard showsMigrationNotice, exportWaitsInOutbox, isActive else { return }
+      shutDown { [weak self] in
+        guard let self else { return }
+        exportWaitsInOutbox = false
+        completion()
+      }
+    }
+
+    /// Install with These Files, or Install Without Migrating: the VM stays
+    /// where it is, and the install goes ahead as Install on this Mac does.
+    public func continueToInstall() {
       guard showsMigrationNotice, let install = pendingInstall else { return }
       dismissMigrationNotice()
       leaveForInstall(then: install)
@@ -533,6 +548,7 @@
 
     public func dismissMigrationNotice() {
       showsMigrationNotice = false
+      exportWaitsInOutbox = false
       pendingInstall = nil
     }
 

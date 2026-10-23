@@ -21,6 +21,53 @@
     public static let inspectingSubheadline =
       "Checking the Mac model, macOS version, power, FileVault, and free disk space."
 
+    // MARK: Screen A — Try Omarchy export
+
+    public static let tryExportHeading = "Your Try Omarchy setup"
+    public static let tryExportChoice = "Bring it to this Omarchy install"
+    public static let tryExportChecking = "Checking the encrypted export…"
+    public static let tryExportVerified =
+      "The encrypted export is intact. You’ll need its transfer passphrase after Omarchy starts."
+    /// Until staging lands, choosing an export only checks it.
+    public static let tryExportNotYet =
+      "This installer checks the export but can’t bring it across yet."
+    public static let tryExportUnavailable =
+      "Try Omarchy’s Exports folder can be changed by other users, so its exports were skipped."
+    public static let tryExportMissing =
+      "That export is no longer in Try Omarchy’s Exports folder. Export again from Try Omarchy."
+
+    public static func tryExportSummary(_ export: TryOmarchyExportDisplay) -> String {
+      "Exported \(export.publishedAt.formatted(date: .abbreviated, time: .shortened)) · \(export.summary)"
+    }
+
+    public static func tryExportUnusable(_ count: Int) -> String? {
+      switch count {
+      case 0: return nil
+      case 1:
+        return
+          "1 other folder in Try Omarchy’s Exports isn’t a complete export, so it was skipped."
+      default:
+        return
+          "\(count) other folders in Try Omarchy’s Exports aren’t complete exports, so they were skipped."
+      }
+    }
+
+    public static func tryExportFailure(_ problem: TryOmarchyExportProblem) -> String {
+      switch problem {
+      case .digestMismatch, .sizeMismatch, .notAnAgeBundle, .receipt, .identityMismatch:
+        return
+          "The export doesn’t match its receipt, so it can’t be used. Export again from Try Omarchy."
+      case .changedDuringVerification:
+        return
+          "The export changed while it was being checked. Wait for Try Omarchy to finish, then check again."
+      case .unsafeOwnership, .exportsFolderUnsafe:
+        return
+          "The export can be changed by other users, so it can’t be trusted. Export again from Try Omarchy."
+      case .unexpectedEntry, .unexpectedContents, .unreadable:
+        return tryExportMissing
+      }
+    }
+
     // MARK: Screen A2 — Existing install
 
     public static let existingInstallHeadline = "Omarchy is already installed"
