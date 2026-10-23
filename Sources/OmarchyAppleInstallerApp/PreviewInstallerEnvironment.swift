@@ -87,7 +87,7 @@
       }
 
       let artifacts = Self.previewArtifacts
-      if omarchyBytes != nil {
+      if omarchyBytes != nil, replacing == nil {
         // A size change re-plans against already verified files.
         try? await Task.sleep(for: .milliseconds(250))
         let total: UInt64 = 994_662_584_320
@@ -121,8 +121,24 @@
 
       let total: UInt64 = 994_662_584_320
       let unit: UInt64 = 1_000_000_000
+      if replacing != nil {
+        // A reinstall reuses the old install's exact space and macOS keeps its size.
+        return .plan(Self.replacementPlanDisplay(length: 137_438_953_472, total: total))
+      }
       let length = min(total - 120 * unit, max(30 * unit, omarchyBytes ?? plan.lengthBytes))
       return .plan(Self.planDisplay(length: length, total: total))
+    }
+
+    private static func replacementPlanDisplay(length: UInt64, total: UInt64) -> PlanDisplay {
+      PlanDisplay(
+        diskTotalBytes: total,
+        omarchyBytes: length,
+        bindingDigest: "sha256:" + String(repeating: "b", count: 64),
+        isResizable: false,
+        releaseDescription: "Recorded simulation",
+        targetDescription: "Internal storage · Replace the existing Omarchy",
+        fixedMacOSBytes: total - length
+      )
     }
 
     private static func planDisplay(length: UInt64, total: UInt64) -> PlanDisplay {

@@ -1235,6 +1235,23 @@
       }
     }
 
+    func testStartupDiskRefusalReleasesTheLatchAndNeedsAFreshPlan() async throws {
+      let startup = ClosedEngineHelperError.macOSStartupNotSet as NSError
+      let environment = MockInstallerEnvironment()
+      environment.executeResults = [
+        .failure(EngineXPCSubmissionError.helperRejected(domain: startup.domain, code: startup.code))
+      ]
+      let session = await ready(environment)
+      session.presentInstallCredentials()
+      await session.submit(try authorization())
+      guard case .failed = session.phase else {
+        return XCTFail("Expected failure")
+      }
+      XCTAssertFalse(session.hasExecutionStarted)
+      XCTAssertTrue(session.canInspect)
+      XCTAssertFalse(session.canStartInstallation)
+    }
+
     func testEngineRefusalReleasesTheLatchOnlyWithJournalProof() async throws {
       for unchanged in [false, true] {
         let environment = MockInstallerEnvironment()

@@ -671,6 +671,11 @@
       phase = .installing(journal.display(startedAt: installStartedAt))
     }
 
+    private static func isStartupDiskRefusal(domain: String, code: Int) -> Bool {
+      let startup = ClosedEngineHelperError.macOSStartupNotSet as NSError
+      return domain == startup.domain && code == startup.code
+    }
+
     private func handleExecutionFailure(
       _ error: any Error,
       context: CredentialSheetContext,
@@ -739,6 +744,18 @@
           retrySheet = .presented(reopened)
         }
         return
+      }
+
+      if context.kind == .install,
+        case .helperRejected(let domain, let code) = error as? EngineXPCSubmissionError,
+        Self.isStartupDiskRefusal(domain: domain, code: code)
+      {
+        // The helper confirms macOS as the startup disk before it erases the
+        // old install, so nothing was changed. Release the latch so the
+        // person can fix the setting and check again, and drop the approval:
+        // a new attempt needs a new reviewed plan.
+        hasExecutionStarted = false
+        environment.discardApproval()
       }
 
       if context.kind == .install,
