@@ -53,6 +53,8 @@
         : "I have a current backup and approve the disk layout above."
     }
     public static let planInstall = "Install"
+    public static let installHoldAcknowledgement = "Tick the backup box above to continue."
+    public static let installHoldDownload = "Install unlocks once the download is verified."
     public static let downloadingPackagesTitle = "Downloading Omarchy"
     public static let encryptLinuxDiskTitle = "Encrypt the Omarchy disk"
     public static let encryptLinuxDiskPassword =
@@ -134,6 +136,17 @@
     public static let helperBeingReplacedHeadline = "The installation service is being updated"
     public static let helperBeingReplacedDetail =
       "Another copy of the installer is replacing the installation service, so this request didn't start and nothing was changed. Try again in a moment."
+    public static let earlierRemovalUnfinishedHeadline = "An earlier removal didn’t finish"
+    public static let earlierRemovalUnfinishedDetail =
+      "The installer’s record of an earlier Omarchy removal stops before it finished, so the disk may not be in the layout the installer expects. Installation didn’t start and nothing was changed."
+    public static let earlierRemovalUnfinishedRemedy =
+      "Check the disk layout in Disk Utility, and keep the removal record in \(InstallerProductIdentity.helperWorkingDirectory) for support. The installer won’t install until that record is resolved."
+    public static let earlierInstallRecordUnclearedHeadline =
+      "The installer couldn’t clear an earlier installation’s record"
+    public static let earlierInstallRecordUnclearedDetail =
+      "After the last removal, the installer couldn’t set aside its record of the installation it removed. Installing at the same size could reuse that record and skip installing, so installation didn’t start and nothing was changed."
+    public static let earlierInstallRecordUnclearedRemedy =
+      "Try again: each attempt tries to set the record aside first. If this keeps happening, keep the records in \(InstallerProductIdentity.helperWorkingDirectory) for support."
     public static let helperRetiringHeadline = "The installation service was just removed"
     public static let helperRetiringDetail =
       "Omarchy's removal finished and its installation service is removing itself. Nothing was changed. Try again in a moment; the app sets the service up again with your password."
@@ -390,6 +403,21 @@
         .joined(separator: " · ")
     }
 
+    /// The helper refused to install because of an earlier removal's record.
+    static func earlierRemovalGate(unfinished: Bool, technicalDetail: String) -> FailureDisplay {
+      unfinished
+        ? FailureDisplay(
+          headline: earlierRemovalUnfinishedHeadline,
+          plainDetail: earlierRemovalUnfinishedDetail,
+          technicalDetail: technicalDetail,
+          remedy: earlierRemovalUnfinishedRemedy)
+        : FailureDisplay(
+          headline: earlierInstallRecordUnclearedHeadline,
+          plainDetail: earlierInstallRecordUnclearedDetail,
+          technicalDetail: technicalDetail,
+          remedy: earlierInstallRecordUnclearedRemedy)
+    }
+
     /// The blocked-model card: names this Mac and, when the signed catalog
     /// could be read, the model families this release supports.
     public static func unsupportedModel(
@@ -479,6 +507,16 @@
             : "Save the error details and check the verified installation record before trying again. \(engineDiagnosticsLocation)",
           replanAvailable: unchanged
         )
+      case .preparedResumeMismatch:
+        return FailureDisplay(
+          headline: "The prepared installation no longer matches its saved checkpoint",
+          plainDetail: unchanged
+            ? "The current disk no longer matches the saved checkpoint. No disk changes were made."
+            : "The installation already prepared disk space for Omarchy. That disk space no longer matches the saved checkpoint. No further installation step was started by this resume attempt; earlier disk changes are not undone.",
+          technicalDetail: technicalDetail,
+          remedy:
+            "Keep the installation journal and copy the error details. Review the saved checkpoints to see whether file installation also completed. Restore the expected disk state or get help reconciling it before resuming; do not delete the journal or start a fresh install over it. \(engineDiagnosticsLocation)"
+        )
       case .deviceUnsupported:
         return FailureDisplay(
           headline: blockedHeadline,
@@ -486,6 +524,18 @@
           technicalDetail: technicalDetail,
           remedy: blockedExplainer,
           isBlockedModel: true
+        )
+      case .macOSUpdateRequired:
+        let required = EngineFailureReason.requiredMacOSVersion(inSummary: notice.summary)
+        let named = required.map { "macOS \($0)" } ?? "a newer version of macOS"
+        return FailureDisplay(
+          headline: "Update macOS to install Omarchy",
+          plainDetail:
+            "This Mac’s firmware is older than \(named), which the installation needs. \(diskState)",
+          technicalDetail: technicalDetail,
+          remedy: unchanged
+            ? "Update macOS to \(required.map { "\($0) or later" } ?? "its latest version") in System Settings → General → Software Update, then open this installer again."
+            : "Save the error details and check the verified installation record before trying again. \(engineDiagnosticsLocation)"
         )
       case .planIntegrity:
         return FailureDisplay(
@@ -542,6 +592,21 @@
     ) -> FailureDisplay {
       let technical = String(describing: error)
 
+      if let preflight = error as? InstallerPreSubmissionFailure,
+        let submission = preflight.underlying as? EngineXPCSubmissionError,
+        submission == .helperUnresponsive || submission == .connectionFailed
+      {
+        return FailureDisplay(
+          headline: "The installation service isn’t responding",
+          plainDetail: retryRecoveryAvailable
+            ? "No new installation request was sent. Your verified installation checkpoint is preserved."
+            : "The app couldn’t get a response from the installation service. Installation has not started.",
+          technicalDetail: String(describing: preflight.underlying),
+          remedy: "Run the downloaded \(installerPackage) again, then reopen this app.",
+          retryRecoveryAvailable: retryRecoveryAvailable
+        )
+      }
+
       if retryRecoveryAvailable {
         return FailureDisplay(
           headline: "Recovery authorization didn’t complete",
@@ -551,6 +616,17 @@
           remedy:
             "Enter the authorized macOS account password again. Only the Recovery authorization step will be retried.",
           retryRecoveryAvailable: true
+        )
+      }
+
+      if let preflight = error as? InstallerPreSubmissionFailure {
+        return FailureDisplay(
+          headline: "Installation couldn’t start",
+          plainDetail:
+            "This attempt stopped before an installation request was sent. It made no disk changes.",
+          technicalDetail: String(describing: preflight.underlying),
+          remedy:
+            "Check the error details, then choose Check again to prepare and review a fresh plan."
         )
       }
 
@@ -608,6 +684,15 @@
               plainDetail: PlainLanguage.helperRetiringDetail,
               technicalDetail: technical
             )
+          }
+          for unfinished in [true, false] {
+            let gate =
+              (unfinished
+              ? ClosedEngineHelperError.earlierRemovalUnfinished
+              : .earlierInstallRecordUncleared) as NSError
+            if domain == gate.domain, code == gate.code {
+              return earlierRemovalGate(unfinished: unfinished, technicalDetail: technical)
+            }
           }
           let busy = ClosedEngineHelperError.busy as NSError
           if domain == busy.domain, code == busy.code {
@@ -678,6 +763,10 @@
           )
         case .unsupportedDevice(let identifier):
           return unsupportedModel(deviceIdentifier: identifier, technicalDetail: technical)
+        case .earlierRemovalUnfinished:
+          return earlierRemovalGate(unfinished: true, technicalDetail: technical)
+        case .earlierInstallRecordUncleared:
+          return earlierRemovalGate(unfinished: false, technicalDetail: technical)
         default:
           return FailureDisplay(
             headline: "The installation service reported an error",

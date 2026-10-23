@@ -304,11 +304,12 @@ json.dump(catalog, open(path, 'w'))
   [[ ! -e $WORK/$name.envelope ]] || fail "no envelope is written for a catalog with $name"
 }
 refused_envelope "a-missing-m3-mac" "catalog['models'] = [m for m in models if m['deviceIdentifier'] != 'apple,j613']" "missing apple,j613"
-refused_envelope "a-disabled-m3-mac" "models[-1]['status'] = 'disabled'" "apple,j516m is listed but disabled"
+refused_envelope "a-disabled-m3-mac" "models[-2]['status'] = 'disabled'" "apple,j516m is listed but disabled"
+refused_envelope "a-missing-neo" "catalog['models'] = [m for m in models if m['deviceIdentifier'] != 'apple,j700']" "missing apple,j700"
 refused_envelope "only-m1-and-m2" "catalog['models'] = models[:23]" "missing apple,j433"
 refused_envelope "an-m3-ultra" "models.append(dict(models[0], deviceIdentifier='apple,j575d'))" "apple,j575d is refused"
 refused_envelope "an-m4-mac" "models.append(dict(models[0], deviceIdentifier='apple,j614s'))" "M4 and later"
-pass "envelope refuses a catalog missing, disabling or overreaching any M1, M2 or M3 Mac"
+pass "envelope refuses a catalog missing, disabling or overreaching any supported Mac"
 
 # --- promotion writes both channel objects and verifies them back -----------
 OMARCHY_PUBLISH_ASSUME_YES=os-v4.0.2-mac.1.20260902 "$PUBLISHER" os-promote --tag os-v4.0.2-mac.1.20260902 --to stable \

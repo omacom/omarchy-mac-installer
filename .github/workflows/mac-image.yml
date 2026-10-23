@@ -1,0 +1,246 @@
+name: Mac image (edge)
+
+# Builds the public Apple Silicon image from the edge channel as it is now
+# (image-builder channel mode: the pinned edge omarchy.db, every package
+# checked against it and the Omarchy package key) with the native Recovery app
+# built from this checkout (recovery-app.yml), runs the release guard, and
+# keeps the image, its records and a build provenance attestation as workflow
+# artifacts. It publishes nothing: no release, no catalog, no upload. It uses
+# no secrets, takes no inputs, and never runs for pull requests.
+#
+# The installer finishes every public install with the native Recovery app
+# (its handoff needs the app's install configuration on the stub), so the
+# image job pins the app's inventory in the inputs record (--recovery-app),
+# stages it into the ESP (esp/aurora/recovery/) and declares
+# recovery_gui: omarchy-native-v1 in installer_data.json. The builder and
+# mac-image-check refuse a channel image without it.
+#
+# Started by hand, or called by the release pipeline (mac-release-pipeline.yml,
+# which edge-dispatch.yml starts when an edge publish changes a package the
+# image installs). A caller grants contents: read, id-token: write and
+# attestations: write; the attestation's signer workflow is this file either
+# way, which is what the upload checks.
+
+on:
+  workflow_call:
+    outputs:
+      name:
+        description: The image name and artifact name, omarchy-mac-edge-<YYYY.MM.DD>-<package set id>-<image id>
+        value: ${{ jobs.build.outputs.name }}
+      payload:
+        description: The image zip's file name
+        value: ${{ jobs.build.outputs.payload }}
+      sha256:
+        description: The image zip's sha256
+        value: ${{ jobs.build.outputs.sha256 }}
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-image-edge
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  recovery:
+    name: Native Recovery app
+    # The build's own condition: nothing is built for a run that builds no image.
+    if: >-
+      github.repository == 'omacom/omarchy-mac-installer' &&
+      github.event_name != 'pull_request' &&
+      github.event_name != 'pull_request_target' &&
+      github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/recovery-app.yml
+    permissions:
+      contents: read
+
+  build:
+    name: Build the edge image
+    needs: recovery
+    # Namespace's runners are ours: nothing a pull request starts reaches
+    # them, and a build starts only from main, as the acceptance of its image.
+    if: >-
+      github.repository == 'omacom/omarchy-mac-installer' &&
+      github.event_name != 'pull_request' &&
+      github.event_name != 'pull_request_target' &&
+      github.ref == 'refs/heads/main'
+    # Namespace's bleeding-edge kernel has FAT (vfat and loop devices in the
+    # builder's privileged container), which limine-entry-tool requires of the
+    # ESP. Their default kernel has none.
+    runs-on: namespace-profile-arm64-linux-apple-12x32;kernel.release-channel=bleeding-edge
+    timeout-minutes: 90
+    env:
+      RECOVERY_SHA256: ${{ needs.recovery.outputs.manifest-sha256 }}
+    outputs:
+      name: ${{ steps.stage.outputs.name }}
+      payload: ${{ steps.stage.outputs.payload }}
+      sha256: ${{ steps.stage.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Record the host
+        run: |
+          set -euo pipefail
+          WORK=$RUNNER_TEMP/mac-image
+          echo "WORK=$WORK" >>"$GITHUB_ENV"
+          mkdir -p "$WORK/evidence"
+          {
+            git rev-parse HEAD
+            uname -a
+            head -3 /etc/os-release
+            nproc
+            free -h
+            df -h / "$RUNNER_TEMP"
+            docker version --format '{{.Server.Version}} {{.Server.Arch}}'
+            python3 --version
+          } 2>&1 | tee "$WORK/evidence/host.txt"
+
+      - name: Download the native Recovery app
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.recovery.outputs.artifact }}
+          path: ${{ runner.temp }}/mac-image/recovery-input
+
+      - name: Install host tools
+        run: |
+          set -euo pipefail
+          command -v bsdtar >/dev/null || { sudo apt-get update -q && sudo apt-get install --yes -q libarchive-tools; }
+          command -v jq gpg curl sha256sum
+
+      - name: Unpack the native Recovery app
+        run: |
+          set -euo pipefail
+          [[ $RECOVERY_SHA256 =~ ^[0-9a-f]{64}$ ]] || { echo "::error::the Recovery job reported no inventory digest"; exit 1; }
+          mkdir "$WORK/recovery"
+          tar -xf "$WORK/recovery-input/native-recovery.tar" -C "$WORK/recovery"
+          # The app the Recovery job built, file for file (builder/recovery_app.py).
+          python3 image-builder/builder/recovery_app.py "$WORK/recovery" --sha256 "$RECOVERY_SHA256"
+          grep -Fxq "recovery_app_manifest_sha256=$RECOVERY_SHA256" "$WORK/recovery-input/source.txt"
+          cp "$WORK/recovery-input/source.txt" "$WORK/evidence/recovery-source.txt"
+
+      - name: Resolve the edge inputs
+        run: |
+          set -euo pipefail
+          bash image-builder/bin/mac-image-inputs resolve "$WORK/inputs" --channel-set --channel edge \
+            --recovery-app "$WORK/recovery" --cache "$WORK/cache"
+          tee "$WORK/evidence/inputs" <"$WORK/inputs"
+          grep -Fxq "recovery_app_manifest_sha256=$RECOVERY_SHA256" "$WORK/inputs" ||
+            { echo "::error::the inputs record does not pin the Recovery app built for this run"; exit 1; }
+
+      - name: Build the image
+        run: |
+          set -euo pipefail
+          bash image-builder/bin/build-mac-image --inputs "$WORK/inputs" --recovery-app "$WORK/recovery" \
+            --cache "$WORK/cache" "$WORK/out" 2>&1 | tee "$WORK/evidence/build.log"
+
+      - name: Check the records
+        run: |
+          set -euo pipefail
+          # The container wrote the outputs as root.
+          sudo chown -R "$(id -u):$(id -g)" "$WORK/out" "$WORK/cache"
+          # Both hold a channel image to the native Recovery app: pinned, declared and in the ESP.
+          for check in provenance descriptor; do
+            python3 image-builder/bin/mac-image-check "$check" edge "$WORK/out"
+          done
+          jq -e '.os_list[0].recovery_gui == "omarchy-native-v1"' "$WORK/out/installer_data.json" >/dev/null
+          # Channel packages were verified after install from pacman's cache (builder/channel_set.py verify-installed).
+          grep -h '^verified=' "$WORK/out/logs/packages.log"
+          echo "signatures in the package cache: $(find "$WORK/cache/pkg" -name '*.sig' | wc -l)"
+
+      - name: Run the release guard
+        # The guard loop-mounts root.img and boot.img. The runner has no loop
+        # devices, so it runs in a privileged container, as the builder does,
+        # and unpacks onto a volume: a loop device needs a real filesystem.
+        run: |
+          set -euo pipefail
+          sudo docker run --rm --privileged -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" -v "$WORK:$WORK" -v /guard \
+            -e TMPDIR=/guard -w "$GITHUB_WORKSPACE" ubuntu@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac \
+            bash -c 'apt-get update -qq && apt-get install --yes -qq --no-install-recommends python3 libarchive-tools btrfs-progs >/dev/null &&
+              python3 image-builder/bin/mac-release-guard build "$1"' guard "$WORK/out" 2>&1 | tee "$WORK/evidence/release-guard.log"
+
+      - name: Stage the image
+        id: stage
+        run: |
+          set -euo pipefail
+          name=$(python3 image-builder/bin/mac-image-check name edge "$WORK/out")
+          stage=$WORK/stage/$name
+          mkdir -p "$stage"
+          zip=$(cd "$WORK/out" && ls ./*.zip)
+          zip=${zip#./}
+          mv "$WORK/out/$zip" "$stage/"
+          (cd "$stage" && sha256sum "$zip" >"$zip.sha256")
+          sha256=$(cut -d' ' -f1 "$stage/$zip.sha256")
+          [[ $zip =~ ^omarchy-[0-9]{4}\.[0-9]{2}\.[0-9]{2}-aarch64-apple-silicon-mac-edge-os-package\.zip$ && $sha256 =~ ^[0-9a-f]{64}$ ]]
+          # The name ends in the zip's image id, so each build gets its own release.
+          [[ $name == *-"${sha256:0:12}" ]] || { echo "::error::$name does not name the zip's sha256 $sha256"; exit 1; }
+          for file in installer_data.json IMAGE PROVENANCE INSPECTION inputs; do
+            cp "$WORK/out/$file" "$stage/"
+          done
+          cp -r "$WORK/out/logs" "$stage/logs"
+          cp "$WORK/evidence/build.log" "$WORK/evidence/release-guard.log" "$WORK/evidence/recovery-source.txt" "$stage/"
+          {
+            echo "name=$name"
+            echo "stage=$stage"
+            echo "payload=$zip"
+            echo "sha256=$sha256"
+          } >>"$GITHUB_OUTPUT"
+          {
+            echo "### \`$name\`"
+            echo '```'
+            echo "payload $zip, $(stat -c %s "$stage/$zip") bytes"
+            echo "sha256  $sha256"
+            grep -E '^(channel_set|omarchy_db_sha256|recovery_app_manifest_sha256|package_set_sha256|built|builder_commit)=' "$stage/IMAGE"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the image
+        uses: namespace-actions/upload-artifact@f6ccaacc655aec41b93af180d1d7eef21af862d2 # v1.0.3
+        with:
+          name: ${{ steps.stage.outputs.name }}
+          path: ${{ steps.stage.outputs.stage }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Keep the evidence of a failed or timed-out build
+        if: failure() || cancelled()
+        run: |
+          set +e
+          sudo chown -R "$(id -u):$(id -g)" "$WORK/out" 2>/dev/null
+          cp -r "$WORK/out/logs" "$WORK/evidence/logs" 2>/dev/null
+          for file in installer_data.json IMAGE PROVENANCE INSPECTION; do
+            cp "$WORK/out/$file" "$WORK/evidence/" 2>/dev/null
+          done
+          true
+
+      - name: Upload the evidence of a failed or timed-out build
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mac-image-evidence
+          path: ${{ runner.temp }}/mac-image/evidence/
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Apart from the privileged build, so only this job can mint the Sigstore
+  # certificate. It attests the digest the build recorded; nothing is downloaded.
+  attest:
+    name: Attest the image
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      id-token: write # the attestation's Sigstore certificate
+      attestations: write # storing the attestation
+    steps:
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ needs.build.outputs.payload }}
+          subject-digest: sha256:${{ needs.build.outputs.sha256 }}

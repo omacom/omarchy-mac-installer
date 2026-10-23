@@ -141,8 +141,9 @@
               failure.plainDetail.contains(
                 "MacBook Pro 14-inch (M4 Pro, 2024) · Mac16,8 · apple,j614s"))
             let remedy = try XCTUnwrap(failure.remedy)
-            XCTAssertTrue(remedy.contains("(34 models)"), remedy)
+            XCTAssertTrue(remedy.contains("(35 models)"), remedy)
             XCTAssertTrue(remedy.contains("M3: iMac, MacBook Air, MacBook Pro"), remedy)
+            XCTAssertTrue(remedy.contains("A18 Pro: MacBook Neo"), remedy)
           }
           XCTAssertFalse(session.canStartInstallation)
           continue
@@ -225,12 +226,18 @@
           await session.submit(dummy)
         }
         switch scenario {
-        case .connectionLost, .emptyReply, .helperFailure, .manualRecovery:
+        case .connectionLost, .emptyReply, .helperFailure, .manualRecovery, .preparedResumeMismatch:
           guard case .failed(let failure) = session.phase else { return XCTFail(scenario.title) }
           XCTAssertFalse(failure.plainDetail.contains("Nothing was changed"))
           XCTAssertFalse(session.canInspect)
           XCTAssertFalse(session.canRetryRecoveryAuthorization)
           if scenario != .manualRecovery { XCTAssertEqual(session.journal.checkpoints.count, 1) }
+          if scenario == .preparedResumeMismatch {
+            XCTAssertTrue(failure.headline.contains("saved checkpoint"))
+            XCTAssertTrue(failure.plainDetail.contains("already prepared disk space"))
+            XCTAssertTrue(try XCTUnwrap(failure.remedy).contains("do not delete the journal"))
+            XCTAssertFalse(failure.replanAvailable)
+          }
         case .completed:
           guard case .done = session.phase else { return XCTFail(scenario.title) }
         default:

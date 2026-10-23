@@ -21,6 +21,13 @@
     case engineFailed(EngineFailureReport)
     case recoveryAuthorizationFailed
     case unsafeTranscript
+    /// The package carries no decoder, or this helper knows no requirement
+    /// for one (see RestoreImageHelper.requirement(environment:)).
+    case restoreImageUnavailable
+    /// The decoder's signature does not satisfy the requirement.
+    case restoreImageRejected
+    case recoveryTemplateRejected
+    case recoveryTemplateUnsupported
   }
 
   public struct PinnedAsahiEngineArchive: Equatable, Sendable {
@@ -55,21 +62,46 @@
     private let effectiveUserID: @Sendable () -> uid_t
     private let expectedFileOwnerID: @Sendable () -> uid_t
     private let extractionOptions: [String]
+    private let restoreImageRequirement: String?
+    private let verifyRestoreImage: @Sendable (URL, String) throws -> Void
+    private let prepareRecoveryTemplate:
+      @Sendable (ImportedEngineHandoffPackage) throws -> PreparedNativeRecoveryTemplate
 
-    public init() {
+    /// `restoreImageRequirement` is the code requirement an install's decoder
+    /// must satisfy; by default the one this process's launchd job implies.
+    public init(
+      restoreImageRequirement: String? = RestoreImageHelper.requirement(
+        environment: ProcessInfo.processInfo.environment
+      )
+    ) {
       effectiveUserID = { geteuid() }
       expectedFileOwnerID = { geteuid() }
       extractionOptions = []
+      self.restoreImageRequirement = restoreImageRequirement
+      verifyRestoreImage = { try RestoreImageHelper.verify($0, requirement: $1) }
+      prepareRecoveryTemplate = { try NativeRecoveryTemplate.prepare(package: $0) }
     }
 
     init(
       effectiveUserID: @escaping @Sendable () -> uid_t,
       expectedFileOwnerID: @escaping @Sendable () -> uid_t = { geteuid() },
-      extractionOptions: [String] = []
+      extractionOptions: [String] = [],
+      restoreImageRequirement: String? = nil,
+      verifyRestoreImage: @escaping @Sendable (URL, String) throws -> Void = {
+        try RestoreImageHelper.verify($0, requirement: $1)
+      },
+      prepareRecoveryTemplate:
+        @escaping @Sendable (ImportedEngineHandoffPackage) throws -> PreparedNativeRecoveryTemplate =
+        {
+          try NativeRecoveryTemplate.prepare(package: $0)
+        }
     ) {
       self.effectiveUserID = effectiveUserID
       self.expectedFileOwnerID = expectedFileOwnerID
       self.extractionOptions = extractionOptions
+      self.restoreImageRequirement = restoreImageRequirement
+      self.verifyRestoreImage = verifyRestoreImage
+      self.prepareRecoveryTemplate = prepareRecoveryTemplate
     }
 
     public func execute(
@@ -80,16 +112,43 @@
       guard effectiveUserID() == 0 else {
         throw PinnedAsahiEngineExecutionError.privilegeRequired
       }
+      // The decoder runs as root, so only the root-only imported copy whose
+      // signature satisfies this helper's own requirement is handed on.
+      guard let restoreImageRequirement, let restoreImage = package.restoreImageURL else {
+        throw PinnedAsahiEngineExecutionError.restoreImageUnavailable
+      }
+      do {
+        try verifyRestoreImage(restoreImage, restoreImageRequirement)
+      } catch {
+        throw PinnedAsahiEngineExecutionError.restoreImageRejected
+      }
+      let recovery: PreparedNativeRecoveryTemplate?
+      do {
+        if try NativeRecoveryTemplate.imageNeedsTemplate(metadataURL: package.metadataURL),
+          package.recoveryTemplateURL != nil
+        {
+          recovery = try prepareRecoveryTemplate(package)
+        } else {
+          recovery = nil
+        }
+      } catch {
+        throw PinnedAsahiEngineExecutionError.recoveryTemplateRejected
+      }
+      defer { recovery?.remove() }
       let journal = try preparePersistentJournal(for: package)
+      var environment = installEnvironment(
+        package: package,
+        authorization: authorization,
+        operation: operation
+      )
+      if let recovery { environment.merge(recovery.environment) { _, new in new } }
+      environment[RestoreImageHelper.pathEnvironmentVariable] = restoreImage.path
+      environment[RestoreImageHelper.requirementEnvironmentVariable] = restoreImageRequirement
       return try run(
         archive: package.engineURL,
         executionParent: package.packageURL.deletingLastPathComponent(),
         journal: journal,
-        additionalEnvironment: installEnvironment(
-          package: package,
-          authorization: authorization,
-          operation: operation
-        ),
+        additionalEnvironment: environment,
         standardInput: authorization.password + Data([10]),
         secrets: [authorization.password],
         retryIdentity: RecoveryRetryIdentity(package: package)
@@ -198,6 +257,20 @@
       try validateArchiveEntries(archive)
       try extract(archive, into: bundle)
       try validateExtractedBundle(bundle)
+      if additionalEnvironment["OMARCHY_RECOVERY_APP"] != nil {
+        do {
+          let capabilities = bundle.appendingPathComponent("engine-capabilities.json")
+          try requireRegularFile(capabilities, executable: false)
+          guard
+            let values = try JSONSerialization.jsonObject(with: Data(contentsOf: capabilities))
+              as? [String: Any],
+            values["schema"] as? Int == 1,
+            values["nativeRecoveryInput"] as? String == "helper-template-v1"
+          else { throw PinnedAsahiEngineExecutionError.recoveryTemplateUnsupported }
+        } catch {
+          throw PinnedAsahiEngineExecutionError.recoveryTemplateUnsupported
+        }
+      }
 
       let transcriptURL =
         journal

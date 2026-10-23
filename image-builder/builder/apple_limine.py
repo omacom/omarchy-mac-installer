@@ -24,6 +24,7 @@ import zlib
 INITRD_EXECUTABLES = (
     "usr/lib/systemd/system-generators/systemd-cryptsetup-generator",
     "usr/bin/systemd-cryptsetup",
+    "usr/bin/btrfs",
 )
 INITRD_FILES = (
     *INITRD_EXECUTABLES,
@@ -116,26 +117,130 @@ def pe_sections(path: Path) -> dict[str, bytes]:
     return sections
 
 
-def kernel_cmdline(root: Path) -> str:
-    text = regular(root / "etc/default/limine").decode()
-    lines = re.findall(r'^KERNEL_CMDLINE\[default\]="([^"\n]*)"$', text, re.M)
-    if len(lines) != 1:
+# limine-entry-tool composes the UKI's command line from every
+# KERNEL_CMDLINE[default] line, read from these files in this order, then from
+# /etc/default/limine: each `+=` puts its value (as written) before what came
+# earlier, each `=` replaces it, and a kernel's own key replaces all of it.
+# Only the plain double-quoted form is read; anything else is refused.
+CMDLINE_SETTING = re.compile(r'\s*KERNEL_CMDLINE\[("?)([^"\]\n]*)\1\]\s*(\+?=)\s*"([^"\n]*)"\s*')
+CMDLINE_SOURCES = ("usr/share/limine-entry-tool.d/*.conf", "etc/limine-entry-tool.conf",
+                   "etc/limine-entry-tool.d/*.conf")
+UKI_CMDLINE_END = b" \n\0"
+
+
+def cmdline_settings(text: str, where: str) -> list[tuple[str, str, str]]:
+    """Each KERNEL_CMDLINE line in TEXT as (key, operator, value)."""
+    settings = []
+    for line in text.splitlines():
+        if not re.match(r"\s*KERNEL_CMDLINE\b", line):
+            continue
+        setting = CMDLINE_SETTING.fullmatch(line)
+        if not setting:
+            raise ContractError(f"{where} sets an unreadable kernel command line: {line.strip()}")
+        settings.append((setting[2], setting[3], setting[4]))
+    return settings
+
+
+def cmdline_sources(root: Path, kernel: str) -> list[tuple[str, str, str]]:
+    """The configuration's KERNEL_CMDLINE settings outside /etc/default/limine,
+    in the order limine-entry-tool reads them."""
+    settings: list[tuple[str, str, str]] = []
+    for pattern in CMDLINE_SOURCES:
+        for path in sorted(root.glob(pattern)):
+            where = "/" + path.relative_to(root).as_posix()
+            if path.is_symlink() or not path.is_file():
+                raise ContractError(f"Limine command line configuration is not a regular file: {where}")
+            for key, operator, value in cmdline_settings(path.read_bytes().decode(), where):
+                if key == kernel:
+                    raise ContractError(f"{where} replaces the {kernel} command line")
+                # The kernel does not read shell quoting: refuse what could hide a parameter.
+                if "'" in value or "\\" in value:
+                    raise ContractError(f"{where} quotes or escapes the kernel command line")
+                settings.append((key, operator, value))
+    return settings
+
+
+def compose_cmdline(settings: list[tuple[str, str, str]]) -> str | None:
+    """limine-entry-tool --get-cmdline's default line from SETTINGS, in reading order."""
+    cmdline = None
+    for key, operator, value in settings:
+        if key == "default":
+            cmdline = value if operator == "=" or cmdline is None else value + " " + cmdline
+    return cmdline
+
+
+def composed_cmdline(root: Path, kernel: str) -> str:
+    """The line limine-entry-tool --get-cmdline composes for KERNEL from the
+    finalized defaults' one KERNEL_CMDLINE[default] and the drop-ins."""
+    defaults = cmdline_settings(regular(root / "etc/default/limine").decode(), "/etc/default/limine")
+    if any(key == kernel for key, _, _ in defaults):
+        raise ContractError(f"/etc/default/limine replaces the {kernel} command line")
+    if len([key for key, _, _ in defaults if key == "default"]) != 1:
         raise ContractError("expected one generated Limine kernel command line")
-    cmdline = lines[0]
-    words = shlex.split(cmdline)
+    return compose_cmdline(cmdline_sources(root, kernel) + defaults)
+
+
+def menu_cmdline(cmdline: str) -> str:
+    """CMDLINE as limine-entry-tool writes it into a menu entry's cmdline:
+    split on whitespace, each word's first occurrence, single spaces."""
+    return " ".join(dict.fromkeys(cmdline.split()))
+
+
+def safe_words(cmdline: str) -> list[str]:
+    """CMDLINE's words, if it boots one btrfs root's @ read-write, unencrypted.
+    Removing repeated words, as the menu's form does, keeps this true."""
+    # shlex reads quotes and backslashes; the kernel does not. Refuse them on
+    # the final line, whichever file supplied them, before splitting it.
+    if "'" in cmdline or "\\" in cmdline:
+        raise ContractError("the kernel command line quotes or escapes a word")
+    try:
+        words = shlex.split(cmdline)
+    except ValueError:
+        raise ContractError("fresh image has an unreadable kernel command line") from None
     roots = [word for word in words if word.startswith("root=")]
     flags = [word for word in words if word.startswith("rootflags=")]
-    if (len(roots) != 1 or not re.fullmatch(r"root=UUID=[0-9a-fA-F-]{36}", roots[0])
+    # One of each: removing repeats could otherwise change which value wins.
+    fstypes = [word for word in words if word.startswith("rootfstype=")]
+    if (len(roots) != 1 or fstypes != ["rootfstype=btrfs"] or not re.fullmatch(r"root=UUID=[0-9a-fA-F-]{36}", roots[0])
             or len(flags) != 1 or "subvol=@" not in flags[0][10:].split(",")
-            or "rw" not in words or "rootfstype=btrfs" not in words
+            or "rw" not in words or "ro" in words
             or any(word.startswith(("rd.luks.", "cryptdevice=", "cryptkey=")) for word in words)):
         raise ContractError("fresh image has an unsafe or encrypted kernel command line")
+    return words
+
+
+def kernel_cmdline(root: Path, kernel: str, verified: str) -> str:
+    """VERIFIED, the UKI's command line, if limine-entry-tool composes exactly
+    it from the finalized defaults and drop-ins and it boots the fstab's root."""
+    if verified != composed_cmdline(root, kernel):
+        raise ContractError("UKI command line differs from finalized defaults and drop-ins")
+    roots = [word for word in safe_words(verified) if word.startswith("root=")]
     rows = [line.split() for line in regular(root / "etc/fstab").decode().splitlines()
             if line.strip() and not line.lstrip().startswith("#")]
     root_rows = [row for row in rows if len(row) >= 4 and row[1] == "/"]
     if len(root_rows) != 1 or roots[0][5:] != root_rows[0][0] or root_rows[0][2] != "btrfs":
         raise ContractError("UKI root does not match the target fstab")
-    return cmdline
+    return verified
+
+
+def uki_cmdline(sections: dict[str, bytes]) -> str:
+    """The command line a UKI embeds, without mkinitcpio's trailing space, newline and NUL."""
+    section = sections.get(".cmdline") or b""
+    line = section[:-len(UKI_CMDLINE_END)]
+    if not section.endswith(UKI_CMDLINE_END) or any(byte in line for byte in b"\n\r\0"):
+        raise ContractError("UKI command line differs from finalized defaults")
+    try:
+        return line.decode()
+    except UnicodeDecodeError:
+        raise ContractError("UKI command line differs from finalized defaults") from None
+
+
+def check_built_cmdline(uki: Path, expected: str) -> None:
+    """At build time: the UKI embeds what the image's limine-entry-tool composes."""
+    if not expected or "\n" in expected:
+        raise ContractError("limine-entry-tool gave no single command line")
+    if pe_sections(uki).get(".cmdline") != expected.encode() + UKI_CMDLINE_END:
+        raise ContractError(f"UKI command line is not limine-entry-tool's: {expected}")
 
 
 def kernel_release(root: Path, kernel: str) -> Path:
@@ -176,11 +281,9 @@ def validate_artifacts(root: Path, kernel: str) -> dict[str, bytes]:
         if not line.startswith(b"VERSION_ID="))
     if sections.get(".osrel") != expected_release:
         raise ContractError("UKI os-release differs from installed release")
-    expected_cmdline = kernel_cmdline(root)
     # mkinitcpio translates the single input line's newline to a space, then
     # appends its own newline and NUL. Do not discard arbitrary whitespace.
-    if sections.get(".cmdline") != expected_cmdline.encode() + b" \n\0":
-        raise ContractError("UKI command line differs from finalized defaults")
+    expected_cmdline = kernel_cmdline(root, kernel, uki_cmdline(sections))
     menu = regular(esp / "limine.conf").decode()
     entry = re.search(r"^\s*//" + re.escape(kernel) + r"\s*\n((?:(?!\s*/).*(?:\n|$))*)", menu, re.M)
     path_match = re.search(r"^\s*path: boot\(\):/EFI/Linux/omarchy_" + re.escape(kernel)
@@ -191,7 +294,9 @@ def validate_artifacts(root: Path, kernel: str) -> dict[str, bytes]:
     if path_match[1] and path_match[1].lower() != hashlib.blake2b(regular(uki_path)).hexdigest():
         raise ContractError("Limine menu UKI verification hash differs")
     overrides = re.findall(r"^\s*cmdline:\s*(.*)$", entry[1], re.M)
-    if overrides and overrides != [expected_cmdline]:
+    # limine-entry-tool writes the line without repeated words or extra spaces;
+    # with Secure Boot off, systemd-stub boots it instead of the UKI's.
+    if overrides and overrides != [menu_cmdline(expected_cmdline)]:
         raise ContractError("Limine menu overrides the verified UKI command line")
     if "machine-id=" in menu:
         raise ContractError("Limine menu carries the builder's machine identity")
@@ -282,7 +387,14 @@ def validate_initramfs(archive: bytes) -> int:
     for name in INITRD_EXECUTABLES:
         mode = members[name][0]
         if not (mode.startswith("-") and mode[3] == "x"):
-            raise ContractError(f"the embedded initramfs cryptsetup binary is not executable: {name}")
+            raise ContractError(f"the embedded initramfs binary is not executable: {name}")
+    # A cross-build may temporarily bind a host wrapper over the installed
+    # binary. Inspect the embedded bytes: restoring the root file afterwards
+    # does not repair the initrd that mkinitcpio already produced.
+    btrfs = initramfs_files(archive, {"usr/bin/btrfs"}).get("usr/bin/btrfs", b"")
+    if (len(btrfs) < 64 or btrfs[:7] != b"\x7fELF\x02\x01\x01"
+            or struct.unpack_from("<H", btrfs, 18)[0] != 183):
+        raise ContractError("the embedded initramfs btrfs is not an AArch64 ELF binary")
     for name, target in INITRD_LINKS.items():
         mode, actual = members[name]
         if not mode.startswith("l") or actual != target:
@@ -334,3 +446,14 @@ def gunzip_prefix(data: bytes) -> tuple[bytes, bytes]:
         raise ContractError("m1n1 stage 2 ends inside U-Boot's gzip stream")
     return output, decompressor.unused_data
 
+
+if __name__ == "__main__":
+    import sys
+    # build-mac-image: apple_limine.py built-cmdline UKI FILE, FILE holding
+    # limine-entry-tool --get-cmdline's last line.
+    if len(sys.argv) != 4 or sys.argv[1] != "built-cmdline":
+        sys.exit("usage: apple_limine.py built-cmdline UKI FILE")
+    try:
+        check_built_cmdline(Path(sys.argv[2]), Path(sys.argv[3]).read_text().removesuffix("\n"))
+    except (ContractError, OSError, UnicodeDecodeError) as error:
+        sys.exit(f"apple_limine: {error}")

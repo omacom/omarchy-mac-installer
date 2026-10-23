@@ -27,6 +27,31 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
   private let prefetch = PayloadPrefetchOrchestrator()
   private var plannedPayload: StagedInstallerArtifact?
 
+  private func accountClient() throws -> AuthenticatedEngineXPCSubmitter {
+    let configuration = try InstallerReleaseConfigurationLocator().loadFromMainBundle()
+    return try AuthenticatedEngineXPCSubmitter(
+      machServiceName: configuration.helperMachServiceName,
+      helperCodeSigningRequirement: configuration.helperCodeSigningRequirement)
+  }
+
+  func inspectRecoveryAccount() async throws -> RecoveryAccountReply? {
+    guard refreshHelperStatus().isReady else { return nil }
+    // A helper another build installed refuses this app until helper setup
+    // replaces it; until then it has no installation to report.
+    guard await probeHelperStatus().isCurrent else { return nil }
+    let reply = try await accountClient().recoveryAccount(action: "inspect")
+    return reply.target == nil ? nil : reply
+  }
+
+  func prepareRecoveryHandoff(ticket: String) async throws -> RecoveryAccountReply {
+    try await accountClient().recoveryAccount(action: "handoff", ticket: ticket)
+  }
+
+  func openStartupDisk() -> Bool {
+    NSWorkspace.shared.open(
+      URL(fileURLWithPath: "/System/Library/PreferencePanes/StartupDisk.prefPane"))
+  }
+
   var payloadPrefetchRequired: Bool { true }
 
   var payloadPrefetchState: PayloadPrefetchState {
@@ -499,12 +524,13 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     journal: @escaping @Sendable (Data) -> Void
   ) async throws -> CompletionDisplay {
     guard buildProfile.allowsEncryption || !encryptLinuxDisk else {
-      throw NSError(
-        domain: "OmarchyPrivateTest", code: 1,
-        userInfo: [
-          NSLocalizedDescriptionKey: "This private M3 test supports plain installation only."
-        ]
-      )
+      throw InstallerPreSubmissionFailure(
+        NSError(
+          domain: "OmarchyPrivateTest", code: 1,
+          userInfo: [
+            NSLocalizedDescriptionKey: "This private M3 test supports plain installation only."
+          ]
+        ))
     }
     let executionStarted = ProcessInfo.processInfo.systemUptime
     let (prepared, approval, configuration, host) = lock.withLock {
@@ -512,19 +538,22 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     }
 
     guard let prepared, let approval, let configuration, let host else {
-      throw InstallerAppError.approvalUnavailable
+      throw InstallerPreSubmissionFailure(InstallerAppError.approvalUnavailable)
     }
 
     // Re-inspection identity match: the Mac that is about to be written to
     // must still be the Mac the plan was bound to.
-    let currentHost = try AppleSiliconHostInspector().inspect()
-    guard
-      currentHost.identity.deviceIdentifier == host.identity.deviceIdentifier
-    else {
-      throw InstallerAppError.hostChanged
+    let handoffDirectory: URL
+    do {
+      let currentHost = try AppleSiliconHostInspector().inspect()
+      guard currentHost.identity.deviceIdentifier == host.identity.deviceIdentifier else {
+        throw InstallerAppError.hostChanged
+      }
+      handoffDirectory = try installerWorkspace().handoff
+    } catch {
+      throw InstallerPreSubmissionFailure(error)
     }
 
-    let workspace = try installerWorkspace()
     let coordinator = InstallerExecutionCoordinator()
     let progress: InstallerExecutionProgress
     do {
@@ -534,7 +563,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
           prepared,
           approval: approval,
           configuration: configuration,
-          handoffDirectory: workspace.handoff,
+          handoffDirectory: handoffDirectory,
           machineOwnerAuthorization: authorization,
           journalProgress: journal
         )
@@ -543,7 +572,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
           prepared,
           approval: approval,
           configuration: configuration,
-          handoffDirectory: workspace.handoff,
+          handoffDirectory: handoffDirectory,
           machineOwnerAuthorization: authorization,
           journalProgress: journal
         )
@@ -603,7 +632,9 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       blockingReason: blockingReason(host: host, engineFailure: engineFailure),
       existingInstalls: existing,
       spaceShortfall: space?.shortfall,
-      unsupportedModel: unsupportedModel
+      unsupportedModel: unsupportedModel,
+      powerButtonGuide: MacPowerButtonGuide(
+        deviceIdentifier: host.identity.deviceIdentifier, modelIdentifier: host.identity.model)
     )
   }
 

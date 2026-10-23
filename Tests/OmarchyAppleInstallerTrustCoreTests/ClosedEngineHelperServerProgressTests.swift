@@ -157,9 +157,13 @@
         prefix: ""
       )
       let bindingDigest = digest(Data("binding".utf8))
+      let restoreImage = Data("signed decoder".utf8)
+      try writePrivate(restoreImage, to: source.appendingPathComponent(RestoreImageHelper.fileName))
+      let restoreImageField =
+        ",\"restore_image\":{\"file_name\":\"\(RestoreImageHelper.fileName)\",\"digest\":\"\(digest(restoreImage))\",\"size_bytes\":\(restoreImage.count)}"
       let manifest = Data(
         """
-        {"format":1,"binding_digest":"\(bindingDigest)","request_file":"request.json","identity_file":"identity.json","engine":{"file_name":"engine.tar.gz","digest":"\(engineDigest)","size_bytes":\(engine.count)},"metadata":{"file_name":"installer-data.json","digest":"\(metadataDigest)","size_bytes":\(metadata.count)},"payload":{"file_name":"omarchy.img.zst","digest":"\(payloadDigest)","size_bytes":\(payload.count)}}
+        {"format":1,"binding_digest":"\(bindingDigest)","request_file":"request.json","identity_file":"identity.json","engine":{"file_name":"engine.tar.gz","digest":"\(engineDigest)","size_bytes":\(engine.count)},"metadata":{"file_name":"installer-data.json","digest":"\(metadataDigest)","size_bytes":\(metadata.count)},"payload":{"file_name":"omarchy.img.zst","digest":"\(payloadDigest)","size_bytes":\(payload.count)}\(restoreImageField)}
         """.utf8
       )
       let request = Data(

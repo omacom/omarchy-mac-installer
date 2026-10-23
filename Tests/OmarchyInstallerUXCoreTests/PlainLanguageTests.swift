@@ -6,6 +6,59 @@
   @testable import OmarchyInstallerUXCore
 
   final class PlainLanguageTests: XCTestCase {
+    func testPreSubmissionHelperFailureKeepsSpecificRecoveryAdvice() throws {
+      let failure = PlainLanguage.failure(
+        for: InstallerPreSubmissionFailure(EngineXPCSubmissionError.helperUnresponsive))
+      XCTAssertEqual(failure.headline, "The installation service isn’t responding")
+      XCTAssertTrue(try XCTUnwrap(failure.remedy).contains("again, then reopen this app"))
+      XCTAssertFalse(try XCTUnwrap(failure.remedy).contains("Check again"))
+      XCTAssertTrue(failure.plainDetail.contains("not started"))
+      for error in [EngineXPCSubmissionError.helperUnresponsive, .connectionFailed] {
+        let retry = PlainLanguage.failure(
+          for: InstallerPreSubmissionFailure(error), retryRecoveryAvailable: true)
+        XCTAssertEqual(retry.headline, failure.headline)
+        XCTAssertEqual(retry.remedy, failure.remedy)
+        XCTAssertTrue(retry.retryRecoveryAvailable)
+        XCTAssertTrue(retry.plainDetail.contains("checkpoint is preserved"))
+        XCTAssertFalse(retry.plainDetail.contains("not started"))
+      }
+    }
+
+    func testPreparedResumeMismatchExplainsCompletedWorkWithoutUnsafeRetry() throws {
+      let notice = EngineFailureNotice(
+        reason: EngineFailureReason(rawValue: 5) ?? .unclassified,
+        exitStatus: 1, diskUnchanged: false,
+        summary: "prepared resume target does not match checkpoint")
+      let failure = PlainLanguage.failure(for: EngineXPCSubmissionError.engineFailed(notice))
+      XCTAssertEqual(
+        failure.headline, "The prepared installation no longer matches its saved checkpoint")
+      XCTAssertTrue(failure.plainDetail.contains("already prepared disk space"))
+      XCTAssertTrue(failure.plainDetail.contains("No further installation step"))
+      XCTAssertTrue(try XCTUnwrap(failure.remedy).contains("journal"))
+      XCTAssertFalse(failure.replanAvailable)
+      XCTAssertFalse(failure.retryRecoveryAvailable)
+    }
+
+    func testAMacOnOlderFirmwareIsToldWhichMacOSToInstall() throws {
+      let notice = EngineFailureNotice(
+        reason: EngineFailureReason(rawValue: 6) ?? .unclassified,
+        exitStatus: 1, diskUnchanged: true,
+        summary:
+          "omarchy_firmware.FirmwareRequirementError: system firmware is older than macOS 26.6.2")
+      let failure = PlainLanguage.failure(for: EngineXPCSubmissionError.engineFailed(notice))
+      XCTAssertEqual(failure.headline, "Update macOS to install Omarchy")
+      XCTAssertTrue(failure.plainDetail.contains("older than macOS 26.6.2"))
+      XCTAssertTrue(failure.plainDetail.contains("No disk changes were made."))
+      XCTAssertTrue(try XCTUnwrap(failure.remedy).hasPrefix("Update macOS to 26.6.2 or later"))
+      XCTAssertFalse(failure.replanAvailable)
+      let changed = PlainLanguage.failure(
+        for: EngineXPCSubmissionError.engineFailed(
+          EngineFailureNotice(
+            reason: notice.reason, exitStatus: 1, diskUnchanged: false, summary: notice.summary)))
+      XCTAssertEqual(changed.headline, failure.headline)
+      XCTAssertTrue(try XCTUnwrap(changed.remedy).hasPrefix("Save the error details"))
+    }
+
     func testSpaceCautionsFollowAllocationAndReserveBoundary() {
       let plan = PlanDisplay(
         diskTotalBytes: 245_000_000_000, omarchyBytes: 40_000_000_000,
@@ -229,18 +282,26 @@
         "j475c", "j475d", "j180d", "j433", "j434", "j504", "j613", "j615", "j514s", "j514c",
         "j514m", "j516s", "j516c", "j516m",
       ].map { "apple,\($0)" }
-      XCTAssertEqual(identifiers, Set(everyM1M2M3Mac))
+      // The templates' one payload is the image every Mac installs, the MacBook Neo's too.
+      XCTAssertEqual(identifiers, Set(everyM1M2M3Mac + ["apple,j700"]))
       let manifest = try JSONSerialization.jsonObject(
         with: Data(contentsOf: scripts.appendingPathComponent("supported-models.json")))
       let supported = try XCTUnwrap((manifest as? [String: Any])?["supported"] as? [String])
-      XCTAssertEqual(Set(supported), Set(everyM1M2M3Mac))
+      XCTAssertEqual(Set(supported), Set(everyM1M2M3Mac + ["apple,j700"]))
       #if DEBUG
         XCTAssertEqual(
-          InstallerSimulationEnvironment.simulatedCatalogDevices.sorted(), everyM1M2M3Mac.sorted())
+          InstallerSimulationEnvironment.simulatedCatalogDevices.sorted(),
+          (everyM1M2M3Mac + ["apple,j700"]).sorted())
       #endif
       for identifier in identifiers {
         XCTAssertNotNil(MacModelNames.name(for: identifier), identifier)
       }
+    }
+
+    func testTheMacBookNeoHasAName() {
+      XCTAssertEqual(MacModelNames.name(for: "apple,j700"), "MacBook Neo (A18 Pro, 2026)")
+      XCTAssertEqual(
+        MacModelNames.supportedFamiliesSummary(["apple,j700"]), "A18 Pro: MacBook Neo")
     }
 
     func testEveryPhaseHasADistinctTitle() {
@@ -340,6 +401,29 @@
         headlines.insert(failure.headline)
       }
       XCTAssertGreaterThanOrEqual(headlines.count, 8)
+    }
+
+    func testAnInstallRefusedForAnEarlierRemovalSaysWhyAndHowToRecover() {
+      for (helperError, headline) in [
+        (
+          ClosedEngineHelperError.earlierRemovalUnfinished,
+          PlainLanguage.earlierRemovalUnfinishedHeadline
+        ),
+        (.earlierInstallRecordUncleared, PlainLanguage.earlierInstallRecordUnclearedHeadline),
+      ] {
+        let bridged = helperError as NSError
+        // Over XPC the app sees the helper's error by domain and code.
+        for error in [
+          helperError as any Error,
+          EngineXPCSubmissionError.helperRejected(domain: bridged.domain, code: bridged.code),
+        ] {
+          let failure = PlainLanguage.failure(for: error)
+          XCTAssertEqual(failure.headline, headline, "\(error)")
+          XCTAssertTrue(failure.plainDetail.contains("nothing was changed"), failure.plainDetail)
+          XCTAssertTrue(
+            failure.remedy?.contains(InstallerProductIdentity.helperWorkingDirectory) == true)
+        }
+      }
     }
 
     func testAnOutdatedInstallerOffersTheDownloadItNeeds() {

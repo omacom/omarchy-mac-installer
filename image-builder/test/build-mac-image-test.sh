@@ -70,13 +70,20 @@ cat >"$candidates/import.json" <<'EOF'
   {"name": "omarchy-mac", "version": "0.1.0-1", "filename": "m.pkg.tar.xz", "group": "runtime"},
   {"name": "omarchy-mac-boot", "version": "20260921-10", "filename": "b.pkg.tar.xz", "group": "runtime"},
   {"name": "linux-aurora", "version": "7.0-1", "filename": "k.pkg.tar.zst", "group": "boot"},
-  {"name": "m1n1-aurora", "version": "1.6.1-1", "filename": "n.pkg.tar.zst", "group": "boot"},
-  {"name": "uboot-asahi", "version": "2026.07-1", "filename": "u.pkg.tar.zst", "group": "boot"}
+  {"name": "aura", "version": "1.6.1-1", "filename": "n.pkg.tar.zst", "group": "boot"},
+  {"name": "uboot-aurora", "version": "2026.07-1", "filename": "u.pkg.tar.zst", "group": "boot"},
+  {"name": "aurora-audio", "version": "4.1.aurora2-1", "filename": "audio.pkg.tar.zst", "group": "support"},
+  {"name": "alsa-ucm-conf-aurora", "version": "10.aurora2-1", "filename": "ucm.pkg.tar.zst", "group": "support"},
+  {"name": "speakerguardd", "version": "0.1.0.aurora2-1", "filename": "guard.pkg.tar.zst", "group": "support"},
+  {"name": "omarchy-aurora-firmware", "version": "20261014-2", "filename": "fw.pkg.tar.zst", "group": "support"},
+  {"name": "mesa-aurora", "version": "26.3-1", "filename": "mesa.pkg.tar.zst", "group": "support"},
+  {"name": "vulkan-aurora", "version": "26.3-1", "filename": "vulkan.pkg.tar.zst", "group": "support"},
+  {"name": "aurora-bless", "version": "0.4-1", "filename": "bless.pkg.tar.zst", "group": "support"}
 ]}
 EOF
-[[ $(qualified uboot-asahi limine gum | paste -sd' ' -) == "omarchy-candidates/uboot-asahi limine gum" ]] ||
+[[ $(qualified uboot-aurora limine gum | paste -sd' ' -) == "omarchy-candidates/uboot-aurora limine gum" ]] ||
   fail "set packages are installed by their repository-qualified name"
-pass "a plain uboot-asahi request cannot resolve to asahi-alarm: set packages are qualified"
+pass "a plain uboot-aurora request cannot resolve to asahi-alarm: set packages are qualified"
 
 # What omarchy-pkg-defaults composes before the Apple list: base, then aarch64 when the runtime ships it.
 mkdir -p "$scratch/runtime/usr/share/omarchy/install"
@@ -91,10 +98,11 @@ printf '# aarch64\nzram-generator\n' >"$scratch/runtime/usr/share/omarchy/instal
   fail "the aarch64 additions follow the base list"
 pass "the runtime's base list, then its aarch64 additions, as omarchy-pkg-defaults composes them"
 
-# The Apple list by upstream's name, else an older runtime's; never a link, which bsdtar reads as empty.
+# The Apple list by the platform's name (omacom/omarchy e1b0e5e9b), else an older runtime's; never a
+# link, which bsdtar reads as empty.
 install_dir=$scratch/runtime/usr/share/omarchy/install
 apple_layout() {
-  rm -f "$install_dir"/omarchy-apple*.packages
+  rm -f "$install_dir"/omarchy-apple*.packages "$install_dir"/omarchy-aarch64-apple.packages
   while (($#)); do
     if [[ $2 == @* ]]; then
       ln -s "${2#@}" "$install_dir/$1"
@@ -108,17 +116,23 @@ apple_layout() {
 chosen_apple() {
   (fail() { builder_fail "$@"; }; read_apple_list && echo "${apple_names[*]}")
 }
+apple_layout omarchy-aarch64-apple.packages 'omarchy-mac omarchy-mac-boot'
+[[ $(chosen_apple) == "omarchy-mac omarchy-mac-boot" ]] || fail "an e1b0e5e9b runtime's omarchy-aarch64-apple.packages is the Apple list"
 apple_layout omarchy-apple-silicon.packages 'omarchy-mac wf-recorder'
-[[ $(chosen_apple) == "omarchy-mac wf-recorder" ]] || fail "an upstream runtime's omarchy-apple-silicon.packages is the Apple list"
+[[ $(chosen_apple) == "omarchy-mac wf-recorder" ]] || fail "a 5397950a2 runtime's omarchy-apple-silicon.packages is the Apple list"
 apple_layout omarchy-apple.packages omarchy-mac
 [[ $(chosen_apple) == omarchy-mac ]] || fail "an older runtime's omarchy-apple.packages is the Apple list"
+apple_layout omarchy-aarch64-apple.packages 'omarchy-mac omarchy-mac-boot' omarchy-apple-silicon.packages 'omarchy-mac wf-recorder'
+[[ $(chosen_apple) == "omarchy-mac omarchy-mac-boot" ]] || fail "the platform's name wins over apple-silicon"
+apple_layout omarchy-aarch64-apple.packages @omarchy-apple-silicon.packages omarchy-apple-silicon.packages 'omarchy-mac wf-recorder'
+[[ $(chosen_apple) == "omarchy-mac wf-recorder" ]] || fail "a link by the platform's name is passed over for the list it names"
 apple_layout omarchy-apple-silicon.packages 'omarchy-mac wf-recorder' omarchy-apple.packages omarchy-mac
-[[ $(chosen_apple) == "omarchy-mac wf-recorder" ]] || fail "upstream's name wins when a runtime ships both"
+[[ $(chosen_apple) == "omarchy-mac wf-recorder" ]] || fail "apple-silicon wins over the oldest name when a runtime ships both"
 apple_layout omarchy-apple-silicon.packages 'omarchy-mac wf-recorder' omarchy-apple.packages @omarchy-apple-silicon.packages
 [[ $(chosen_apple) == "omarchy-mac wf-recorder" ]] || fail "a compatibility link beside the list changes nothing"
 apple_layout omarchy-apple.packages omarchy-mac omarchy-apple-silicon.packages @omarchy-apple.packages
 [[ $(chosen_apple) == omarchy-mac ]] || fail "a link by upstream's name is passed over for the list it names"
-pass "the Apple list is omarchy-apple-silicon.packages, else an older runtime's omarchy-apple.packages, never a link"
+pass "the Apple list is omarchy-aarch64-apple.packages, else omarchy-apple-silicon.packages, else omarchy-apple.packages, never a link"
 refused_apple() {
   local output
   if output=$(chosen_apple 2>&1); then
@@ -127,10 +141,10 @@ refused_apple() {
   [[ $output == "build-mac-image: $1" ]] || fail "$2 is refused with: $1 (got: $output)"
 }
 apple_layout
-refused_apple "the runtime ships no Apple package list (omarchy-apple-silicon.packages or omarchy-apple.packages)" \
+refused_apple "the runtime ships no Apple package list (omarchy-aarch64-apple.packages, omarchy-apple-silicon.packages or omarchy-apple.packages)" \
   "a runtime with no Apple list"
-apple_layout omarchy-apple.packages @omarchy-apple-silicon.packages
-refused_apple "the runtime ships no Apple package list (omarchy-apple-silicon.packages or omarchy-apple.packages)" \
+apple_layout omarchy-aarch64-apple.packages @omarchy-apple.packages omarchy-apple.packages @omarchy-apple-silicon.packages
+refused_apple "the runtime ships no Apple package list (omarchy-aarch64-apple.packages, omarchy-apple-silicon.packages or omarchy-apple.packages)" \
   "a runtime whose only Apple list is a link"
 apple_layout omarchy-apple-silicon.packages ''
 refused_apple "the runtime's omarchy-apple-silicon.packages names no package" "a runtime whose Apple list names nothing"
@@ -139,6 +153,47 @@ pass "a runtime with no Apple list, only a link to one, or an empty one stops th
 grep -A3 '^  prepare_repositories$' "$here/bin/build-mac-image" | grep -Fxq '  read_apple_list' ||
   fail "the build reads the Apple list before it creates the images"
 pass "the build reads the Apple list once, before it creates the images"
+
+# The installed pacman configuration, from each runtime layout: e1b0e5e9b's aarch64-apple templates,
+# 5397950a2's apple-silicon template with its aarch64 mirror list, and older ones.
+installed_config() {
+  local layout
+  target=$scratch/installed
+  rm -rf "$target"
+  mkdir -p "$target/etc"
+  for layout in "$@"; do
+    mkdir -p "$target/${layout%/*}"
+    printf '[options]\n# %s\n' "$layout" >"$target/$layout"
+  done
+  (fail() { builder_fail "$@"; }; write_installed_config) || return
+  printf '%s %s\n' "$(sed -n 2p "$target/etc/pacman.conf")" "$(sed -n 2p "$target/etc/pacman.d/mirrorlist")"
+}
+templates=usr/share/omarchy/default/pacman
+e1b0e5e9b=("$templates"/aarch64/{pacman-edge.conf,mirrorlist-edge} "$templates"/aarch64-apple/{pacman-edge.conf,mirrorlist-edge})
+r5397950a2=("$templates"/aarch64/{pacman-edge.conf,mirrorlist-edge} "$templates"/apple-silicon/{pacman-edge.conf,mirrorlist-edge})
+[[ $(installed_config "${e1b0e5e9b[@]}") == "# $templates/aarch64-apple/pacman-edge.conf # $templates/aarch64-apple/mirrorlist-edge" ]] ||
+  fail "an e1b0e5e9b runtime installs its aarch64-apple template and mirror list"
+[[ $(installed_config "${e1b0e5e9b[@]}" usr/share/omarchy-mac/pacman/pacman-edge.conf) == \
+  "# $templates/aarch64-apple/pacman-edge.conf # $templates/aarch64-apple/mirrorlist-edge" ]] ||
+  fail "the runtime's aarch64-apple template wins over omarchy-mac's"
+[[ $(installed_config "${r5397950a2[@]}") == "# $templates/apple-silicon/pacman-edge.conf # $templates/aarch64/mirrorlist-edge" ]] ||
+  fail "a 5397950a2 runtime installs its apple-silicon template with its aarch64 mirror list"
+[[ $(installed_config "${r5397950a2[@]}" usr/share/omarchy-mac/pacman/pacman-edge.conf) == \
+  "# usr/share/omarchy-mac/pacman/pacman-edge.conf # $templates/aarch64/mirrorlist-edge" ]] ||
+  fail "omarchy-mac's template wins over a 5397950a2 runtime's apple-silicon one"
+[[ $(installed_config "$templates"/aarch64/pacman-edge.conf "$templates"/mirrorlist-aarch64) == \
+  "# $templates/aarch64/pacman-edge.conf # $templates/mirrorlist-aarch64" ]] ||
+  fail "an older runtime installs its aarch64 template and single mirror list"
+[[ $(installed_config "$templates"/aarch64-apple/pacman-edge.conf "$templates"/aarch64/mirrorlist-edge) == \
+  "# $templates/aarch64-apple/pacman-edge.conf # $templates/aarch64/mirrorlist-edge" ]] ||
+  fail "an aarch64-apple template without its own mirror list takes the aarch64 one"
+if output=$(installed_config "$templates"/aarch64-apple/mirrorlist-edge 2>&1); then
+  fail "a runtime with no Apple Silicon template for the channel is refused"
+fi
+[[ $output == "build-mac-image: the image ships no Apple Silicon pacman configuration for edge" ]] ||
+  fail "a runtime with no template is refused with its reason (got: $output)"
+unset target
+pass "the installed pacman.conf is the runtime's aarch64-apple template with its mirror list, else omarchy-mac's, apple-silicon or aarch64 with the aarch64 list"
 
 runtime_list() {
   case $1 in
@@ -157,9 +212,9 @@ target_pacman() {
     return
   fi
   printf '%s\n' "$@" >"$scratch/requested"
-  for name in omarchy omarchy-settings omarchy-mac omarchy-mac-boot linux-aurora m1n1-aurora uboot-asahi; do
-    if [[ $resolution == stolen && $name == uboot-asahi ]]; then
-      echo "asahi-alarm uboot-asahi 2026.07.asahi1-1"
+  for name in omarchy omarchy-settings omarchy-mac omarchy-mac-boot linux-aurora aura uboot-aurora aurora-audio alsa-ucm-conf-aurora speakerguardd omarchy-aurora-firmware mesa-aurora vulkan-aurora aurora-bless; do
+    if [[ $resolution == stolen && $name == uboot-aurora ]]; then
+      echo "asahi-alarm uboot-aurora 2026.07.asahi1-1"
     else
       echo "omarchy-candidates $name 1-1"
     fi
@@ -170,16 +225,27 @@ target_pacman() {
 logs=$scratch/logs
 mkdir -p "$logs"
 (fail() { builder_fail "$@"; }; precheck_transaction) >/dev/null || fail "a set that resolves from itself passes the pre-check"
+cp "$candidates/import.json" "$scratch/complete-support.json"
+for required_support in aurora-audio alsa-ucm-conf-aurora speakerguardd omarchy-aurora-firmware mesa-aurora vulkan-aurora aurora-bless; do
+  jq --arg name "$required_support" '.packages |= map(select(.name != $name))' \
+    "$scratch/complete-support.json" >"$candidates/import.json"
+  if (fail() { builder_fail "$@"; }; precheck_transaction) >/dev/null 2>&1; then
+    fail "Neo image accepted missing $required_support"
+  fi
+done
+cp "$scratch/complete-support.json" "$candidates/import.json"
+pass "Neo images reject incomplete support packages before transactions"
+
 (fail() { builder_fail "$@"; }; precheck_transaction; printf '%s\n' "${base_names[@]}" >"$scratch/base"; printf '%s\n' "${unavailable[@]}" >"$scratch/missing") >/dev/null
 [[ $(<"$scratch/base") == hyprland && $(<"$scratch/missing") == obs-studio ]] ||
   fail "base names the pinned repositories lack are left out and recorded"
-for name in omarchy omarchy-settings omarchy-mac omarchy-mac-boot linux-aurora m1n1-aurora uboot-asahi; do
+for name in omarchy omarchy-settings omarchy-mac omarchy-mac-boot linux-aurora aura uboot-aurora aurora-audio alsa-ucm-conf-aurora speakerguardd omarchy-aurora-firmware mesa-aurora vulkan-aurora aurora-bless; do
   grep -Fxq "omarchy-candidates/$name" "$scratch/requested" || fail "the pre-check resolves $name by its qualified name"
   ! grep -Fxq "$name" "$scratch/requested" || fail "the pre-check also asks for a plain $name"
 done
 grep -Fxq hyprland "$scratch/requested" && ! grep -Fxq obs-studio "$scratch/requested" ||
   fail "the pre-check resolves the base names the repositories carry, and only those"
-grep -Fxq alsa-ucm-conf-asahi "$scratch/requested" && grep -Fxq asahi-audio "$scratch/requested" ||
+grep -Fxq omarchy-candidates/alsa-ucm-conf-aurora "$scratch/requested" && grep -Fxq omarchy-candidates/aurora-audio "$scratch/requested" ||
   fail "the pre-check resolves the speaker stack's profiles and DSP chain"
 pass "the pre-check passes a set that resolves from itself and records base names the repositories lack"
 runtime_list() {
@@ -213,7 +279,7 @@ mkdir -p "$target"
 mount_api() { :; }
 unmount_api() { :; }
 chown() { :; }
-pacman() { printf 'omarchy 4.0.0-1\nomarchy-settings 4.0.0-1\nomarchy-mac 0.1.0-1\nomarchy-mac-boot 20260921-10\nlinux-aurora 7.0-1\nm1n1-aurora 1.6.1-1\nuboot-asahi 2026.07-1\n'; }
+pacman() { printf 'omarchy 4.0.0-1\nomarchy-settings 4.0.0-1\nomarchy-mac 0.1.0-1\nomarchy-mac-boot 20260921-10\nlinux-aurora 7.0-1\naura 1.6.1-1\nuboot-aurora 2026.07-1\naurora-audio 4.1.aurora2-1\nalsa-ucm-conf-aurora 10.aurora2-1\nspeakerguardd 0.1.0.aurora2-1\nomarchy-aurora-firmware 20261014-2\nmesa-aurora 26.3-1\nvulkan-aurora 26.3-1\naurora-bless 0.4-1\n'; }
 target_pacman() {
   [[ -e $target/var/lib/omarchy/image/target ]] && manifest=yes || manifest=no
   printf '%s manifest=%s\n' "$*" "$manifest" >>"$scratch/transactions"
@@ -226,13 +292,14 @@ mapfile -t transactions <"$scratch/transactions"
 ((${#transactions[@]} == 3)) || fail "three transactions: ${transactions[*]}"
 [[ ${transactions[0]} == *" omarchy-candidates/omarchy-settings manifest=no" && ${transactions[0]} != *linux-aurora* ]] ||
   fail "the first transaction is the base and omarchy-settings alone, before the manifest: ${transactions[0]}"
-[[ ${transactions[1]} == "-S omarchy-candidates/omarchy hyprland manifest=yes" ]] ||
+# This fixture is a Neo set: its reviewed Mesa installs with the runtime.
+[[ ${transactions[1]} == "-S omarchy-candidates/omarchy hyprland omarchy-candidates/mesa-aurora omarchy-candidates/vulkan-aurora manifest=yes" ]] ||
   fail "the runtime comes next, after the manifest: ${transactions[1]}"
-for name in omarchy-mac omarchy-mac-boot linux-aurora m1n1-aurora uboot-asahi; do
+for name in omarchy-mac omarchy-mac-boot linux-aurora aura uboot-aurora; do
   [[ " ${transactions[2]} " == *" omarchy-candidates/$name "* ]] || fail "the Apple set installs $name by its qualified name"
 done
-[[ " ${transactions[2]} " == *" alsa-ucm-conf-asahi asahi-audio "* ]] ||
-  fail "the Apple set installs alsa-ucm-conf-asahi and asahi-audio: ${transactions[2]}"
+[[ " ${transactions[2]} " == *" omarchy-candidates/alsa-ucm-conf-aurora omarchy-candidates/aurora-audio "* ]] ||
+  fail "the Apple set installs canonical Aurora profiles and audio: ${transactions[2]}"
 pass "omarchy-settings installs alone, then the manifest, the runtime and the Apple set, set packages by qualified name"
 pass "the Apple set carries the speaker stack's model profiles and DSP chain"
 
@@ -425,13 +492,21 @@ isolated_chroot() {
     [[ -z $resolve_output ]] || echo "$resolve_output"
     return "$resolve_status"
   fi
+  # The image's own limine-entry-tool: noise, then its command line last.
+  if [[ $1 == limine-entry-tool ]]; then
+    [[ $* == "limine-entry-tool --get-cmdline $KERNEL --no-mutex --no-hooks" ]] || return 99
+    printf 'limine-entry-tool: notice\n%s' "$entry_tool_output"
+    return "$entry_tool_status"
+  fi
   local mode=${*: -1} script
   script=$(sed -e "s|/dev/disk/by-uuid|$boot_root/by-uuid|g" -e "s|/var/lib/omarchy/limine.enabled|$boot_root/gate|g" \
     -e "s|/usr/bin/omarchy-lifecycle-dispatch|$boot_root/bin/omarchy-lifecycle-dispatch|g")
   PATH=$boot_root/bin:$PATH OMARCHY_PATH=$boot_root/runtime /bin/bash -eE -s -- /dev/loop7 "$ROOT_UUID" "$mode" <<<"$script" || return
   mkdir -p "$target/boot/efi/EFI/Linux" "$target/boot/efi/EFI/BOOT" "$target/usr/share/limine" "$target/etc"
   echo "/Omarchy" >"$target/boot/efi/limine.conf"
-  echo uki >"$target/boot/efi/EFI/Linux/omarchy_$KERNEL.efi"
+  python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import fixtures
+open(sys.argv[2], "wb").write(fixtures.pe_image({".cmdline": sys.argv[3].encode() + b" \n\0"}))' \
+    "$here/test" "$target/boot/efi/EFI/Linux/omarchy_$KERNEL.efi" "$uki_cmdline"
   echo limine | tee "$target/usr/share/limine/BOOTAA64.EFI" >"$target/boot/efi/EFI/BOOT/BOOTAA64.EFI"
 }
 boot_layout() {
@@ -440,6 +515,8 @@ boot_layout() {
   mkdir -p "$boot_root/bin" "$boot_root/runtime/install/hardware/apple" "$target/usr/bin" "$logs"
   : >"$boot_root/ran"
   resolve_output=/usr/lib/omarchy/mac-boot/setup-boot resolve_status=0
+  uki_cmdline="root=UUID=$ROOT_UUID rw rootfstype=btrfs" entry_tool_status=0
+  entry_tool_output=$'root=UUID='"$ROOT_UUID"$' rw rootfstype=btrfs\n'
   local part
   for part in "$@"; do
     case $part in
@@ -513,6 +590,26 @@ mkdir -p "$target/var/lib/omarchy"
 : >"$target/var/lib/omarchy/limine.enabled"
 if activate 2>/dev/null; then fail "a gate set before the boot setup is refused"; fi
 pass "the Limine gate must not be set before the boot setup runs"
+
+# The UKI carries what the image's limine-entry-tool composes from the
+# defaults and its drop-ins, in the tool's order.
+boot_layout dispatcher entry
+uki_cmdline="root=UUID=$ROOT_UUID rw quiet b=2 a=1" entry_tool_output=$'root=UUID='"$ROOT_UUID"$' rw quiet b=2 a=1\n'
+activate || fail "a UKI with limine-entry-tool's command line passes"
+[[ $(<"$work/limine-cmdline") == "root=UUID=$ROOT_UUID rw quiet b=2 a=1" && ! -e $target/boot/efi/limine-cmdline ]] ||
+  fail "the tool's command line stays in the builder's work directory" "$(<"$work/limine-cmdline")"
+for case in "order:root=UUID=$ROOT_UUID rw quiet a=1 b=2:0" "missing:root=UUID=$ROOT_UUID rw quiet b=2:0" \
+  "failed:root=UUID=$ROOT_UUID rw quiet b=2 a=1:1" "empty::0"; do
+  IFS=: read -r name output status <<<"$case"
+  boot_layout dispatcher entry
+  uki_cmdline="root=UUID=$ROOT_UUID rw quiet b=2 a=1" entry_tool_output=${output:+$output$'\n'} entry_tool_status=$status
+  if activate 2>"$scratch/boot-error"; then
+    fail "a UKI without limine-entry-tool's command line is refused ($name)"
+  fi
+  grep -Eq "limine-entry-tool cannot compose|does not carry limine-entry-tool's command line" "$scratch/boot-error" ||
+    fail "the refusal names the command line ($name)" "$(<"$scratch/boot-error")"
+done
+pass "the build holds the UKI's command line to the image's limine-entry-tool --get-cmdline, word for word and in its order"
 unset -f findmnt isolated_chroot
 
 # ── lab access ─────────────────────────────────────────────────────────────
@@ -615,3 +712,266 @@ done
 [[ $(wc -l <"$scratch/requests") -eq 6 && $(head -n 1 "$scratch/requests") == "-S --noconfirm --needed vulkan-asahi" ]] ||
   fail "every sync or refresh is recorded: $(<"$scratch/requests")"
 pass "the first-boot probe's pacman refuses and records every sync or refresh, and runs everything else"
+
+# ── channel mode ───────────────────────────────────────────────────────────
+# A channel record names its set and the channel database instead of a
+# candidate set; the set's -dev runtime fills the omarchy roles.
+channel=$scratch/channel
+mkdir -p "$channel/candidates" "$channel/target"
+db_sha=$(printf '7%.0s' {1..64})
+cat >"$channel/inputs" <<EOF2
+format=2
+resolved_at=2026-10-14T00:00:00Z
+channel_set=omarchy-edge-${db_sha:0:12}
+channel_signer=40DFB630FF42BCFFB047046CF0134EE680CAC571
+channel_manifest_sha256=$(printf '8%.0s' {1..64})
+omarchy_channel=edge
+omarchy_server=https://pkgs.omarchy.org/edge/\$arch
+omarchy_db_sha256=$db_sha
+asahi_alarm_server=https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64
+asahi_alarm_db_sha256=$(printf '2%.0s' {1..64})
+alarm_server=https://ca.us.mirror.archlinuxarm.org/\$arch/\$repo
+alarm_core_db_sha256=$(printf '3%.0s' {1..64})
+alarm_extra_db_sha256=$(printf '4%.0s' {1..64})
+alarm_alarm_db_sha256=$(printf '5%.0s' {1..64})
+alarm_aur_db_sha256=$(printf '6%.0s' {1..64})
+alarm_rootfs_sha256=$(printf '9%.0s' {1..64})
+EOF2
+"$BASH" "$here/bin/mac-image-inputs" check "$channel/inputs" >/dev/null || fail "the channel fixture is a canonical record"
+cat >"$channel/candidates/import.json" <<'EOF2'
+{"kind": "channel", "candidate_only": false, "packages": [
+  {"name": "omarchy-dev", "role": "omarchy", "version": "4.0.0.r6971.g492b883-1", "filename": "d.pkg.tar.zst", "group": "runtime"},
+  {"name": "omarchy-settings-dev", "role": "omarchy-settings", "version": "4.0.0.r6971.g492b883-1", "filename": "s.pkg.tar.zst", "group": "runtime"},
+  {"name": "omarchy-mac", "role": "omarchy-mac", "version": "0.1.4-1", "filename": "m.pkg.tar.zst", "group": "runtime", "source_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+  {"name": "uboot-aurora", "version": "2026.07-1", "filename": "u.pkg.tar.zst", "group": "boot"}
+]}
+EOF2
+(
+  candidates=$channel/candidates target=$channel/target profile=release
+  field() { sed -n "s/^$1=//p" "$channel/inputs"; }
+  fail() { builder_fail "$@"; }
+  chown() { :; }
+  [[ $(record_kind "$channel/inputs") == channel && $(record_kind "$scratch/inputs") == candidate ]] ||
+    fail "a record with channel_set names a channel set, any other a candidate set"
+  [[ $(set_kind) == channel && $(set_name) == "omarchy-edge-${db_sha:0:12}" ]] || fail "the container reads the channel set's name"
+  [[ $(qualified omarchy omarchy-settings omarchy-mac uboot-aurora gum | paste -sd' ' -) == \
+    "omarchy-candidates/omarchy-dev omarchy-candidates/omarchy-settings-dev omarchy-candidates/omarchy-mac omarchy-candidates/uboot-aurora gum" ]] ||
+    fail "a runtime role installs the channel package that fills it: $(qualified omarchy omarchy-settings | paste -sd' ' -)"
+  [[ $(candidate_archive omarchy) == d.pkg.tar.zst && $(candidate_archive omarchy-dev) == d.pkg.tar.zst ]] ||
+    fail "the runtime's lists are read from the package that fills the omarchy role"
+  [[ $(image_profile) == release ]] || fail "a channel image is a public (release) image"
+  MAC_IMAGE_BUILDER_COMMIT=$builder_commit MAC_IMAGE_BUILDER_CLEAN=true write_image_target
+  [[ $(<"$target/var/lib/omarchy/image/target") == "format=1
+platform=apple-silicon
+channel_set=omarchy-edge-${db_sha:0:12}
+channel_db_sha256=$db_sha
+builder_commit=$builder_commit
+builder_tree_clean=true
+image_profile=release" ]] || fail "a channel image's target names the channel set and database" "$(<"$target/var/lib/omarchy/image/target")"
+  [[ $(sealed_body) == "format=2
+channel_set=omarchy-edge-${db_sha:0:12}
+channel_db_sha256=$db_sha" ]] || fail "@factory is sealed for the channel set and database"
+  [[ $(image_inputs) == "channel_set channel_signer channel_manifest_sha256 omarchy_channel omarchy_db_sha256" ]] ||
+    fail "IMAGE names the channel set, signer, manifest and database"
+  if (profile=lab; write_image_target) >/dev/null 2>&1; then
+    fail "a channel image target is never written for a lab image"
+  fi
+)
+pass "a channel record installs the -dev runtime by its roles and records a release image of the channel set and database"
+
+(
+  candidates=$channel/candidates
+  [[ $(jq -r '.packages[] | select(.group == "runtime" and .source_commit != null) | .name' "$candidates/import.json") == omarchy-mac ]] ||
+    fail "only runtime packages with a source revision get candidate_source lines"
+)
+pass "PROVENANCE names a source commit only for runtime packages that ship one"
+
+mkdir -p "$scratch/lab"
+for options in "--candidates $channel|takes no --candidates" "--lab-access $scratch/lab|built from a candidate set only"; do
+  IFS='|' read -r option expected <<<"$options"
+  read -ra words <<<"$option"
+  refusal=$( (command() { return 0; }; host_main --inputs "$channel/inputs" "${words[@]}" "$scratch/out") 2>&1 >/dev/null) &&
+    fail "a channel record refuses ${words[0]}"
+  [[ $refusal == *"$expected"* ]] || fail "a channel record refuses ${words[0]}: $refusal"
+done
+[[ ! -e $scratch/out ]] || fail "a refused channel build writes nothing"
+pass "a channel record refuses --candidates and --lab-access"
+
+# The installer hands every public install to the native Recovery app, so a
+# channel record that pins none is refused before any container or download.
+refusal=$( (command() { return 0; }; host_main --inputs "$channel/inputs" "$scratch/out") 2>&1 >/dev/null) &&
+  fail "a channel record without the native Recovery app builds"
+[[ $refusal == *"a channel image needs the native Recovery app: resolve and build with --recovery-app" ]] ||
+  fail "a channel record without the native Recovery app is refused: $refusal"
+refusal=$( (command() { return 0; }; host_main --inputs "$channel/inputs" --dry-run "$scratch/out") 2>&1 >/dev/null) &&
+  fail "a channel record without the native Recovery app passes a dry run"
+[[ $refusal == *"needs the native Recovery app"* ]] || fail "a dry run refuses a channel record without Recovery: $refusal"
+[[ ! -e $scratch/out ]] || fail "a refused channel build writes nothing"
+pass "a channel record without the native Recovery app is refused, dry runs included"
+
+# ── repository order ───────────────────────────────────────────────────────
+# A channel image searches the repositories in the order of the Apple template
+# its runtime settings package ships (omarchy-settings-dev on edge), which
+# becomes the installed /etc/pacman.conf: [omarchy] first.
+# (A test above replaced repositories; take the builder's back.)
+# shellcheck source=/dev/null
+source <(sed -n '/^repositories() {/,/^}/p' "$here/bin/build-mac-image")
+runtime_template() {
+  local tree=$scratch/runtime-tree
+  rm -rf "$tree"
+  mkdir -p "$tree/usr/share/omarchy/default/pacman/aarch64-apple"
+  [[ -z $1 ]] || printf '%s' "$1" >"$tree/usr/share/omarchy/default/pacman/aarch64-apple/pacman-edge.conf"
+  touch "$tree/usr/share/omarchy/.keep"
+  bsdtar -cf "$channel/candidates/s.pkg.tar.zst" -C "$tree" usr
+}
+RUNTIME_TEMPLATE='[options]
+SigLevel = Required DatabaseOptional
+# [core-testing]
+[omarchy]
+Server = https://pkgs.omarchy.org/edge/$arch
+[asahi-alarm]
+Server = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64
+[core]
+Include = /etc/pacman.d/mirrorlist
+[extra]
+Include = /etc/pacman.d/mirrorlist
+[alarm]
+Include = /etc/pacman.d/mirrorlist
+[aur]
+Include = /etc/pacman.d/mirrorlist
+'
+runtime_template "$RUNTIME_TEMPLATE"
+(
+  candidates=$channel/candidates
+  field() { sed -n "s/^$1=//p" "$channel/inputs"; }
+  fail() { builder_fail "$@"; }
+  read_repository_order
+  sections=$(render_config /repos /cache | sed -n 's/^\[\(.*\)\]$/\1/p' | paste -sd' ' -)
+  [[ $sections == "options omarchy-candidates omarchy asahi-alarm core extra alarm aur omarchy-aarch64" ]] ||
+    fail "a channel image searches its runtime's Apple template's order: $sections"
+  [[ $(repositories | sed -n 2p) == "omarchy $db_sha https://pkgs.omarchy.org/edge/\$arch" ]] ||
+    fail "[omarchy] keeps the record's database and server"
+)
+(
+  candidates=$candidates
+  fail() { builder_fail "$@"; }
+  read_repository_order
+  [[ ${repository_order[*]} == "asahi-alarm core extra alarm aur omarchy" ]] ||
+    fail "a candidate set keeps the Apple profile's order: ${repository_order[*]}"
+)
+pass "a channel image searches [omarchy] first, as its runtime's Apple template does; a candidate set keeps [omarchy] last"
+
+runtime_template "$(sed '/^\[aur\]/,$d' <<<"$RUNTIME_TEMPLATE")"
+(
+  candidates=$channel/candidates
+  field() { sed -n "s/^$1=//p" "$channel/inputs"; }
+  fail() { builder_fail "$@"; }
+  read_repository_order
+  [[ ${repository_order[*]} == "omarchy asahi-alarm core extra alarm" ]] ||
+    fail "a template without [aur] gives its own order: ${repository_order[*]}"
+  sections=$(render_config /repos /cache | sed -n 's/^\[\(.*\)\]$/\1/p' | paste -sd' ' -)
+  [[ $sections == "options omarchy-candidates omarchy asahi-alarm core extra alarm omarchy-aarch64" ]] ||
+    fail "a channel image whose template leaves out [aur] searches no [aur]: $sections"
+)
+runtime_template "$RUNTIME_TEMPLATE"
+pass "a runtime template without [aur] builds an image that searches no [aur]"
+
+refused_order() {
+  local expected=$1 what=$2 refusal
+  refusal=$( (candidates=$channel/candidates; field() { sed -n "s/^$1=//p" "$channel/inputs"; }
+    fail() { builder_fail "$@"; }; read_repository_order) 2>&1 >/dev/null) && fail "$what is refused"
+  [[ $refusal == *"$expected"* ]] || fail "$what is refused: $refusal"
+}
+runtime_template "$(sed '/^\[extra\]/,+1d' <<<"$RUNTIME_TEMPLATE")"
+refused_order "names the repositories omarchy asahi-alarm core alarm aur, not the pinned" "a template missing a pinned repository"
+runtime_template "$(sed -e '/^\[extra\]/,+1d' -e '/^\[aur\]/,$d' <<<"$RUNTIME_TEMPLATE")"
+refused_order "names the repositories omarchy asahi-alarm core alarm, not the pinned" "a template missing [aur] and a pinned repository"
+runtime_template "$RUNTIME_TEMPLATE"$'[omarchy-aarch64]\nServer = https://example.invalid\n'
+refused_order "not the pinned" "a template with a repository the record does not pin"
+runtime_template ""
+refused_order "the runtime ships no Apple pacman template for the channel" "a runtime without the template"
+runtime_template "$RUNTIME_TEMPLATE"
+pass "a runtime template that names other repositories than the pinned ones, or none, stops the build"
+
+# The resolution itself, where pacman exists (the Arch Linux ARM source-check
+# container): a package both [omarchy] and Arch Linux ARM carry comes from
+# [omarchy] in a channel image, as on the installed Mac.
+if command -v pacman >/dev/null 2>&1; then
+  sync_db() {
+    local repository=$1 version=$2 tree=$scratch/db-$1
+    mkdir -p "$tree/hyprland-$version" "$scratch/repos/$repository"
+    printf '%%FILENAME%%\nhyprland-%s-aarch64.pkg.tar.zst\n\n%%NAME%%\nhyprland\n\n%%VERSION%%\n%s\n\n%%ARCH%%\naarch64\n\n%%CSIZE%%\n1\n' \
+      "$version" "$version" >"$tree/hyprland-$version/desc"
+    bsdtar -czf "$scratch/dbpath/sync/$repository.db" -C "$tree" "hyprland-$version"
+  }
+  mkdir -p "$scratch/dbpath/sync"
+  sync_db omarchy 0.52.0-1
+  sync_db extra 0.51.1-2
+  for repository in omarchy-candidates asahi-alarm core alarm aur omarchy-aarch64; do
+    bsdtar -czf "$scratch/dbpath/sync/$repository.db" --files-from /dev/null
+  done
+  resolved() {
+    pacman --config "$1" --dbpath "$scratch/dbpath" --noconfirm -Sp --print-format '%r %v' hyprland 2>/dev/null
+  }
+  (
+    candidates=$channel/candidates
+    field() { sed -n "s/^$1=//p" "$channel/inputs"; }
+    fail() { builder_fail "$@"; }
+    read_repository_order
+    render_config "$scratch/repos" "$scratch/cache" | sed 's/^Architecture = .*/Architecture = auto/' >"$scratch/channel.conf"
+    [[ $(resolved "$scratch/channel.conf") == "omarchy 0.52.0-1" ]] ||
+      fail "a channel image takes hyprland from [omarchy]: $(resolved "$scratch/channel.conf")"
+  )
+  render_config "$scratch/repos" "$scratch/cache" | sed 's/^Architecture = .*/Architecture = auto/' >"$scratch/candidate.conf"
+  [[ $(resolved "$scratch/candidate.conf") == "extra 0.51.1-2" ]] ||
+    fail "a candidate set's order still takes it from Arch Linux ARM: $(resolved "$scratch/candidate.conf")"
+  pass "pacman takes a package both [omarchy] and Arch Linux ARM carry from [omarchy] in a channel image"
+else
+  echo "skip - pacman resolution of the repository order (no pacman on this host)"
+fi
+
+# Every image stages the engine's matched J700 board contract from the authenticated Aura package.
+(
+  candidates=$scratch/board-boot-inputs
+  target=$scratch/board-boot-target
+  mkdir -p "$candidates" "$target/usr/share/aura/stage1" "$target/boot/efi/m1n1"
+  echo '{}' >"$candidates/import.json"
+  printf 'authenticated raw Stage 1' >"$target/usr/share/aura/stage1/aura-raw.bin"
+  printf 'assembled Stage 2' >"$target/boot/efi/m1n1/boot.bin"
+  stage_board_boot_payloads
+  cmp "$target/usr/share/aura/stage1/aura-raw.bin" "$target/boot/efi/aurora/stage1-j700.bin" || exit 1
+  cmp "$target/boot/efi/m1n1/boot.bin" "$target/boot/efi/m1n1/boot-j700.bin" || exit 1
+  rm "$target/usr/share/aura/stage1/aura-raw.bin"
+  if (fail() { builder_fail "$@"; }; stage_board_boot_payloads) >/dev/null 2>&1; then
+    exit 1
+  fi
+) || fail "the J700 boot payloads are missing or mismatched"
+pass "every image stages matched J700 board payloads and rejects a missing Aura Stage 1"
+
+# Base runtime requests must resolve to the same reviewed stack as Apple requests.
+(
+  candidates=$scratch/runtime-inputs
+  mkdir -p "$candidates"
+  printf '%s\n' '{"packages":[{"name":"mesa-aurora"},{"name":"vulkan-aurora"},{"name":"aurora-bless"}]}' >"$candidates/import.json"
+  [[ $(qualified mesa vulkan-asahi asahi-bless | paste -sd' ' -) == "omarchy-candidates/mesa-aurora omarchy-candidates/vulkan-aurora omarchy-candidates/aurora-bless" ]] || exit 1
+  runtime_lists() { printf '%s\n' mesa; }
+  target_pacman() { [[ $* == "-Sp --print-format x omarchy-candidates/mesa-aurora" ]]; }
+  available_base
+  [[ ${base_names[*]} == "omarchy-candidates/mesa-aurora" ]]
+) || fail "a base package request bypasses the reviewed Mesa archive"
+pass "base and Apple runtime requests use the reviewed Mesa, Vulkan and bless packages"
+
+# The runtime transaction carries the reviewed Mesa, so stock mesa never installs
+# and the Apple set needs no conflict prompt.
+(
+  candidates=$scratch/runtime-mesa
+  mkdir -p "$candidates"
+  printf '%s\n' '{"packages":[{"name":"omarchy-dev","role":"omarchy"},{"name":"mesa-aurora"},{"name":"vulkan-aurora"}]}' >"$candidates/import.json"
+  mount_api() { :; }
+  unmount_api() { :; }
+  target_pacman() { printf '%s\n' "$*" >"$scratch/runtime-transaction"; }
+  base_names=(hyprland)
+  install_runtime
+  [[ $(<"$scratch/runtime-transaction") == "-S omarchy-candidates/omarchy-dev hyprland omarchy-candidates/mesa-aurora omarchy-candidates/vulkan-aurora" ]]
+) || fail "the runtime transaction does not carry the reviewed Mesa"
+pass "the runtime installs the reviewed Mesa and Vulkan"

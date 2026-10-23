@@ -204,11 +204,11 @@ OS_TAG="os-v4.0.2-mac.1.20260902"
 APP_VERSION="${OMARCHY_APP_VERSION:-2.1.0}"
 APP_BUILD="${OMARCHY_APP_BUILD_NUMBER:-28}"
 PAYLOAD="omarchy-2026.09.02-aarch64-apple-silicon-asahi-os-package.zip"
-# The engine is whatever every build pins in Packaging/build-app.sh, read from
+# The engine is whatever every build pins in Engine/source-lock.json, read from
 # there so a change to the pinned engine never has to be repeated here.
-ENGINE=$(sed -n 's/^engine_file_name="\(.*\)"$/\1/p' "$APP_DIR/Packaging/build-app.sh")
+ENGINE=$(plutil -extract validation_artifact.filename raw -o - "$APP_DIR/Engine/source-lock.json")
 [[ $ENGINE == installer-*.tar.gz ]] || {
-  echo "cutover-wizard: can't read the pinned engine from Packaging/build-app.sh" >&2
+  echo "cutover-wizard: can't read the pinned engine from Engine/source-lock.json" >&2
   exit 1
 }
 ENGINE_SIZE=$(stat -f %z "$APP_DIR/Engine/artifacts/$ENGINE" 2>/dev/null) || {
@@ -252,6 +252,10 @@ published_size() {
 }
 
 banner "Omarchy MX Mac — cutover to channel distribution"
+warn "This wizard publishes to $PUBLIC_BASE. Apps built from Release/release.json"
+warn "read their catalogs from $INSTALLER_CATALOG_BASE instead, so they will not"
+warn "see what this wizard publishes until publishing moves there."
+pause
 
 # ── 1 ─────────────────────────────────────────────────────────────────────
 stage "Mint the long-lived signing key"
@@ -307,7 +311,6 @@ if [[ -f "$APP_DIR/Release/release.json" ]]; then
 else
   run "$APP_DIR/scripts/make-release-descriptor" \
     --public-key "$APP_DIR/Release/trust-root.ed25519.pub" \
-    --base-url "$PUBLIC_BASE" \
     --output "$APP_DIR/Release/release.json"
 fi
 echo
@@ -561,8 +564,8 @@ step "Confirm the BETA banner and badge appear, and the catalog verifies."
 step "Complete an install, boot Omarchy, then run: omarchy debug apple"
 step "Switch back to Stable and confirm it is not blocked as a rollback."
 echo
-warn "If an earlier installer package is installed, the app replaces its helper"
-warn "and removes the old app from Applications; confirm only this app remains."
+warn "A helper or app from an earlier com.omarchy.mx build stays installed beside"
+warn "this one; remove it as the README's upgrade note describes."
 echo
 if ! confirm "Did the M1 install succeed end to end?"; then
   say "Stopping before stable. Nothing users can reach has changed."

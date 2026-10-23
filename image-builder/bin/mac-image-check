@@ -6,6 +6,8 @@ payload     the zip and its installer_data.json: what the engine checks
             (omarchy_asahi.py _validate_full_os_package), the declared sizes,
             the fixed UUIDs, labels and ESP volume id, Limine in the U-Boot
             slot booting its UKI, and an empty esp/omarchy/ directory.
+            test/test_engine_contract.py holds this copy of the contract to
+            the engine's, from this repository.
 image       root.img, boot.img and the ESP tree: filesystems, UUIDs, the five
             subvolumes including a sealed @factory, the tree checks, then the
             boot inspection against the imported candidate set (--candidates),
@@ -19,6 +21,19 @@ descriptor  a build directory whose IMAGE names the lane, platform, builder
             commit, candidate set, package set digest, each payload member's
             sha256 and the inputs digest, matching the bytes and records
             beside it.
+name        a public build directory (descriptor, from a channel set): prints
+            the image's name,
+            omarchy-mac-<lane>-<YYYY.MM.DD>-<package set id>-<image id>, the
+            date its inputs were resolved (the payload's date), the first 12
+            hex digits of IMAGE's package_set_sha256 and the first 12 hex
+            digits of the payload zip's sha256.
+
+A channel build (its inputs record names channel_set=, builder/channel_set.py)
+names its channel set, signer and manifest and the channel database's sha256
+where a candidate build names its candidate set, and must be a public image:
+the release profile, no test image pin, and the native Recovery app pinned in
+its inputs, declared in installer_data (recovery_gui) and carried under
+esp/aurora/recovery/, since the installer finishes every public install with it.
 
 image and tree refuse lab access (builder/lab_access.py) in every subvolume,
 @factory and the initramfs, unless --profile lab names an edge lab image; a lab
@@ -43,6 +58,8 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "builder"))
+import recovery_app  # noqa: E402
 ROOT_UUID = "4f4d5801-524f-4f54-8000-000000000001"
 BOOT_UUID = "4f4d5801-424f-4f54-8000-000000000001"
 ESP_UUID = "4F4D-5801"
@@ -118,10 +135,15 @@ def require(condition: bool, message: str) -> None:
         raise CheckError(message)
 
 
-def expected_metadata(package: str) -> dict:
+def expected_metadata(package: str, native_recovery: bool = False) -> dict:
+    """The one Omarchy target every Mac installs: no board restriction (the
+    catalog and the engine refuse the Macs it does not support), and every
+    Mac's OS firmware, of which the engine's per-device table picks each
+    Mac's."""
     return {
         "os_list": [
             {
+                **({"recovery_gui": "omarchy-native-v1"} if native_recovery else {}),
                 "boot_object": "m1n1.bin",
                 "default_os_name": "Omarchy",
                 "icon": ICON,
@@ -143,7 +165,7 @@ def expected_metadata(package: str) -> dict:
                     {"image": "boot.img", "name": "Boot", "size": f"{BOOT_SIZE}B", "type": "Linux"},
                     {"expand": True, "image": "root.img", "name": "Root", "size": f"{ROOT_SIZE}B", "type": "Linux"},
                 ],
-                "supported_fw": ["13.5", "14.8.3"],
+                "supported_fw": ["13.5", "14.8.3", "26.6.2"],
             }
         ]
     }
@@ -196,7 +218,8 @@ def check_plaintext_root(header: bytes, where: str) -> None:
     check_root_superblock(header, where)
 
 
-def check_payload(lane: str, package: Path, installer_data: Path, profile: str = "release") -> dict[str, str]:
+def check_payload(lane: str, package: Path, installer_data: Path, profile: str = "release",
+                  recovery_digest: str | None = None) -> dict[str, str]:
     check_profile(lane, profile)
     name = package.name
     match = PAYLOAD_NAME.fullmatch(name)
@@ -207,7 +230,13 @@ def check_payload(lane: str, package: Path, installer_data: Path, profile: str =
         metadata = json.loads(installer_data.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise CheckError(f"{installer_data} is not JSON") from error
-    require(metadata == expected_metadata(name), f"{installer_data} is not the installer_data for {name}")
+    require(isinstance(metadata, dict) and isinstance(metadata.get("os_list"), list)
+            and len(metadata["os_list"]) == 1 and isinstance(metadata["os_list"][0], dict),
+            "installer_data must name exactly one OS")
+    native_recovery = metadata.get("os_list", [{}])[0].get("recovery_gui") == "omarchy-native-v1"
+    require(recovery_digest is None or native_recovery == bool(recovery_digest),
+            "Recovery metadata does not match the pinned inputs")
+    require(metadata == expected_metadata(name, native_recovery), f"{installer_data} is not the installer_data for {name}")
 
     try:
         archive = zipfile.ZipFile(package)
@@ -235,12 +264,21 @@ def check_payload(lane: str, package: Path, installer_data: Path, profile: str =
                 f"unexpected member {info.filename}",
             )
             members[info.filename] = info
-        missing = sorted(REQUIRED_MEMBERS - set(members))
+        if native_recovery:
+            try:
+                recovery_app.validate_zip(archive, recovery_digest)
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                raise CheckError(f"invalid native Recovery payload: {error}") from error
+        else:
+            require(not any(n.startswith(recovery_app.PREFIX) for n in members),
+                    "Recovery app present without native Recovery metadata")
+        required = set(REQUIRED_MEMBERS) | {"esp/aurora/stage1-j700.bin", "esp/m1n1/boot-j700.bin"}
+        missing = sorted(required - set(members))
         require(not missing, "missing members: " + ", ".join(missing))
         require("esp/omarchy" in directories, "missing members: esp/omarchy/")
         require(not any(name.startswith("esp/omarchy/") for name in members), "the image carries install.conf")
         require(".builder" not in {PurePosixPath(n).name for n in members}, "the ESP keeps the builder marker")
-        for member in REQUIRED_MEMBERS:
+        for member in required:
             require(members[member].file_size > 0, f"{member} is empty")
         for member, capacity in (("boot.img", BOOT_SIZE), ("root.img", ROOT_SIZE)):
             size = members[member].file_size
@@ -248,6 +286,17 @@ def check_payload(lane: str, package: Path, installer_data: Path, profile: str =
             require(size % 4096 == 0, f"{member} is not a multiple of 4 KiB")
         esp_bytes = sum(info.file_size for member, info in members.items() if member.startswith("esp/"))
         require(esp_bytes <= ESP_SIZE, f"the ESP tree is {esp_bytes} bytes, over its {ESP_SIZE}-byte partition")
+        # The engine's J700 Stage 1 must be fillable, and its Stage 2 the common bundle.
+        stage1 = archive.read("esp/aurora/stage1-j700.bin")
+        magic = b"AURORA-S1-CFG01\0"
+        require(stage1.endswith(b"STACKBOT") and stage1.count(magic) == 1,
+                "the J700 Stage 1 is missing its configuration block")
+        offset = stage1.index(magic) + len(magic)
+        require(offset + struct.calcsize("<II40s192s") + 4 <= len(stage1) - 8
+                and struct.unpack_from("<I", stage1, offset)[0] == 1,
+                "the J700 Stage 1 has an invalid configuration block")
+        require(archive.read("esp/m1n1/boot-j700.bin") == archive.read("esp/m1n1/boot.bin"),
+                "the J700 Stage 2 differs from the common bundle")
 
         keep = {
             "boot.img": 0x488,
@@ -301,14 +350,23 @@ def check_boot(root: Path) -> None:
     # The Mac boots Limine only: no GRUB configuration, image or retarget.
     for name in ("boot/grub", "etc/default/update-grub"):
         require(not (root / name).exists(), f"/{name} exists on an image without GRUB")
-    # The UKI's command line is derived from these defaults.
-    cmdline = re.findall(r'^KERNEL_CMDLINE\[default\]="([^"]*)"$', (root / "etc/default/limine").read_text(), re.M)
-    require(len(cmdline) == 1, "/etc/default/limine does not set one KERNEL_CMDLINE[default]")
-    arguments = cmdline[0].split()
+    # The UKI's command line is the one limine-entry-tool composes from
+    # /etc/default/limine (one KERNEL_CMDLINE[default], set with = or extended
+    # with +=) and its drop-ins; inspection holds the UKI to it.
+    limine = _module("apple_limine")
+    try:
+        cmdline = limine.composed_cmdline(root, KERNEL)
+    except limine.ContractError as error:
+        raise CheckError(f"the Limine command line: {error}") from None
+    arguments = cmdline.split()
     for argument in (f"root=UUID={ROOT_UUID}", "rootfstype=btrfs"):
         require(argument in arguments, f"the Limine command line lacks {argument}")
     require(any(a.startswith("rootflags=") and "subvol=@" in a.split("=", 1)[1].split(",") for a in arguments),
             "the Limine command line lacks rootflags=subvol=@")
+    try:
+        limine.safe_words(cmdline)
+    except limine.ContractError as error:
+        raise CheckError(f"the Limine command line: {error}") from None
     esp = boot / "efi"
     for name in ("EFI/BOOT/BOOTAA64.EFI", "m1n1/boot.bin", "limine.conf", f"EFI/Linux/omarchy_{KERNEL}.efi"):
         require((esp / name).is_file() and (esp / name).stat().st_size > 0, f"the ESP has no {name}")
@@ -421,7 +479,22 @@ def check_sync_databases(root: Path) -> None:
                 f"the sync database {name} is not a regular, non-empty file")
 
 
-def check_state(root: Path) -> None:
+def runtime_providers(candidates: Path | None) -> dict[str, str]:
+    """The roles a set's runtime fills under another name (a channel set's
+    omarchy-dev fills omarchy), from its import.json."""
+    if candidates is None:
+        return {}
+    summary = json.loads((Path(candidates) / "import.json").read_text())
+    providers = {p["role"]: p["name"] for p in summary["packages"] if p.get("role", p["name"]) != p["name"]}
+    providers.update({"m1n1-aurora": "aura", "uboot-asahi": "uboot-aurora"})
+    for name in ("aurora-audio", "alsa-ucm-conf-aurora", "speakerguardd", "omarchy-aurora-firmware"):
+        require(any(p["name"] == name and p["group"] == "support" for p in summary["packages"]),
+                "Aurora support package is missing: " + name)
+        providers[name] = name
+    return providers
+
+
+def check_state(root: Path, providers: dict[str, str] | None = None) -> None:
     check_provisioning(root)
     check_pristine(root)
     first_boot = root / "etc/systemd/system/multi-user.target.wants/omarchy-first-boot.service"
@@ -432,7 +505,8 @@ def check_state(root: Path) -> None:
         require(path.is_symlink() and os.readlink(path) == destination, f"{link} is not the preset's enable link")
         require((root / destination.lstrip("/")).is_file(), f"{destination} is missing")
     packages = installed_packages(root)
-    missing = sorted(set(IMAGE_PACKAGES) - packages)
+    packages |= {role for role, name in (providers or {}).items() if name in packages}
+    missing = sorted((set(IMAGE_PACKAGES) | set(providers or {})) - packages)
     require(not missing, f"the image lacks {missing}")
     require(not (root / "var/lib/systemd/random-seed").exists(), "the image keeps a random seed")
     require(not list((root / "etc/ssh").glob("ssh_host_*")) if (root / "etc/ssh").is_dir() else True,
@@ -499,11 +573,12 @@ def check_initramfs_lab_access(root: Path) -> None:
     require(not found, "the initramfs carries " + "; ".join(f"{path} ({what})" for path, what, _ in found))
 
 
-def check_tree(root: Path, factory: Path | None = None, profile: str = "release") -> str:
+def check_tree(root: Path, factory: Path | None = None, profile: str = "release",
+               providers: dict[str, str] | None = None) -> str:
     require(root.is_dir(), f"{root} is not a directory")
     check_fstab(root)
     check_boot(root)
-    check_state(root)
+    check_state(root, providers)
     check_secret_material(root, "the image")
     digest = check_lab_access(root, "the image", profile)
     check_initramfs_lab_access(root)
@@ -580,7 +655,7 @@ def check_image(lane: str, root_image: Path, boot_image: Path, esp: Path, candid
             factory.mkdir()
             run("mount", "-o", "ro,subvol=@factory", root_loop, str(factory))
             mounts.append(str(factory))
-            digest = check_tree(tree, factory, profile)
+            digest = check_tree(tree, factory, profile, runtime_providers(candidates))
             for subvolume, point in (("@", tree), ("@home", tree / "home"), ("@log", tree / "var/log"),
                                      ("@pkg", tree / "var/cache/pacman/pkg"), ("@factory", factory)):
                 check_secret_material(point, subvolume)
@@ -702,21 +777,57 @@ def check_provenance(lane: str, directory: Path) -> None:
         sources[name] = commit
     require(sources and sources == report.get("runtime_sources"),
             "PROVENANCE's candidate sources do not match INSPECTION's runtime sources")
-    require(sources.get("omarchy") == fields.get("input.candidate_source_commit", [None])[0],
-            "PROVENANCE's runtime is not from the set's source commit")
+    channel = is_channel(fields, "input.")
+    if channel:
+        # The -dev runtime ships no source revision; the channel database and its archives name it.
+        require(report.get("set_kind") == "channel"
+                and [report.get("database_sha256")] == fields.get("input.omarchy_db_sha256")
+                and [report.get("set")] == fields.get("input.channel_set"),
+                "INSPECTION did not inspect the channel set PROVENANCE names")
+    else:
+        require(sources.get("omarchy") == fields.get("input.candidate_source_commit", [None])[0],
+                "PROVENANCE's runtime is not from the set's source commit")
     profile = check_recorded_profile(lane, fields, "PROVENANCE")
+    if channel:
+        check_public(fields, profile, "PROVENANCE")
+        check_native_recovery(fields.get("input.recovery_app_manifest_sha256", [""])[0], "PROVENANCE")
     require(report.get("lab_access_sha256") == fields.get("lab_access_sha256", [None])[0],
             "INSPECTION's lab access digest does not match PROVENANCE")
-    check_image_target_record(report, fields, profile)
-    check_payload(lane, payload, installer_data, profile)
+    check_image_target_record(report, fields, profile, channel)
+    require("hardware_profile" not in fields and "hardware_profile" not in report,
+            "PROVENANCE or INSPECTION records a retired hardware profile")
+    check_payload(lane, payload, installer_data, profile,
+                  fields.get("input.recovery_app_manifest_sha256", [""])[0])
 
 
-def check_image_target_record(report: dict, fields: dict[str, list[str]], profile: str) -> None:
+def is_channel(fields: dict[str, list[str]], prefix: str = "") -> bool:
+    """Whether a record's inputs name a channel set rather than a candidate set, never both."""
+    channel = f"{prefix}channel_set" in fields
+    require(channel != (f"{prefix}candidate_set" in fields), "the record names no single set")
+    return channel
+
+
+def check_public(fields: dict[str, list[str]], profile: str, where: str) -> None:
+    """A channel image is a public image: the release profile and no test image pin."""
+    require(profile == "release", f"{where} records a {profile} profile for a channel image")
+    require(fields.get("test_image_pin") == [""], f"{where} records a test image pin for a channel image")
+
+
+def check_native_recovery(digest: str, where: str) -> None:
+    """A channel image is a public image, and the installer finishes every public
+    install with the native Recovery app: its inputs must pin one. check_payload
+    then holds installer_data's recovery_gui and the ESP's app to that digest."""
+    require(re.fullmatch(r"[0-9a-f]{64}", digest) is not None,
+            f"{where} pins no native Recovery app: a channel image must carry it (--recovery-app)")
+
+
+def check_image_target_record(report: dict, fields: dict[str, list[str]], profile: str, channel: bool = False) -> None:
     """The provenance the image's target manifest carries, as INSPECTION read it, is this build's."""
     target = report.get("image_target")
     require(isinstance(target, dict), "INSPECTION does not record the image target's provenance")
-    for key, field in (("candidate_set", "input.candidate_set"), ("candidate_source_commit", "input.candidate_source_commit"),
-                       ("builder_commit", "builder_commit"), ("builder_tree_clean", "builder_tree_clean")):
+    set_fields = ((("channel_set", "input.channel_set"), ("channel_db_sha256", "input.omarchy_db_sha256")) if channel
+                  else (("candidate_set", "input.candidate_set"), ("candidate_source_commit", "input.candidate_source_commit")))
+    for key, field in (*set_fields, ("builder_commit", "builder_commit"), ("builder_tree_clean", "builder_tree_clean")):
         require(target.get(key) is not None and [target[key]] == fields.get(field),
                 f"the image target's {key} does not match PROVENANCE")
     if "built" in fields:
@@ -727,7 +838,7 @@ def check_image_target_record(report: dict, fields: dict[str, list[str]], profil
         require("package_set_sha256" not in target and "built" not in target,
                 "the image target records a build identity that PROVENANCE does not")
     require((target.get("image_profile") == "lab") == (profile == "lab")
-            and target.get("image_profile") in ("lab", "test", "release"),
+            and target.get("image_profile") in (("release",) if channel else ("lab", "test", "release")),
             "the image target's profile does not match PROVENANCE")
 
 
@@ -747,6 +858,8 @@ def check_recorded_profile(lane: str, fields: dict[str, list[str]], where: str) 
 
 IMAGE_INPUTS = ("candidate_set", "candidate_source_commit", "candidate_signer", "candidate_receipt_sha256",
                 "candidate_manifest_sha256", "omarchy_channel")
+CHANNEL_IMAGE_INPUTS = ("channel_set", "channel_signer", "channel_manifest_sha256", "omarchy_channel",
+                        "omarchy_db_sha256")
 
 
 def check_descriptor(lane: str, directory: Path) -> None:
@@ -756,7 +869,9 @@ def check_descriptor(lane: str, directory: Path) -> None:
     require(fields.get("format") == ["2"], "IMAGE is not format=2")
     require(fields.get("lane") == [lane], f"IMAGE does not describe a {lane} image")
     require(fields.get("platform") == [PLATFORM], f"IMAGE does not describe an {PLATFORM} image")
-    for key in (*IMAGE_INPUTS, "input_digest", "package_set_sha256", "hardware_setup", "builder_commit",
+    channel = is_channel(fields)
+    image_inputs = CHANNEL_IMAGE_INPUTS if channel else IMAGE_INPUTS
+    for key in (*image_inputs, "input_digest", "package_set_sha256", "hardware_setup", "builder_commit",
                 "builder_tree_clean"):
         once(fields, key, "IMAGE")
     recorded_build_time(fields, "IMAGE")
@@ -765,7 +880,8 @@ def check_descriptor(lane: str, directory: Path) -> None:
     require(inputs.is_file() and provenance.is_file(), "the inputs record and PROVENANCE are not beside IMAGE")
     input_fields = parse_fields(inputs)
     provenance_fields = parse_fields(provenance)
-    for key in IMAGE_INPUTS:
+    require(is_channel(input_fields) == channel, "IMAGE and the inputs record name different kinds of set")
+    for key in image_inputs:
         require(input_fields.get(key) == fields[key], f"IMAGE {key} does not match the inputs record")
         require(provenance_fields.get(f"input.{key}") == fields[key], f"IMAGE {key} does not match PROVENANCE")
     require(fields["omarchy_channel"] == [lane], "IMAGE's lane is not its channel")
@@ -778,10 +894,21 @@ def check_descriptor(lane: str, directory: Path) -> None:
     profile = check_recorded_profile(lane, fields, "IMAGE")
     for key in ("profile", "lab_access_sha256"):
         require(provenance_fields.get(key) == fields.get(key), f"IMAGE {key} does not match PROVENANCE")
+    if channel:
+        check_public(fields, profile, "IMAGE")
+        check_public(provenance_fields, profile, "PROVENANCE")
     payload = payload_in(directory, lane)
     installer_data = directory / "installer_data.json"
     require(installer_data.is_file(), "installer_data.json is not beside IMAGE")
-    digests = check_payload(lane, payload, installer_data, profile)
+    require("hardware_profile" not in fields, "IMAGE records a retired hardware profile")
+    for key in ("recovery_app_manifest_sha256",):
+        require(fields.get(key) == input_fields.get(key)
+                and provenance_fields.get("input." + key) == input_fields.get(key),
+                f"IMAGE {key} does not match the pinned inputs")
+    if channel:
+        check_native_recovery(input_fields.get("recovery_app_manifest_sha256", [""])[0], "the inputs record")
+    digests = check_payload(lane, payload, installer_data, profile,
+                            input_fields.get("recovery_app_manifest_sha256", [""])[0])
     recorded = {}
     for value in fields.get("image_sha256", []):
         require("|" in value, "IMAGE has a malformed image_sha256")
@@ -792,11 +919,42 @@ def check_descriptor(lane: str, directory: Path) -> None:
     require(recorded == digests, "IMAGE does not name each payload member's sha256")
 
 
+# A public image's name, which is also its release's tag: its lane, the date
+# its inputs were resolved, its package set id, the first 12 hex digits of
+# package_set_sha256 (every installed package's name, version and archive
+# sha256), and its image id, the first 12 hex digits of the payload zip's
+# sha256. The image id makes the name one build's: a builder or image fix on
+# the same packages and day (or any rebuild, since the image records when it
+# was built) gets a new release instead of colliding with a published one,
+# while the same bytes always map to the same name, so a re-upload of one
+# build stays a no-op. scripts/mac-upload.py and scripts/catalog_release.py
+# hold the name to the zip's sha256.
+PACKAGE_SET_ID_LENGTH = 12
+IMAGE_ID_LENGTH = 12
+IMAGE_NAME = re.compile(r"^omarchy-mac-(edge|rc|stable)-\d{4}\.\d{2}\.\d{2}-[0-9a-f]{12}-[0-9a-f]{12}$")
+
+
+def image_name(lane: str, directory: Path) -> str:
+    check_descriptor(lane, directory)
+    fields = parse_fields(directory / "IMAGE")
+    require(is_channel(fields), "only a public image built from a channel set is named")
+    require(check_recorded_profile(lane, fields, "IMAGE") == "release", "a lab image is not named")
+    digest = once(fields, "package_set_sha256", "IMAGE")
+    require(re.fullmatch(r"[0-9a-f]{64}", digest) is not None, "IMAGE's package_set_sha256 is malformed")
+    payload = payload_in(directory, lane)
+    date = re.match(r"^omarchy-(\d{4}\.\d{2}\.\d{2})-", payload.name).group(1)
+    image_id = file_sha256(payload)[:IMAGE_ID_LENGTH]
+    name = f"omarchy-mac-{lane}-{date}-{digest[:PACKAGE_SET_ID_LENGTH]}-{image_id}"
+    require(IMAGE_NAME.fullmatch(name) is not None, f"{name} is not an image name")
+    return name
+
+
 USAGE = """Usage: mac-image-check payload <edge|rc|stable> PAYLOAD.zip INSTALLER_DATA.json [--profile lab]
        mac-image-check image <edge|rc|stable> ROOT.img BOOT.img ESP_DIR --candidates DIR [--report FILE] [--profile lab]
        mac-image-check tree <edge|rc|stable> ROOT_TREE [FACTORY_TREE] --candidates DIR [--report FILE] [--profile lab]
        mac-image-check provenance <edge|rc|stable> BUILD_DIR
-       mac-image-check descriptor <edge|rc|stable> BUILD_DIR"""
+       mac-image-check descriptor <edge|rc|stable> BUILD_DIR
+       mac-image-check name <edge|rc|stable> BUILD_DIR"""
 
 
 def main(argv: list[str]) -> int:
@@ -816,7 +974,7 @@ def main(argv: list[str]) -> int:
                 options[arg[2:]] = Path(value)
         else:
             rest.append(arg)
-    arity = {"payload": 2, "image": 3, "tree": None, "provenance": 1, "descriptor": 1}
+    arity = {"payload": 2, "image": 3, "tree": None, "provenance": 1, "descriptor": 1, "name": 1}
     if len(rest) < 3 or rest[0] not in arity or rest[1] not in LANES:
         print(USAGE, file=sys.stderr)
         return 64
@@ -840,10 +998,13 @@ def main(argv: list[str]) -> int:
         elif mode == "tree":
             factory = Path(paths[1]) if len(paths) == 2 else None
             check_profile(lane, profile)
-            digest = check_tree(Path(paths[0]), factory, profile)
+            digest = check_tree(Path(paths[0]), factory, profile, runtime_providers(options["candidates"]))
             inspect_tree(lane, Path(paths[0]), factory, options["candidates"], options.get("report"), digest, profile)
         elif mode == "provenance":
             check_provenance(lane, Path(paths[0]))
+        elif mode == "name":
+            print(image_name(lane, Path(paths[0])))
+            return 0
         else:
             check_descriptor(lane, Path(paths[0]))
     except CheckError as error:

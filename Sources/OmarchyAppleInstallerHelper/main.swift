@@ -54,7 +54,13 @@ do {
   let workingDirectory = try prepareWorkingDirectory()
   let server = ClosedEngineHelperServer(
     workingDirectory: workingDirectory,
-    executor: PinnedAsahiEngineExecutor(),
+    // Installs hand the engine the app's decoder only when it satisfies the
+    // requirement this job pins (or its Developer ID client team implies).
+    executor: PinnedAsahiEngineExecutor(
+      restoreImageRequirement: RestoreImageHelper.requirement(
+        environment: ProcessInfo.processInfo.environment
+      )
+    ),
     selfUninstaller: LaunchdHelperSelfUninstaller(workingDirectory: workingDirectory)
   )
   let delegate = try AuthenticatedEngineXPCListenerDelegate(

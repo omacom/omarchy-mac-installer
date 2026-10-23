@@ -1,22 +1,36 @@
 # SPDX-License-Identifier: MIT
 """Concrete stage-1 adapter over pinned upstream Asahi primitives."""
 
+import collections
+import contextlib
 import hashlib
 import io
 import json
+import logging
 import os
+import plistlib
 import re
 import stat
 import shutil
+import struct
 import subprocess
 import sys
+import tempfile
 import zipfile
+import zlib
 from pathlib import PurePosixPath
 
 import asahi_firmware
 import osinstall
 import stub
 
+import omarchy_apple_aea
+import omarchy_mesa
+import omarchy_mt7932
+import omarchy_mt7932_policy
+import omarchy_als
+import omarchy_isp
+import omarchy_recovery
 import omarchy_planner
 from omarchy_image import (
     WRITE_VERIFICATION, flush_device, hash_target, open_target, timing, write_image,
@@ -30,10 +44,37 @@ INSTALLER_TITLE_PATTERN = re.compile(r"^[A-Za-z0-9 ._()-]{1,64}$")
 VOLUME_GROUP_PATTERN = re.compile(r"^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$")
 PARTITION_PATTERN = re.compile(r"^disk[0-9]+s[0-9]+$")
 READBACK_CHUNK_BYTES = 1024 * 1024
+# Where every macOS through 14 named its restore bundle in bootcaches.plist,
+# and where macOS 26 still keeps it in Preboot, though its bless2 no longer
+# names it.
+RESTORE_BUNDLE_PATH = "./Restore"
+# From macOS 15 the recovery image in a restore image is an Apple Encrypted
+# Archive, which hdiutil cannot attach without Apple's key.
+AEA_MAGIC = b"AEA1"
 
 
 class AsahiAdapterError(RuntimeError):
     pass
+
+
+def verify_default_boot(dutil, group_uuid):
+    """Read back the selected APFS group; bless exit status is insufficient."""
+    try:
+        result = subprocess.run(
+            ["/usr/sbin/bless", "--getBoot", "--plist"], check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        selected = plistlib.loads(result.stdout).get("Boot Volume")
+        if not isinstance(selected, str) or not selected:
+            raise ValueError("missing startup volume")
+        info = dutil.get("info", "-plist", selected)
+        actual = info.get("APFSVolumeGroupID", "")
+        if not isinstance(actual, str) or actual.upper() != group_uuid.upper():
+            raise ValueError("another startup volume is selected")
+    except (OSError, ValueError, TypeError, AttributeError, subprocess.CalledProcessError) as error:
+        raise AsahiAdapterError(
+            "Omarchy was not confirmed as the startup disk. Retry Recovery authorization."
+        ) from error
 
 
 # The Recovery setup that the stub's "Finish Installation" app opens in
@@ -144,7 +185,7 @@ run_with_spinner() {
 }
 
 bputil_now() {
-    bputil -nc -v "$VGID" -u "$OWNER" -p "$PASSWORD" >/tmp/bputil.log 2>&1
+    bputil ##BOOT_POLICY## -v "$VGID" -u "$OWNER" -p "$PASSWORD" >/tmp/bputil.log 2>&1
 }
 
 read_password() {
@@ -226,6 +267,7 @@ fi
 
 echo "This lets $os_name start Linux by lowering the security level of"
 echo "$os_name only. ${BOLD}macOS keeps Full Security.${RST}"
+##BOOT_POLICY_DISCLOSURE##
 echo
 # Ask before anything changes: bputil lowers the security level at once.
 printf "Are you sure you want to do this? (y or n) "
@@ -253,7 +295,7 @@ while :; do
     tries=$((tries + 1))
     if [ "$tries" -ge 3 ]; then
         echo "macOS asks itself now. Type your user name and password."
-        while ! bputil -nc -v "$VGID"; do
+        while ! bputil ##BOOT_POLICY## -v "$VGID"; do
             echo "That didn't work. Press Enter to try again."
             read -r _
         done
@@ -362,29 +404,548 @@ def _write_step2(installer):
     for name, value in (("volume group", installer.osi.vgid), ("Preboot volume group", installer.osi.preboot_vgid)):
         if VOLUME_GROUP_PATTERN.fullmatch(value or "") is None:
             raise AsahiAdapterError(f"{name} is invalid for the Recovery setup")
+    allow_custom_args = getattr(
+        getattr(installer, "sysinfo", None), "device_class", ""
+    ) == "j700ap"
+    disclosure = (
+        'echo "Custom Aura boot arguments, including USB proxy mode, will be allowed."'
+        if allow_custom_args else ""
+    )
     script = (
         STEP2_SCRIPT.replace("##TITLE##", title)
         .replace("##VGID##", installer.osi.vgid)
         .replace("##PREBOOT##", installer.osi.preboot_vgid)
         .replace("##OWNER##", owner)
+        .replace("##BOOT_POLICY_DISCLOSURE##", disclosure)
+        .replace("##BOOT_POLICY##", "-nca" if allow_custom_args else "-nc")
     )
     with open(installer.step2_sh, "w") as fd:
         fd.write(script)
     os.chmod(installer.step2_sh, 0o755)
+# Aurora's board Stage 1 images carry one versioned config block that names
+# the ESP and the Stage 2 path; it is filled in place so the image keeps its
+# length and STACKBOT tail (port of aurora-silicon/m1n1
+# tools/fill_stage1_config.py, MIT).
+STAGE1_MAGIC = b"AURORA-S1-CFG01\0"
+STAGE1_BODY = struct.Struct("<II40s192s")
+STAGE1_BLOCK = len(STAGE1_MAGIC) + STAGE1_BODY.size + 4
+CANONICAL_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
+# Checks an image before any disk changes, when there is no ESP yet.
+PLACEHOLDER_UUID = "00000000-0000-0000-0000-000000000000"
+
+BoardStage1 = collections.namedtuple("BoardStage1", "member window_ms os_firmware macs")
+COMMON_STAGE1 = BoardStage1("esp/aurora/stage1.bin", 0, None, "all admitted Apple Silicon Macs")
+
+# Boards that boot through Aurora's own Stage 1 instead of asahi's. os_firmware
+# is the only OS firmware the image boots, or None for any.
+BOARD_STAGE1 = {
+    "j700ap": BoardStage1("esp/aurora/stage1-j700.bin", 5000, None, "the MacBook Neo"),
+    # The m3next Stage 1 boots only a J613 with 26.6.2 OS firmware and stays in
+    # proxy mode on anything else, so older firmware keeps asahi's. asahi's
+    # Stage 1 makes iBoot panic on 26.6.2 before m1n1 runs.
+    "j613ap": BoardStage1(
+        "esp/aurora/stage1-j613.bin", 0, "26.6.2",
+        "a 13-inch M3 MacBook Air on macOS 26.6.2",
+    ),
+}
+
+
+def fill_aurora_stage1(image, uuid, path, window_ms):
+    if not CANONICAL_UUID.fullmatch(uuid):
+        raise AsahiAdapterError("ESP PARTUUID must be canonical lowercase")
+    if not path or any(not 0x20 <= ord(c) < 0x7F or c in ";\\" for c in path) or any(
+        component in ("", ".", "..") for component in path.split("/")
+    ):
+        raise AsahiAdapterError("Stage 2 path must be relative to the ESP root")
+    encoded = b";" + path.encode("ascii")
+    if len(encoded) >= 192:
+        raise AsahiAdapterError("Stage 2 path is too long")
+    if not 0 <= window_ms <= 99999:
+        raise AsahiAdapterError("proxy window must be 0..99999 ms")
+    if not image.endswith(b"STACKBOT"):
+        raise AsahiAdapterError("Aurora Stage 1 does not end at STACKBOT")
+    if image.count(STAGE1_MAGIC) != 1:
+        raise AsahiAdapterError("Aurora Stage 1 config block must occur exactly once")
+    offset = image.index(STAGE1_MAGIC)
+    if offset + STAGE1_BLOCK > len(image) - 8:
+        raise AsahiAdapterError("Aurora Stage 1 config block extends past the image")
+    if struct.unpack_from("<I", image, offset + len(STAGE1_MAGIC))[0] != 1:
+        raise AsahiAdapterError("unsupported Aurora Stage 1 config version")
+    body = STAGE1_BODY.pack(
+        1, window_ms, uuid.encode("ascii").ljust(40, b"\0"), encoded.ljust(192, b"\0")
+    )
+    block = STAGE1_MAGIC + body + struct.pack("<I", zlib.crc32(body))
+    return image[:offset] + block + image[offset + STAGE1_BLOCK:]
+
+
+def board_stage1(device_class, os_firmware, members=(), *, common_allowed=False):
+    """The Aurora Stage 1 this Mac and OS firmware boot through, or None."""
+    if common_allowed and COMMON_STAGE1.member in members:
+        return COMMON_STAGE1
+    board = BOARD_STAGE1.get(device_class)
+    if board is None or board.os_firmware not in (None, os_firmware):
+        return None
+    return board
+
+
+def common_stage1_allowed(template, device_class, os_firmware):
+    policy = template.get("aurora_stage1")
+    if policy is None:
+        return False
+    if (not isinstance(policy, dict) or set(policy) != {"kind", "qualified_machines"}
+            or policy["kind"] != "common-raw-v1" or not isinstance(policy["qualified_machines"], dict)):
+        raise AsahiAdapterError("invalid common Stage 1 qualification contract")
+    firmware = policy["qualified_machines"].get(device_class, [])
+    if not isinstance(firmware, list) or not all(isinstance(value, str) for value in firmware):
+        raise AsahiAdapterError("invalid qualified Stage 1 firmware list")
+    return os_firmware in firmware
+
+
+def read_board_stage1(board, read_member, next_object="m1n1/boot.bin"):
+    """The board's Stage 1 image from the payload, refused unless fillable."""
+    try:
+        image = read_member(board.member)
+    except KeyError as error:
+        raise AsahiAdapterError(f"this image has no {board.member} for {board.macs}") from error
+    fill_aurora_stage1(image, PLACEHOLDER_UUID, next_object, board.window_ms)
+    return image
+
+
+def install_board_stage1(
+    device_class, os_firmware, read_member, esp_uuid, boot_object, next_object="m1n1/boot.bin",
+    *, common_allowed=False,
+):
+    """Use the common image when supplied, with legacy image compatibility."""
+    try:
+        common_image = read_member(COMMON_STAGE1.member)
+    except KeyError:
+        common_image = None
+    use_common = common_allowed and common_image is not None
+    board = COMMON_STAGE1 if use_common else board_stage1(device_class, os_firmware)
+    if board is None:
+        return
+    image = common_image if use_common else read_board_stage1(board, read_member, next_object)
+    filled = fill_aurora_stage1(image, esp_uuid.lower(), next_object, board.window_ms)
+    with open(boot_object, "wb") as fd:
+        fd.write(filled)
+
+
+ESP_SOURCE = "esp"
+ESP_STAGE2 = "esp/m1n1/boot.bin"
+
+# Boards whose Stage 2 is not the image's generic m1n1/boot.bin. One image
+# carries every board's prebuilt Stage 2: on its own board the file replaces
+# m1n1/boot.bin, and every other board drops it, so no ESP ever holds another
+# board's Stage 2.
+BOARD_STAGE2 = {"j700ap": "esp/m1n1/boot-j700.bin"}
+
+
+def esp_board_layout(device_class, members, *, common_allowed=False):
+    """Each payload ESP member's path on this board's ESP; absent ones are not installed."""
+    members = set(members)
+    common = common_allowed and COMMON_STAGE1.member in members
+    if common and ESP_STAGE2 not in members:
+        raise AsahiAdapterError(f"this common image has no {ESP_STAGE2}")
+    own = None if common else BOARD_STAGE2.get(device_class)
+    if own is not None and own not in members:
+        board = BOARD_STAGE1.get(device_class)
+        macs = board.macs if board is not None else device_class
+        raise AsahiAdapterError(f"this image has no {own} for {macs}")
+    prefix = ESP_SOURCE + "/"
+    layout = {}
+    for member in members:
+        if not member.startswith(prefix):
+            raise AsahiAdapterError("ESP member is outside the ESP source")
+        if member == own:
+            layout[member] = ESP_STAGE2[len(prefix):]
+        elif (member == COMMON_STAGE1.member and not common
+              or member in BOARD_STAGE2.values()
+              or (common and member in {board.member for board in BOARD_STAGE1.values()})
+              or (own is not None and member == ESP_STAGE2)):
+            continue
+        else:
+            layout[member] = member[len(prefix):]
+    return layout
+
+
+def install_esp_board_layout(device_class, members, esp_root, *, common_allowed=False):
+    """Turn the copied payload ESP into this board's ESP."""
+    layout = esp_board_layout(device_class, members, common_allowed=common_allowed)
+    prefix = ESP_SOURCE + "/"
+    installed = set(layout.values())
+    for member in sorted(set(members)):
+        copied = member[len(prefix):]
+        target = layout.get(member)
+        if target == copied:
+            continue
+        copied_path = os.path.join(esp_root, *PurePosixPath(copied).parts)
+        if target is not None:
+            os.replace(copied_path, os.path.join(esp_root, *PurePosixPath(target).parts))
+        elif copied not in installed:
+            os.unlink(copied_path)
+
+
+class _WithoutRecoveryMount:
+    """subprocess for stub, minus attaching or detaching its recovery image."""
+
+    def __init__(self, module):
+        self._module = module
+
+    def __getattr__(self, name):
+        return getattr(self._module, name)
+
+    def run(self, command, *args, **kwargs):
+        if command[:1] == ["hdiutil"] and "recovery" in command:
+            return self._module.CompletedProcess(command, 0)
+        return self._module.run(command, *args, **kwargs)
+
+
+class _WithDecryptedImage:
+    """subprocess for stub, attaching IMAGE's decrypted copy in its place."""
+
+    def __init__(self, module, image, decrypted):
+        self._module, self._image, self._decrypted = module, image, decrypted
+
+    def __getattr__(self, name):
+        return getattr(self._module, name)
+
+    def run(self, command, *args, **kwargs):
+        if command[:2] == ["hdiutil", "attach"]:
+            command = [self._decrypted if part == self._image else part for part in command]
+        return self._module.run(command, *args, **kwargs)
+
+
+class _WithNeoFirmwareArchive(_WithoutRecoveryMount):
+    """Preserve the newer camera daemon and raw ALS input in fallback data."""
+
+    def __init__(self, module, raw_directory):
+        super().__init__(module)
+        self.raw_directory = raw_directory
+
+    def run(self, command, *args, **kwargs):
+        if command[:3] == ["tar", "czf", "all_firmware.tar.gz"]:
+            command = list(command)
+            camera_directory = os.path.abspath("recovery/usr/sbin")
+            if os.path.isfile(os.path.join(camera_directory, "appleh16camerad")):
+                command += ["-C", camera_directory, "appleh16camerad"]
+            command += ["-C", self.raw_directory, "j700-exbright-LSCI.bin"]
+        # Mount handling remains delegated to the original stub module (or
+        # the encrypted-Recovery wrapper), not suppressed by this wrapper.
+        return self._module.run(command, *args, **kwargs)
+
+
+@contextlib.contextmanager
+def _neo_peripheral_collectors(installer):
+    """Patch only the Neo's collectors; retain the inherited legacy paths."""
+    if getattr(getattr(installer, "sysinfo", None), "device_class", "") != "j700ap":
+        yield
+        return
+    try:
+        raw = omarchy_als.read_lsci()
+        als = omarchy_als.calibration(raw)
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        raise AsahiAdapterError(f"MacBook Neo ALS calibration collection failed: {error}") from error
+
+    class NeoAlsCollection:
+        def files(self):
+            name = omarchy_als.FIRMWARE_NAME
+            return [(name, asahi_firmware.core.FWFile(name, als))]
+
+    upgraded_isp = omarchy_isp.collection_class(asahi_firmware.isp)
+
+    class NeoIspCollection(upgraded_isp):
+        def __init__(self, source_path):
+            super().__init__(source_path)
+            names = {name for name, _ in self.files()}
+            required = {"apple/isp_" + sensor + ".dat" for sensor in (
+                "1921_01XX", "1922_02XX", "1925_03XX",
+            )}
+            missing = required - names
+            if missing:
+                raise AsahiAdapterError("MacBook Neo camera firmware is missing: " + ", ".join(sorted(missing)))
+
+    old_als, old_isp, old_process = stub.AlsFWCollection, stub.ISPFWCollection, stub.subprocess
+    with tempfile.TemporaryDirectory(prefix="omarchy-neo-firmware-") as directory:
+        with open(os.path.join(directory, "j700-exbright-LSCI.bin"), "wb") as output:
+            output.write(raw)
+        try:
+            stub.AlsFWCollection = NeoAlsCollection
+            stub.ISPFWCollection = NeoIspCollection
+            stub.subprocess = _WithNeoFirmwareArchive(old_process, directory)
+            yield
+        except omarchy_isp.IspError as error:
+            raise AsahiAdapterError(f"MacBook Neo camera firmware collection failed: {error}") from error
+        finally:
+            stub.AlsFWCollection, stub.ISPFWCollection, stub.subprocess = old_als, old_isp, old_process
 
 
 def stub_installer(sysinfo, dutil, osinfo):
-    """A StubInstaller whose Recovery setup is Omarchy's own step2.sh."""
+    """A StubInstaller that reads macOS 26 firmware's bootcaches.plist and
+    writes Omarchy's own step2.sh as its Recovery setup."""
     installer = stub.StubInstaller(sysinfo, dutil, osinfo)
+    load_identity = installer.load_identity
+
+    def load_identity_naming_the_restore_bundle():
+        identity = load_identity()
+        installer.bootcaches["bless2"].setdefault(
+            "RestoreBundlePath", RESTORE_BUNDLE_PATH
+        )
+        return identity
+
+    installer.load_identity = load_identity_naming_the_restore_bundle
+
+    collect_firmware = installer.collect_firmware
+
+    def collect_firmware_from_an_encrypted_recovery(pkg):
+        with _newer_trackpad_keys(), _neo_peripheral_collectors(installer):
+            result = _collect_firmware(pkg)
+        required = getattr(installer, "required_neo_peripherals", [])
+        _collect_neo_radios(installer, pkg, required="radio" in required)
+        _collect_neo_touch_id(installer, pkg, required="touch-id" in required)
+        if getattr(getattr(installer, "sysinfo", None), "device_class", "") == "j700ap":
+            _validate_neo_firmware_package(pkg)
+        return result
+
+    def _collect_firmware(pkg):
+        image = os.path.join(
+            installer.osi.recovery,
+            installer.osi.vgid,
+            "usr/standalone/firmware/arm64eBaseSystem.dmg",
+        )
+        if not _is_encrypted(image):
+            return collect_firmware(pkg)
+        # The recovery image's firmware is its own build's, so it is read
+        # from the image itself, decrypted, whichever macOS this Mac runs.
+        decrypted = _decrypted_copy(installer, image)
+        module = stub.subprocess
+        try:
+            # Only stub's own name is rebound, never the shared module.
+            stub.subprocess = _WithDecryptedImage(module, image, decrypted)
+            return collect_firmware(pkg)
+        finally:
+            stub.subprocess = module
+
+    installer.collect_firmware = collect_firmware_from_an_encrypted_recovery
+
     install_files = installer.install_files
 
-    def install_files_with_omarchys_step2(cur_os):
+    def install_files_with_decrypted_images_and_omarchys_step2(cur_os):
         result = install_files(cur_os)
+        _use_decrypted_images(installer, cur_os)
         _write_step2(installer)
         return result
 
-    installer.install_files = install_files_with_omarchys_step2
+    installer.install_files = install_files_with_decrypted_images_and_omarchys_step2
     return installer
+
+
+def _validate_neo_firmware_package(pkg):
+    """Verify legacy collection did not silently omit Neo's trackpad."""
+    names = {entry.split()[1] for entry in pkg.manifest if len(entry.split()) >= 2}
+    required = {"apple/tpmtfw-j700.bin", omarchy_als.FIRMWARE_NAME} | {
+        "apple/isp_" + sensor + ".dat" for sensor in (
+            "1921_01XX", "1922_02XX", "1925_03XX",
+        )
+    }
+    missing = required - names
+    if missing:
+        raise AsahiAdapterError("MacBook Neo firmware package is incomplete: " + ", ".join(sorted(missing)))
+
+
+def _neo_country_policy(derive):
+    """(files, None) or ({}, error): the Wi-Fi country policy on its own,
+    so its failure costs Wi-Fi only and not Bluetooth."""
+    try:
+        files = derive() if derive is not None else {}
+        missing = sorted(name for name, _country in omarchy_mt7932_policy.POLICIES if not files.get(name))
+        if missing:
+            raise omarchy_mt7932.Mt7932Error("missing required files: " + ", ".join(missing))
+        return files, None
+    except Exception as error:  # any failure here costs the policy files only
+        return {}, error
+
+
+def _collect_neo_radios(installer, pkg, collect=None, policy=None, *, required=False):
+    """Collect the Neo's complete MT7932 Wi-Fi and Bluetooth input set.
+
+    The model-wide files are Apple's pinned 25G83 ones, fetched by the
+    bundled decoder; the calibration and address are this Mac's own. The
+    Wi-Fi country policy is derived from those files in a step of its own:
+    when radios are not required, its failure drops only the policy files,
+    and when they are, the policy is required with the rest.
+    """
+    if getattr(getattr(installer, "sysinfo", None), "device_class", "") != "j700ap":
+        return
+    try:
+        if collect is None:
+            with omarchy_apple_aea.neo_radio_root() as root:
+                files = omarchy_mt7932.collect(root, policy=False)
+                policy_files, policy_error = _neo_country_policy(lambda: omarchy_mt7932.country_policy(root))
+        else:
+            files = collect()
+            policy_files, policy_error = _neo_country_policy(policy)
+        required_files = {
+            "mediatek/mt7932/" + name for name in (
+                omarchy_mt7932.WIFI_PATCH, omarchy_mt7932.WIFI_RAM,
+                "ppr.bin", "oca2.bin", "wcal.bin", "config-original.bin",
+            )
+        } | {"mediatek/" + name for name in omarchy_mt7932.BT_FIRMWARE} | {
+            "mediatek/" + omarchy_mt7932.BT_PTX,
+            "mediatek/j700-mt7932-btcal.bin", "mediatek/j700-mt7932-bdaddr.bin",
+        }
+        if required:
+            if policy_error is not None:
+                raise omarchy_mt7932.Mt7932Error(f"Wi-Fi country policy: {policy_error}")
+            required_files |= {name for name, _country in omarchy_mt7932_policy.POLICIES}
+        files = {**files, **policy_files}
+        missing = sorted(name for name in required_files if not files.get(name))
+        if missing:
+            raise omarchy_mt7932.Mt7932Error("missing required files: " + ", ".join(missing))
+    except (OSError, ValueError, subprocess.CalledProcessError, omarchy_mt7932.Mt7932Error,
+            omarchy_apple_aea.AppleInputError) as error:
+        if required:
+            raise AsahiAdapterError(f"MacBook Neo radio firmware collection failed: {error}") from error
+        logging.warning("MacBook Neo radio firmware unavailable; Wi-Fi and Bluetooth may be unavailable: %s", error)
+        return
+    if policy_error is not None:
+        logging.warning("MacBook Neo Wi-Fi country policy unavailable; Wi-Fi will not start: %s", policy_error)
+    for name, data in sorted(files.items()):
+        pkg.add_file(name, asahi_firmware.core.FWFile(name, data))
+    logging.info("MacBook Neo radio firmware: %d files", len(files))
+
+
+def _iboot_system_container(dutil):
+    """The raw device of the system disk's iBoot System Container, its first
+    partition (asahi-installer's find_system_disk test)."""
+    partition = dutil.disk_parts[dutil.find_system_disk()]["Partitions"][0]
+    if partition.get("Content") != "Apple_APFS_ISC":
+        raise omarchy_mesa.MesaError("the system disk does not start with its iBoot System Container")
+    return "/dev/r" + partition["DeviceIdentifier"]
+
+
+# The rebuilt root key is device-private. Keep collecting it off until the
+# firmware archive writer and the installed system keep it root-only 0600.
+COLLECT_NEO_ROOT_KEY = False
+
+
+def _collect_neo_touch_id(installer, pkg, collect=omarchy_mesa.collect,
+                          sensor_present=omarchy_mesa.has_builtin_sensor,
+                          factory_root_key=omarchy_mesa.factory_root_key, *, required=False,
+                          collect_root_key=None):
+    """Collect optional calibration; requiring it needs an explicit template opt-in."""
+    if getattr(getattr(installer, "sysinfo", None), "device_class", "") != "j700ap":
+        return
+    try:
+        if not sensor_present():
+            logging.info("MacBook Neo has no built-in Touch ID sensor; skipping calibration")
+            return
+        root_key = None
+        if COLLECT_NEO_ROOT_KEY if collect_root_key is None else collect_root_key:
+            try:
+                root_key = factory_root_key()
+            except (OSError, omarchy_mesa.MesaError) as error:
+                logging.warning("MacBook Neo Touch ID root key unavailable: %s", error)
+        device = _iboot_system_container(installer.dutil)
+        files = collect(device) if root_key is None else collect(device, root_key_record=root_key)
+        if not files.get(omarchy_mesa.FIRMWARE_NAME):
+            raise omarchy_mesa.MesaError("sensor is present but calibration is missing")
+    except (OSError, KeyError, IndexError, subprocess.CalledProcessError, omarchy_mesa.MesaError) as error:
+        if required:
+            raise AsahiAdapterError(f"MacBook Neo Touch ID collection failed: {error}") from error
+        logging.warning("MacBook Neo Touch ID calibration unavailable; fingerprint support is optional: %s", error)
+        return
+    for name, data in sorted(files.items()):
+        pkg.add_file(name, asahi_firmware.core.FWFile(name, data))
+    logging.info("MacBook Neo Touch ID calibration: %d bytes", sum(map(len, files.values())))
+
+
+@contextlib.contextmanager
+def _newer_trackpad_keys():
+    """Count C1FE multitouch keys (the J700's trackpad) as trackpads.
+
+    asahi_firmware knows C1FD trackpads and C1FB Touch Bars; the MacBook Neo's
+    J700_Multitouch.im4p keys its trackpad C1FE0,0, which converts the same way.
+    """
+    multitouch = getattr(asahi_firmware, "multitouch", None)
+    if multitouch is None:
+        yield
+        return
+    original = multitouch.device_key_to_kind
+
+    def device_key_to_kind(key):
+        if key.startswith("C1FE"):
+            return multitouch.DEVICE_KIND_TRACKPAD
+        return original(key)
+
+    multitouch.device_key_to_kind = device_key_to_kind
+    try:
+        yield
+    finally:
+        multitouch.device_key_to_kind = original
+
+
+def _is_encrypted(path):
+    with open(path, "rb") as fd:
+        return fd.read(len(AEA_MAGIC)) == AEA_MAGIC
+
+
+def _decrypted_copy(installer, image):
+    """IMAGE's AEA archive decrypted into the engine's working directory, once.
+
+    The copy lives beside the engine's other downloads, not in the stub,
+    whose container has room for one copy of each image at a time.
+    """
+    copies = installer.__dict__.setdefault("_omarchy_decrypted", {})
+    if image not in copies:
+        destination = os.path.abspath(f"decrypted-{len(copies)}-{os.path.basename(image)}")
+        try:
+            omarchy_apple_aea.decrypt(image, destination)
+        except (OSError, subprocess.CalledProcessError, omarchy_apple_aea.AppleInputError) as error:
+            raise AsahiAdapterError(f"could not decrypt {os.path.basename(image)}: {error}") from error
+        copies[image] = destination
+    return copies[image]
+
+
+def _use_decrypted_images(installer, cur_os):
+    """Decrypt the stub's AEA images in place.
+
+    A macOS 26 restore image ships its recoveryOS and ExclaveOS images
+    encrypted; the stub's recoveryOS kernel cannot mount them ("Failed to
+    mount root image"). Decrypting an archive yields Apple's own image, whose
+    signed root hash is the one the stub's boot objects are personalized for,
+    whichever macOS this Mac runs.
+    """
+    image = "usr/standalone/firmware/arm64eBaseSystem.dmg"
+    stub_image = os.path.join(installer.osi.recovery, installer.osi.vgid, image)
+    if not _is_encrypted(stub_image):
+        return
+    host_image = _decrypted_copy(installer, stub_image)
+    # A UDIF image ends in its 512-byte "koly" trailer.
+    with open(host_image, "rb") as fd:
+        fd.seek(0, os.SEEK_END)
+        trailer = b""
+        if fd.tell() >= 512:
+            fd.seek(-512, os.SEEK_END)
+            trailer = fd.read(4)
+    if trailer != b"koly":
+        raise AsahiAdapterError(
+            "the decrypted recovery image is not a disk image"
+        )
+    copies = [(host_image, stub_image)]
+    bless2 = installer.bootcaches["bless2"]
+    restore = os.path.join(
+        installer.pb_vgid, bless2.get("RestoreBundlePath", RESTORE_BUNDLE_PATH)
+    )
+    for name in sorted(os.listdir(restore)):
+        path = os.path.join(restore, name)
+        if not os.path.isfile(path) or not _is_encrypted(path):
+            continue
+        copies.append((_decrypted_copy(installer, path), path))
+    for source, target in copies:
+        # Removed first: the stub container has room for one copy at a time.
+        os.unlink(target)
+        shutil.copyfile(source, target)
+        os.unlink(source)
 
 
 class AsahiInPlaceRepairAdapter:
@@ -618,6 +1179,7 @@ class AsahiInPlaceRepairAdapter:
             raise AsahiAdapterError(
                 "Recovery handoff authorization failed"
             ) from error
+        verify_default_boot(self.installer.dutil, existing.osi.vgid)
         existing.prepare_for_step2()
         return self._canonical_evidence(
             plan,
@@ -626,6 +1188,19 @@ class AsahiInPlaceRepairAdapter:
 
 
 class OmarchyOSInstaller(osinstall.OSInstaller):
+    def extract_tree(self, source, destination):
+        # ZIPs need not contain directory entries, and any entries they do
+        # contain can follow the files. Asahi's extractor only creates the
+        # directories it encounters, so prepare parents for the validated
+        # payload tree before delegating its file copying and CRC checks.
+        prefix = self.path(source).rstrip("/") + "/"
+        for member in self.pkg.infolist():
+            if member.filename.startswith(prefix):
+                relative = member.filename[len(prefix):]
+                parent = os.path.dirname(os.path.join(destination, relative))
+                os.makedirs(parent, exist_ok=True)
+        return super().extract_tree(source, destination)
+
     def install_raw_image(self, image, info):
         self.image_receipts[image] = write_image(
             self.pkg, image, info,
@@ -645,6 +1220,10 @@ class AsahiStage1Adapter:
         raw_partition_writer=None,
         image_flush=flush_device,
         full_readback=False,
+        recovery_app=None,
+        recovery_manifest=None,
+        recovery_requirement=None,
+        authorized_owner=None,
     ):
         self.installer = installer
         self.metadata_path = metadata_path
@@ -656,8 +1235,14 @@ class AsahiStage1Adapter:
         self.image_writer = raw_partition_writer or open_target
         self.image_flush = image_flush
         self.full_readback = full_readback
+        self.recovery_app = recovery_app
+        self.recovery_manifest = recovery_manifest
+        self.recovery_requirement = recovery_requirement
+        self.authorized_owner = authorized_owner
+        self.source_bootstrap = None
         self.template = None
         self.osins = None
+        self.os_firmware = None
         self.target_part = None
         self.preflight_complete = False
 
@@ -674,8 +1259,38 @@ class AsahiStage1Adapter:
             raise AsahiAdapterError(
                 "metadata must contain exactly one Omarchy full-OS target"
             )
+        template = templates[0]
+        use_helper_recovery = (template.get("recovery_gui") is None
+                               and self.recovery_app is not None)
+        if use_helper_recovery:
+            helper_recovery = (self.recovery_app, self.recovery_manifest,
+                               self.recovery_requirement)
+            if not all(isinstance(value, str) and value for value in helper_recovery):
+                raise AsahiAdapterError("incomplete helper Recovery template contract")
+            try:
+                omarchy_recovery.validate_source(
+                    self.recovery_app, self.recovery_manifest,
+                    requirement=self.recovery_requirement,
+                )
+                self.source_bootstrap = omarchy_recovery.source_bootstrap(
+                    self.installer.dutil, self.installer.cur_os, self.authorized_owner,
+                )
+            except (omarchy_recovery.RecoveryError, subprocess.CalledProcessError) as error:
+                raise AsahiAdapterError("native Recovery preflight failed") from error
+        elif any(value is not None for value in
+                 (self.recovery_app, self.recovery_manifest, self.recovery_requirement)):
+            # A partial helper contract is never an acceptable fallback.
+            if not all(isinstance(value, str) and value for value in
+                       (self.recovery_app, self.recovery_manifest, self.recovery_requirement)):
+                raise AsahiAdapterError("incomplete helper Recovery template contract")
         self.installer.data = metadata
-        self.template = templates[0]
+        self.template = template
+        self.use_helper_recovery = use_helper_recovery
+        board = getattr(self.installer.sysinfo, "device_class", "")
+        allowed = self.template.get("allowed_device_classes")
+        excluded = self.template.get("excluded_device_classes", [])
+        if (allowed is not None and board not in allowed) or board in excluded:
+            raise AsahiAdapterError("this image is not qualified for this Mac")
         self.osins = OmarchyOSInstaller(
             self.installer.dutil,
             metadata,
@@ -709,7 +1324,24 @@ class AsahiStage1Adapter:
             self.installer.dutil,
             self.installer.osinfo,
         )
+        required = self.template.get("required_neo_peripherals", [])
+        if not isinstance(required, list) or any(item not in ("radio", "touch-id") for item in required):
+            raise AsahiAdapterError("unknown required Neo peripheral contract")
+        self.installer.ins.required_neo_peripherals = required
         self.installer.ins.load_ipsw(ipsw)
+        self.os_firmware = ipsw.version.split(maxsplit=1)[0]
+        esp_members = self._esp_members()
+        self.common_stage1 = COMMON_STAGE1.member in esp_members and common_stage1_allowed(
+            self.template, self.installer.sysinfo.device_class, self.os_firmware)
+        board = board_stage1(self.installer.sysinfo.device_class, self.os_firmware, esp_members,
+                             common_allowed=self.common_stage1)
+        if board is not None:
+            read_board_stage1(board, self.osins.pkg.read, self.template["next_object"])
+        device_class = self.installer.sysinfo.device_class
+        esp_board_layout(device_class, esp_members, common_allowed=self.common_stage1)
+        stage2 = ESP_STAGE2 if self.common_stage1 else BOARD_STAGE2.get(device_class)
+        if stage2 is not None and self.osins.pkg.getinfo(stage2).file_size <= 0:
+            raise AsahiAdapterError(f"this image has an empty {stage2}")
         self.installer.osins = self.osins
         self.preflight_complete = True
 
@@ -771,10 +1403,28 @@ class AsahiStage1Adapter:
         reference = container.get("ContainerReference")
         if not isinstance(reference, str) or not reference:
             raise AsahiAdapterError("existing stub container is unreadable")
+        # Delete the stub first: a rejected deleteContainer must leave its
+        # ESP and Linux partitions intact. Disk deletion is not atomic; the
+        # outer mutation journal refuses automatic replay after interruption.
+        # deleteContainer may free the store or replace it with an HFS identity.
         self.installer.dutil.action(
             "apfs", "deleteContainer", reference, verbose=True
         )
-        for member in members:
+        self._refresh_parts()
+        stub = members[0]
+        remaining = [part for part in self.installer.parts
+                     if not part.free and part.offset < stub.offset + stub.size
+                     and part.offset + part.size > stub.offset]
+        if remaining:
+            if (len(remaining) != 1 or remaining[0].offset != stub.offset
+                    or remaining[0].size != stub.size
+                    or remaining[0].type not in ("Apple_HFS", "Apple_HFSX")
+                    or remaining[0].os or not remaining[0].uuid):
+                raise AsahiAdapterError("deleted stub left an unexpected partition")
+            self.installer.dutil.action(
+                "eraseVolume", "free", "none", remaining[0].uuid, verbose=True
+            )
+        for member in reversed(members[1:]):
             self.installer.dutil.action(
                 "eraseVolume", "free", "none", member.uuid, verbose=True
             )
@@ -850,6 +1500,32 @@ class AsahiStage1Adapter:
             self.osins.firmware_package = firmware_package
 
         self.osins.install(self.installer.ins)
+        install_board_stage1(
+            self.installer.sysinfo.device_class,
+            self.os_firmware,
+            self.osins.pkg.read,
+            self.osins.efi_part.uuid,
+            self.installer.ins.boot_obj_path,
+            self.template.get("next_object", "m1n1/boot.bin"),
+            common_allowed=self.common_stage1,
+        )
+        install_esp_board_layout(
+            self.installer.sysinfo.device_class,
+            self._esp_members(),
+            self.installer.dutil.mount(self.osins.efi_part.name),
+            common_allowed=self.common_stage1,
+        )
+        if self.native_recovery_gui:
+            omarchy_recovery.stage(
+                self.installer.ins, self.osins.efi_part.uuid,
+                self.installer.dutil.mount(self.osins.efi_part.name),
+                source_os=self.installer.cur_os,
+                app_source=self.recovery_app if self.use_helper_recovery else None,
+                manifest_path=self.recovery_manifest if self.use_helper_recovery else None,
+                requirement=self.recovery_requirement if self.use_helper_recovery else None,
+                authorized_owner=self.authorized_owner if self.use_helper_recovery else None,
+                expected_bootstrap=self.source_bootstrap if self.use_helper_recovery else None,
+            )
         for target in self.osins.idata_targets:
             self.installer.ins.collect_installer_data(target)
             shutil.copy(
@@ -1025,6 +1701,7 @@ class AsahiStage1Adapter:
                 "Recovery handoff authorization failed"
             ) from error
 
+        verify_default_boot(self.installer.dutil, self.installer.ins.osi.vgid)
         self.installer.ins.prepare_for_step2()
         return json.dumps(
             {
@@ -1278,10 +1955,35 @@ class AsahiStage1Adapter:
         )
         if not members:
             raise AsahiAdapterError("installed tree source is empty")
+        # The ESP holds this board's layout of the payload tree, so the
+        # install step and every later recheck expect the same files.
+        if source == ESP_SOURCE:
+            layout = esp_board_layout(
+                self.installer.sysinfo.device_class,
+                (member.filename for member in members),
+                common_allowed=self.common_stage1,
+            )
+        else:
+            layout = {
+                member.filename: member.filename[len(prefix) :] for member in members
+            }
+        for member in members:
+            relative = member.filename[len(prefix) :]
+            if relative in layout.values():
+                continue
+            # A dropped or moved member must leave no copy behind.
+            try:
+                os.lstat(os.path.join(mountpoint, *PurePosixPath(relative).parts))
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                raise AsahiAdapterError("installed tree read-back failed") from error
+            raise AsahiAdapterError("installed tree holds a dropped member")
+        members = [member for member in members if member.filename in layout]
         tree_digest = hashlib.sha256()
         installed_bytes = 0
         for member in members:
-            relative = member.filename[len(prefix) :]
+            relative = layout[member.filename]
             target_path = os.path.join(mountpoint, *PurePosixPath(relative).parts)
             try:
                 target_status = os.lstat(target_path)
@@ -1407,6 +2109,18 @@ class AsahiStage1Adapter:
             members[member.filename] = member
         if not required.issubset(members):
             raise AsahiAdapterError("incomplete Omarchy full-OS payload")
+        recovery_manifest = (
+            "esp/" + omarchy_recovery.PAYLOAD_DIRECTORY + "/" + omarchy_recovery.MANIFEST_NAME
+        )
+        recovery_mode = self.template.get("recovery_gui")
+        if recovery_mode not in (None, "omarchy-native-v1"):
+            raise AsahiAdapterError("unknown Recovery GUI contract")
+        self.native_recovery_gui = self.use_helper_recovery or recovery_mode is not None
+        if not self.use_helper_recovery and self.native_recovery_gui:
+            try:
+                omarchy_recovery.validate_payload(self.osins.pkg)
+            except omarchy_recovery.RecoveryError as error:
+                raise AsahiAdapterError(str(error)) from error
         for name in required:
             if members[name].file_size <= 0:
                 raise AsahiAdapterError("empty Omarchy full-OS payload member")
@@ -1420,6 +2134,14 @@ class AsahiStage1Adapter:
         for name in ("boot.img", "root.img"):
             if members[name].file_size % 4096 != 0:
                 raise AsahiAdapterError("Omarchy image size is not 4KiB aligned")
+
+    def _esp_members(self):
+        prefix = ESP_SOURCE + "/"
+        return [
+            member.filename
+            for member in self.osins.pkg.infolist()
+            if not member.is_dir() and member.filename.startswith(prefix)
+        ]
 
     def _require_preflight(self):
         if not self.preflight_complete:

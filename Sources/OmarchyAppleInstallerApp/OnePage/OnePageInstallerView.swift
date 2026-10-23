@@ -20,6 +20,10 @@ struct OnePageInstallerView: View {
   /// header names it instead of the most Omarchy could take.
   @State private var chosenOmarchyBytes: UInt64?
   @State private var contentHeight: CGFloat = 400
+  /// Set while the native Recovery handoff is prepared before shutdown, and
+  /// what to tell the owner if that or the shutdown request fails.
+  @State private var preparingShutdown = false
+  @State private var shutdownFailure: String?
   /// Which channel this Mac reads. Owned by the scene so the banner always
   /// names the channel the next preparation will actually fetch; `nil` when
   /// the bundle has no release descriptor to fetch from.
@@ -116,7 +120,7 @@ struct OnePageInstallerView: View {
         action: PlainLanguage.shutdownConfirmationAction,
         onConfirm: {
           showsShutdownConfirmation = false
-          session.shutDown()
+          shutDown()
         },
         onCancel: { showsShutdownConfirmation = false }
       )
@@ -195,12 +199,17 @@ struct OnePageInstallerView: View {
         .padding(.top, 6)
 
     case .existingInstallRefused:
-      existingInstallRefusedPanel()
+      if let handoff = pendingRecoveryHandoff {
+        recoveryPanel(handoff)
+      } else {
+        existingInstallRefusedPanel()
+      }
 
     case .preparingPlan(let update), .planPrepared(_, let update):
       DownloadPanel(update: update)
 
     case .planReview(let plan, let acknowledged):
+      planIdentity(plan)
       DiskSplitPanel(
         plan: plan,
         editable: plan.isResizable,
@@ -233,6 +242,7 @@ struct OnePageInstallerView: View {
       acknowledgement(acknowledged, resizesMacOS: plan.fixedMacOSBytes == nil)
 
     case .awaitingInstall(let plan, let helper, _):
+      planIdentity(plan)
       DiskSplitPanel(plan: plan, editable: false, isBusy: false, onSizeChosen: { _ in })
       PrefetchStrip(
         state: session.prefetchState,
@@ -292,15 +302,21 @@ struct OnePageInstallerView: View {
         .keyboardShortcut(.defaultAction)
 
     case .existingInstallRefused:
-      Button(PlainLanguage.closeInstaller) { NSApplication.shared.terminate(nil) }
-        .omarchySecondaryButton()
-      if session.canReinstallOverExisting {
+      if pendingRecoveryHandoff != nil {
+        shutDownButton
+      } else if session.canReinstallOverExisting {
+        Button(PlainLanguage.closeInstaller) { NSApplication.shared.terminate(nil) }
+          .omarchySecondaryButton()
         Button(PlainLanguage.reinstallOmarchy) { Task { await session.reinstallOverExisting() } }
+          .omarchyPrimaryButton()
+          .keyboardShortcut(.defaultAction)
+      } else {
+        Button(PlainLanguage.closeInstaller) { NSApplication.shared.terminate(nil) }
           .omarchyPrimaryButton()
           .keyboardShortcut(.defaultAction)
       }
 
-    case .planReview(_, let acknowledged):
+    case .planReview:
       Button(PlainLanguage.planInstall) {
         // Approve the exact plan and go straight to the password. If the
         // helper is not ready the page stays here and says so.
@@ -310,10 +326,7 @@ struct OnePageInstallerView: View {
         }
       }
       .omarchyPrimaryButton()
-      .disabled(
-        !acknowledged || session.isBusy || session.isEditingSize
-          || session.prefetchState != .verified
-      )
+      .disabled(session.planInstallHold != nil)
       .keyboardShortcut(.defaultAction)
 
     case .awaitingInstall:
@@ -331,9 +344,7 @@ struct OnePageInstallerView: View {
         .foregroundStyle(OmarchyTheme.accent)
 
     case .awaitingRecovery:
-      Button(PlainLanguage.recoveryShutDown) { showsShutdownConfirmation = true }
-        .omarchyPrimaryButton()
-        .keyboardShortcut(.defaultAction)
+      shutDownButton
 
     case .done:
       Button("Close") { NSApplication.shared.terminate(nil) }
@@ -505,8 +516,62 @@ struct OnePageInstallerView: View {
       ForEach(handoff.steps) { step in
         RecoveryStepRow(step: step)
       }
-      if let message = session.shutdownMessage {
+      Button("Copy setup steps") {
+        let steps = handoff.steps.map { step in
+          "\(step.number). \(step.title)" + (step.detail.map { "\n\($0)" } ?? "")
+        }
+        let text = ([handoff.headline] + [handoff.warning].compactMap { $0 } + steps)
+          .joined(separator: "\n\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+      }
+      .omarchySecondaryButton()
+      if let message = shutdownFailure ?? session.shutdownMessage {
         Text(message).font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
+      }
+    }
+  }
+
+  private var shutDownButton: some View {
+    Button(PlainLanguage.recoveryShutDown) { showsShutdownConfirmation = true }
+      .omarchyPrimaryButton()
+      .disabled(preparingShutdown)
+      .keyboardShortcut(.defaultAction)
+  }
+
+  /// The Recovery steps for an installation that finished but has not been
+  /// through Recovery yet, found when the installer is opened again.
+  private var pendingRecoveryHandoff: HandoffDisplay? {
+    guard let target = session.recoveryAccount?.target else { return nil }
+    let guide = session.powerButtonGuide
+    return HandoffDisplay(
+      headline: "Finish the installation in Recovery",
+      steps: [
+        RecoveryStep(number: 1, title: "Shut down completely."),
+        RecoveryStep(number: 2, title: guide.holdInstruction),
+        RecoveryStep(number: 3, title: "Choose “\(target.volumeName)” → Finish Installation."),
+      ],
+      warning: "Don’t restart normally yet: unfinished setup can cause a boot loop.")
+  }
+
+  /// A live installation prepares the native Recovery handoff before asking
+  /// macOS to shut down; the simulation only plays the shutdown.
+  private func shutDown() {
+    shutdownFailure = nil
+    guard !session.isSimulation else {
+      session.shutDown()
+      return
+    }
+    preparingShutdown = true
+    Task { @MainActor in
+      defer { preparingShutdown = false }
+      do {
+        if !(try await session.prepareRecoveryHandoffAndShutdown()) {
+          shutdownFailure =
+            "Your Mac couldn’t shut down. Save your work, then choose Apple menu → Shut Down. Keep the setup steps handy."
+        }
+      } catch {
+        shutdownFailure = error.localizedDescription
       }
     }
   }
@@ -533,6 +598,16 @@ struct OnePageInstallerView: View {
   }
 
   // MARK: Plumbing
+
+  private func planIdentity(_ plan: PlanDisplay) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(plan.releaseDescription)
+      Text(plan.targetDescription)
+    }
+    .font(OmarchyTheme.body)
+    .foregroundStyle(OmarchyTheme.secondaryText)
+    .fixedSize(horizontal: false, vertical: true)
+  }
 
   private var approvedSize: String? {
     guard case .awaitingInstall(let plan, _, _) = session.phase else { return nil }
@@ -632,7 +707,7 @@ private struct PrefetchStrip: View {
   private var accessory: String? {
     switch state {
     case .downloading(let completed, let total), .paused(let completed, let total):
-      total > 0
+      total > 0 && completed < total
         ? "\(PlainLanguage.bytes(completed)) of \(PlainLanguage.bytes(total))" : nil
     default:
       nil
@@ -678,7 +753,7 @@ private struct DownloadPanel: View {
   @State private var lastTotal: UInt64 = 0
 
   private var package: AssetProgressRow? {
-    update.rows.first { $0.role == "payload" } ?? update.rows.first
+    update.rows.first { $0.role == "payload" }
   }
 
   var body: some View {
@@ -723,12 +798,13 @@ private struct DownloadPanel: View {
   }
 
   private var accessory: String? {
-    let total = (package?.totalBytes ?? 0) > 0 ? package!.totalBytes : lastTotal
-    guard total > 0 else {
+    guard update.stage == .downloading, let package,
+      package.totalBytes > 0, package.bytesCompleted < package.totalBytes
+    else {
       return nil
     }
-    let completed = (package?.totalBytes ?? 0) > 0 ? package!.bytesCompleted : lastCompleted
-    return "\(PlainLanguage.bytes(completed)) of \(PlainLanguage.bytes(total))"
+    return
+      "\(PlainLanguage.bytes(package.bytesCompleted)) of \(PlainLanguage.bytes(package.totalBytes))"
   }
 }
 

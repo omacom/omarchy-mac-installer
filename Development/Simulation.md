@@ -14,6 +14,8 @@ Requires Xcode and XcodeBuildMCP. The launcher builds the debug app and supplies
 
 ## Controls
 
+All simulation controls live in the **Simulation** menu bar item. They are absent from the release app and when simulation is not enabled. The installer content fills the resizable window; there is no simulation dashboard above it.
+
 - **Scenario** selects one of 27 outcomes and resets the simulated session. `--simulate-scenario=NAME` (the scenario's raw name, for example `noMacRelease`) opens on that scenario, and `--simulate-continue` presses Continue once, so a screen can be captured without driving the window.
 - **Reset simulation** abandons only the in-memory run, including a stopped or uncertain outcome.
 - **Slow events** makes each event take two seconds; changing speed resets the session.
@@ -26,13 +28,14 @@ Requires Xcode and XcodeBuildMCP. The launcher builds the debug app and supplies
 | Group | Scenarios | Expected behavior |
 | --- | --- | --- |
 | Normal path | Successful install and Recovery; installed-system verification handoff; installation media handoff | Review the plan, authorize with dummy credentials, inspect progress and handoff |
-| Eligibility | Unsupported Mac; engine unavailable; existing installation | Stop before preparation; the unsupported Mac is named (MacBook Pro 14-inch M4 Pro, `Mac16,8`, `apple,j614s`) with the M1, M2 and M3 families of a simulated 34-model catalog |
+| Eligibility | Unsupported Mac; engine unavailable; existing installation | Stop before preparation; the unsupported Mac is named (MacBook Pro 14-inch M4 Pro, `Mac16,8`, `apple,j614s`) with the M1, M2, M3 and A18 Pro families of a simulated 35-model catalog |
 | Preparation | Download interrupted; verification failed; out-of-date installer; no eligible space | Explain the error and permit a fresh check; simulation download links do not open |
 | Channel states | Channel has no Mac release yet; channel doesn't include this Mac; channel release list missing (404) | Three distinct menu labels (No Mac release yet, Not available for this Mac, Couldn't load) and three distinct cards: nothing to install on this channel, this Mac not in the release, a server problem |
 | Disk review | Large free extent; disk limit changes during replan | Preserve macOS capacity for free space; returned allocation always wins; reset acknowledgement |
 | Authorization | Missing helper; plan changes before approval; first credentials rejected | Respect the gate; permit back-navigation before submission; rejected dummy credentials can be retried |
 | Execution | Connection lost; empty reply; helper failure; interrupted live progress | Retain verified activity; uncertain outcomes cannot start another installation |
 | Engine refusal | Space shrinks before install | The engine refuses the approved 137 GB plan before any disk step; the page says no disk changes were made and offers **Check available space**, which returns to review with 133 GB, a size-change notice and a cleared acknowledgement; the next install succeeds |
+| Prepared resume | Prepared resume target changed | Explain earlier disk preparation, retain the saved checkpoint in Last verified activity, preserve the journal, and require reconciliation without offering a fresh install or blind retry |
 | Recovery | Recovery fails then retry succeeds; manual recovery required; shutdown request fails | Retry only the eligible Recovery path; keep instructions visible when shutdown fails |
 
 Click the size field to edit GB. Use the green checkmark or Return to apply; use the red cross or Escape to cancel. Invalid or out-of-range values cannot be applied. Installation is disabled until you apply or cancel.
@@ -70,7 +73,7 @@ Simulation proves presentation and session behavior. It does not prove hardware 
 ## Removal
 
 Choose **Installation → Remove Omarchy…** to dry-test removal independently of
-installation. The popup's **Removal test** selector covers nine outcomes. Type
+installation. The **Simulation → Removal Scenario** menu selects the removal outcome. Type
 `delete omarchy installation and data` exactly to enable removal. No real password
 is requested in simulation. See [Removal.md](Removal.md) for the supported disk
 layout, recovery behavior and test coverage.
@@ -79,3 +82,9 @@ The **Disk alignment · whole GB unchanged** scenario reproduces normal 1 MiB
 partition alignment. Selecting 180 GB must keep 180 GB displayed without a
 capacity-limit warning. The acknowledgement still resets. Actual whole-GB changes
 use “Space for Omarchy changed from … to …” without assuming why it changed.
+
+## Recovery account preview
+
+**Simulation → Preview Recovery Account…** opens the proposed final account step directly. The successful simulated installation also ends at this form. It asks for a new short username, password and confirmation; validation follows the documented native account creator's username format and requires a nonempty, matching password. The GUI imposes no additional minimum length; live creation must report native password-policy errors. Continuing clears both password fields and shows the Startup Disk authorization instructions. **Open Startup Disk** displays a simulation notice; it does not open Settings or reboot. **Reset Simulation** returns to the ordinary installer start.
+
+This is a presentation prototype. It does not create an account or grant ownership, and the live installer keeps its existing Recovery handoff. Production integration requires the resumable target-account creation and Preboot finalization described in Aurora's `work/sep-stub-account-20261011/README.md`; the original script is not a complete resume/finalization backend.

@@ -1,0 +1,121 @@
+#!/bin/bash
+# Sign an installer app assembled by build-app.sh with OMARCHY_APP_SIGNING_IDENTITY=none,
+# inside-out: the Recovery template, the restore-image decoder in
+# Contents/Helpers and the privileged helper, each under its own identifier,
+# then the app. Never --deep: each piece of code gets exactly its own signature
+# and no entitlements. Notarization refuses any Mach-O in the app, archived
+# ones included, that this does not sign, so the engine archive carries none
+# but its Developer ID signed runtime (Engine/verify-engine-macho.py).
+#
+# Usage: sign-app [--verify] APP IDENTITY [KEYCHAIN]
+#
+# IDENTITY is a Developer ID Application identity of the configured team (its
+# name or SHA-1 hash), signed with hardened runtime and a secure timestamp,
+# or - for the release workflow's dry run: ad hoc, hardened runtime, no
+# timestamp. KEYCHAIN restricts codesign to that keychain (the release job's
+# throwaway one). The result is verified with codesign --strict and the
+# helper's, decoder's and app's designated requirements: the Developer ID
+# team's for a Developer ID, the identifiers for ad hoc. --verify only checks an app
+# already signed that way (the copy inside the .dmg).
+set -euo pipefail
+
+fail() {
+  echo "sign-app: $*" >&2
+  exit 1
+}
+
+verify_only=0
+if [[ ${1:-} == --verify ]]; then
+  verify_only=1
+  shift
+fi
+(( $# == 2 || $# == 3 )) || fail "usage: sign-app [--verify] APP IDENTITY [KEYCHAIN]"
+app=$1
+identity=$2
+keychain=${3:-}
+(( EUID != 0 )) || fail "never sign as root"
+
+# shellcheck source=../identity.conf
+source "$(cd "$(dirname "$0")/.." && pwd -P)/identity.conf"
+helper="$app/Contents/Library/LaunchServices/$INSTALLER_HELPER_IDENTIFIER"
+restore_image="$app/Contents/Helpers/omarchy-restore-image"
+recovery="$app/Contents/Resources/RecoveryTemplate/$INSTALLER_RECOVERY_APP_NAME.app"
+[[ $app == *.app && -d $app && ! -L $app ]] || fail "not an app bundle: $app"
+[[ -f $helper && ! -L $helper ]] || fail "the app carries no helper at ${helper#"$app"/}"
+[[ -f $restore_image && ! -L $restore_image ]] ||
+  fail "the app carries no restore-image decoder at ${restore_image#"$app"/}"
+# Contents/Helpers holds the decoder and nothing else this script would not sign.
+helpers=("$app/Contents/Helpers"/*)
+(( ${#helpers[@]} == 1 )) || fail "Contents/Helpers holds more than the restore-image decoder"
+
+team_requirement() {
+  printf 'anchor apple generic and identifier "%s" and certificate leaf[subject.OU] = "%s"' "$1" "$INSTALLER_TEAM_ID"
+}
+
+sign_arguments=(--force --sign "$identity" --options runtime)
+if [[ $identity == "-" ]]; then
+  sign_arguments+=(--timestamp=none)
+  helper_requirement="identifier \"$INSTALLER_HELPER_IDENTIFIER\""
+  restore_image_requirement="identifier \"$INSTALLER_RESTORE_IMAGE_IDENTIFIER\""
+  app_requirement="identifier \"$INSTALLER_APP_IDENTIFIER\""
+else
+  sign_arguments+=(--timestamp)
+  helper_requirement=$(team_requirement "$INSTALLER_HELPER_IDENTIFIER")
+  # The privileged helper holds the decoder to the app team's Developer ID
+  # Application certificate (TN3127), derived from its client requirement
+  # (RestoreImageHelper.swift).
+  restore_image_requirement="anchor apple generic and identifier \"$INSTALLER_RESTORE_IMAGE_IDENTIFIER\" and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"$INSTALLER_TEAM_ID\""
+  app_requirement=$(team_requirement "$INSTALLER_APP_IDENTIFIER")
+fi
+[[ -z $keychain ]] || sign_arguments+=(--keychain "$keychain")
+
+if (( ! verify_only )); then
+  if [[ -d $recovery ]]; then
+    codesign "${sign_arguments[@]}" "$recovery"
+    recovery_hash=$(codesign --display --verbose=4 "$recovery" 2>&1 | sed -n 's/^CDHash=//p')
+    [[ $recovery_hash =~ ^[0-9a-f]{40,64}$ ]] || fail "cannot identify the signed Recovery template"
+    plutil -replace EnvironmentVariables.OMARCHY_RECOVERY_TEMPLATE_REQUIREMENT \
+      -string "cdhash H\"$recovery_hash\"" \
+      "$app/Contents/Library/LaunchDaemons/$INSTALLER_HELPER_IDENTIFIER.plist"
+  fi
+  codesign "${sign_arguments[@]}" --identifier "$INSTALLER_RESTORE_IMAGE_IDENTIFIER" "$restore_image"
+  codesign "${sign_arguments[@]}" --identifier "$INSTALLER_HELPER_IDENTIFIER" "$helper"
+  codesign "${sign_arguments[@]}" "$app"
+fi
+
+codesign --verify --strict --deep --verbose=2 "$app"
+codesign --verify --strict -R="$helper_requirement" "$helper"
+codesign --verify --strict -R="$restore_image_requirement" "$restore_image"
+codesign --verify --strict -R="$app_requirement" "$app"
+if [[ -d $recovery ]]; then
+  recovery_requirement=$(plutil -extract EnvironmentVariables.OMARCHY_RECOVERY_TEMPLATE_REQUIREMENT raw -o - \
+    "$app/Contents/Library/LaunchDaemons/$INSTALLER_HELPER_IDENTIFIER.plist")
+  [[ $recovery_requirement == "cdhash H"* ]] || fail "missing Recovery-template identity"
+  codesign --verify --deep --strict -R="$recovery_requirement" "$recovery"
+fi
+
+# The signature's shape: hardened runtime everywhere; a Developer ID of the
+# configured team with a secure timestamp, or ad hoc for a dry run.
+codes=("$restore_image" "$helper" "$app")
+[[ ! -d $recovery ]] || codes+=("$recovery")
+for code in "${codes[@]}"; do
+  details=$(codesign --display --verbose=4 "$code" 2>&1) || fail "cannot read the signature of $code"
+  [[ $details =~ flags=0x[0-9a-f]+\([^\)]*runtime ]] || fail "$code is not signed with the hardened runtime"
+  if [[ $identity == "-" ]]; then
+    [[ $details == *"Signature=adhoc"* ]] || fail "$code is not ad hoc signed"
+  else
+    [[ $details == *"Authority=Developer ID Application: "* ]] ||
+      fail "$code is not signed by a Developer ID Application certificate"
+    [[ $details == *"TeamIdentifier=$INSTALLER_TEAM_ID"* ]] || fail "$code is not signed by team $INSTALLER_TEAM_ID"
+    [[ $details == *"Timestamp="* ]] || fail "$code has no secure timestamp"
+  fi
+done
+# The decoder reads files and the network; it needs, and gets, no entitlements.
+entitlements=$(codesign --display --entitlements - --xml "$restore_image" 2>/dev/null) ||
+  fail "cannot read the decoder's entitlements"
+[[ -z $entitlements ]] || fail "the restore-image decoder is signed with entitlements"
+if (( verify_only )); then
+  echo "sign-app: ${app##*/} is signed (${identity/#-/ad hoc})"
+else
+  echo "sign-app: signed ${app##*/} (${identity/#-/ad hoc})"
+fi

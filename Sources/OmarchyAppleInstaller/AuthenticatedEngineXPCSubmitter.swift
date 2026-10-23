@@ -2,6 +2,7 @@
   import Darwin
   import Foundation
   import Security
+  import RecoveryAccountCore
 
   @objc public protocol ClosedEngineXPCService {
     /// Answers as soon as the helper is up. The app calls this before it
@@ -13,6 +14,10 @@
     /// Helpers installed by the installer package predate this call and never
     /// answer it.
     func helperVersion(reply: @escaping @Sendable (String) -> Void)
+
+    func recoveryAccount(
+      action: String, ticket: String, username: String, password: Data,
+      reply: @escaping @Sendable (Data?, NSError?) -> Void)
 
     /// Removes the installer app the installer package left in
     /// /Applications, when that is safe; replies with a summary for logs.
@@ -31,6 +36,11 @@
       ticket: String, confirmation: String, machineOwner: String, password: Data,
       reply: @escaping @Sendable (Data?, NSError?) -> Void
     )
+
+    /// A `RemovalFinalization` raw value for the removal with this ticket,
+    /// for an app whose removal reply was lost. Helpers older than this call
+    /// never answer it.
+    func removalFinalization(ticket: String, reply: @escaping @Sendable (String) -> Void)
 
     func submit(
       packageDirectory: FileHandle,
@@ -375,6 +385,88 @@
         }
       }
       return try JSONDecoder().decode(OmarchyRemovalReply.self, from: data)
+    }
+
+    public func recoveryAccount(
+      action: String, ticket: String = "", username: String = "", password: Data = Data()
+    ) async throws -> RecoveryAccountReply {
+      let connection = makeConnection()
+      let handle = SendableXPCConnection(connection)
+      let timer = Task {
+        try await Task.sleep(for: .seconds(180))
+        handle.invalidate()
+      }
+      defer { timer.cancel() }
+      let data: Data = try await withCheckedThrowingContinuation { continuation in
+        let gate = EngineXPCReplyGate(continuation: continuation)
+        connection.interruptionHandler = {
+          gate.resume(throwing: EngineXPCSubmissionError.connectionFailed)
+        }
+        connection.invalidationHandler = {
+          gate.resume(throwing: EngineXPCSubmissionError.connectionFailed)
+        }
+        connection.activate()
+        guard
+          let proxy = connection.remoteObjectProxyWithErrorHandler({ _ in
+            gate.resume(throwing: EngineXPCSubmissionError.connectionFailed)
+            handle.invalidate()
+          }) as? ClosedEngineXPCService
+        else {
+          gate.resume(throwing: EngineXPCSubmissionError.connectionFailed)
+          handle.invalidate()
+          return
+        }
+        proxy.recoveryAccount(
+          action: action, ticket: ticket, username: username, password: password
+        ) { response, error in
+          defer { handle.invalidate() }
+          if let error {
+            gate.resume(throwing: error)
+          } else if let response {
+            gate.resume(returning: response)
+          } else {
+            gate.resume(throwing: EngineXPCSubmissionError.emptyResponse)
+          }
+        }
+      }
+      let reply = try JSONDecoder().decode(RecoveryAccountReply.self, from: data)
+      if let message = reply.message { throw AccountSetupFailure(message) }
+      return reply
+    }
+
+    /// What the helper's records say about the removal with this ticket, or
+    /// nil when it doesn't answer in time, as helpers older than the call
+    /// never do, or answers something unknown.
+    public func removalFinalization(
+      ticket: UUID, timeout: Duration = .seconds(10)
+    ) async -> RemovalFinalization? {
+      let connection = makeConnection()
+      let connectionHandle = SendableXPCConnection(connection)
+      let timer = Task {
+        try await Task.sleep(for: timeout)
+        connectionHandle.invalidate()
+      }
+      defer { timer.cancel() }
+      let answer: String = await withCheckedContinuation { continuation in
+        let gate = EngineXPCStringGate(continuation: continuation)
+        connection.interruptionHandler = { gate.resume(returning: "") }
+        connection.invalidationHandler = { gate.resume(returning: "") }
+        connection.activate()
+        guard
+          let proxy = connection.remoteObjectProxyWithErrorHandler({ _ in
+            gate.resume(returning: "")
+          }) as? ClosedEngineXPCService
+        else {
+          gate.resume(returning: "")
+          connectionHandle.invalidate()
+          return
+        }
+        proxy.removalFinalization(ticket: ticket.uuidString) { reported in
+          gate.resume(returning: reported)
+          connectionHandle.invalidate()
+        }
+      }
+      return RemovalFinalization(rawValue: answer)
     }
 
     public func submit(

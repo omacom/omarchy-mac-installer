@@ -149,7 +149,7 @@
     {
       let fixture = try makeFixture()
       defer { try? FileManager.default.removeItem(at: fixture.root) }
-      let executor = PinnedAsahiEngineExecutor(effectiveUserID: { 0 })
+      let executor = rootExecutor()
 
       let transcript = try await executor.execute(
         fixture.package,
@@ -163,12 +163,122 @@
       XCTAssertEqual(try Data(contentsOf: journals[0]), fixture.transcript)
     }
 
+    func testInstallHandsTheEngineOnlyTheVerifiedImportedDecoder() async throws {
+      let fixture = try makeFixture()
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let checked = CheckedDecoders()
+      let executor = rootExecutor(verifyRestoreImage: { checked.append($0, $1) })
+
+      let transcript = try await executor.execute(
+        fixture.package,
+        authorization: try machineOwnerAuthorization()
+      )
+
+      XCTAssertEqual(transcript, fixture.transcript)
+      XCTAssertEqual(
+        checked.values,
+        [[fixture.package.restoreImageURL?.path ?? "", Self.restoreImageRequirement]])
+    }
+
+    func testInstallWithoutADecoderOrItsRequirementIsRefusedBeforeExtraction() async throws {
+      for (includeRestoreImage, requirement) in [
+        (false, Self.restoreImageRequirement), (true, nil),
+      ] {
+        let fixture = try makeFixture(includeRestoreImage: includeRestoreImage)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let executor = rootExecutor(restoreImageRequirement: requirement)
+
+        await assertThrowsErrorAsync(
+          try await executor.execute(
+            fixture.package,
+            authorization: try machineOwnerAuthorization()
+          )
+        ) {
+          XCTAssertEqual($0 as? PinnedAsahiEngineExecutionError, .restoreImageUnavailable)
+        }
+        XCTAssertTrue(try executionEntries(in: fixture.root).isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: journalDirectory(fixture.root).path))
+      }
+    }
+
+    func testInstallWithAnUnsignedOrForeignDecoderIsRefusedBeforeExtraction() async throws {
+      let fixture = try makeFixture()
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      // The real check: the fixture's decoder is an unsigned text file.
+      let executor = rootExecutor(verifyRestoreImage: {
+        try RestoreImageHelper.verify($0, requirement: $1)
+      })
+
+      await assertThrowsErrorAsync(
+        try await executor.execute(
+          fixture.package,
+          authorization: try machineOwnerAuthorization()
+        )
+      ) {
+        XCTAssertEqual($0 as? PinnedAsahiEngineExecutionError, .restoreImageRejected)
+      }
+      XCTAssertTrue(try executionEntries(in: fixture.root).isEmpty)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: journalDirectory(fixture.root).path))
+    }
+
+    func testMissingRecoveryTemplateIsRefusedBeforeEngineExtraction() async throws {
+      let fixture = try makeFixture()
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let executor = rootExecutor(prepareRecoveryTemplate: { _ in
+        throw NativeRecoveryTemplateError.unavailable
+      })
+      await assertThrowsErrorAsync(
+        try await executor.execute(
+          fixture.package, authorization: try machineOwnerAuthorization()
+        )
+      ) { XCTAssertEqual($0 as? PinnedAsahiEngineExecutionError, .recoveryTemplateRejected) }
+      XCTAssertTrue(try executionEntries(in: fixture.root).isEmpty)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: journalDirectory(fixture.root).path))
+    }
+
+    func testImageRecoveryDoesNotPrepareInstallerTemplate() async throws {
+      let fixture = try makeFixture(imageNativeRecovery: true)
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let executor = rootExecutor(prepareRecoveryTemplate: { _ in
+        throw NativeRecoveryTemplateError.unavailable
+      })
+      let result = try await executor.execute(
+        fixture.package, authorization: try machineOwnerAuthorization())
+      XCTAssertEqual(result, fixture.transcript)
+    }
+
+    func testOlderAppWithoutTemplateKeepsLegacyImageFallback() async throws {
+      let fixture = try makeFixture(includeRecoveryTemplate: false)
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let executor = rootExecutor(prepareRecoveryTemplate: { _ in
+        throw NativeRecoveryTemplateError.unavailable
+      })
+      let result = try await executor.execute(
+        fixture.package, authorization: try machineOwnerAuthorization())
+      XCTAssertEqual(result, fixture.transcript)
+    }
+
+    func testOlderEngineCannotIgnoreTheNativeRecoveryContract() async throws {
+      let fixture = try makeFixture(includeRecoveryCapability: false)
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      await assertThrowsErrorAsync(
+        try await rootExecutor().execute(
+          fixture.package, authorization: try machineOwnerAuthorization()
+        )
+      ) { XCTAssertEqual($0 as? PinnedAsahiEngineExecutionError, .recoveryTemplateUnsupported) }
+      XCTAssertTrue(try executionEntries(in: fixture.root).isEmpty)
+      XCTAssertTrue(
+        try FileManager.default.contentsOfDirectory(atPath: fixture.root.path).allSatisfy {
+          !$0.hasPrefix("fixture-recovery-")
+        })
+    }
+
     func testRecoveryRetryUsesDedicatedEngineMode() async throws {
       let fixture = try makeFixture(
         expectedInstallMode: "retry-recovery-authorization"
       )
       defer { try? FileManager.default.removeItem(at: fixture.root) }
-      let executor = PinnedAsahiEngineExecutor(effectiveUserID: { 0 })
+      let executor = rootExecutor()
 
       let transcript = try await executor.execute(
         fixture.package,
@@ -185,7 +295,7 @@
         repairManifest: Data("{\"operation\":\"repair-installed-system\"}".utf8)
       )
       defer { try? FileManager.default.removeItem(at: fixture.root) }
-      let executor = PinnedAsahiEngineExecutor(effectiveUserID: { 0 })
+      let executor = rootExecutor()
 
       let transcript = try await executor.execute(
         fixture.package,
@@ -200,10 +310,7 @@
     {
       let fixture = try makeFixture(groupWritableBundleEntry: true)
       defer { try? FileManager.default.removeItem(at: fixture.root) }
-      let executor = PinnedAsahiEngineExecutor(
-        effectiveUserID: { 0 },
-        extractionOptions: ["--preserve-permissions"]
-      )
+      let executor = rootExecutor(extractionOptions: ["--preserve-permissions"])
 
       let transcript = try await executor.execute(
         fixture.package,
@@ -217,7 +324,7 @@
     func testEscapingBundleSymlinkIsRejected() async throws {
       let fixture = try makeFixture(escapingSymlink: true)
       defer { try? FileManager.default.removeItem(at: fixture.root) }
-      let executor = PinnedAsahiEngineExecutor(effectiveUserID: { 0 })
+      let executor = rootExecutor()
 
       await assertThrowsErrorAsync(
         try await executor.execute(
@@ -238,7 +345,7 @@
     {
       let fixture = try makeFixture(exitCode: 17)
       defer { try? FileManager.default.removeItem(at: fixture.root) }
-      let executor = PinnedAsahiEngineExecutor(effectiveUserID: { 0 })
+      let executor = rootExecutor()
 
       await assertThrowsErrorAsync(
         try await executor.execute(
@@ -277,7 +384,7 @@
         standardError: Data(stderr.utf8)
       )
       defer { try? FileManager.default.removeItem(at: fixture.root) }
-      let executor = PinnedAsahiEngineExecutor(effectiveUserID: { 0 })
+      let executor = rootExecutor()
 
       await assertThrowsErrorAsync(
         try await executor.execute(
@@ -313,7 +420,7 @@
           "omarchy_asahi.AsahiAdapterError: approved extent is smaller than Asahi minimum\n".utf8)
       )
       defer { try? FileManager.default.removeItem(at: fixture.root) }
-      let executor = PinnedAsahiEngineExecutor(effectiveUserID: { 0 })
+      let executor = rootExecutor()
 
       await assertThrowsErrorAsync(
         try await executor.execute(
@@ -340,7 +447,7 @@
         standardError: stderr
       )
       defer { try? FileManager.default.removeItem(at: fixture.root) }
-      let executor = PinnedAsahiEngineExecutor(effectiveUserID: { 0 })
+      let executor = rootExecutor()
       let started = Date()
 
       await assertThrowsErrorAsync(
@@ -381,7 +488,7 @@
         ]
       )
       defer { try? FileManager.default.removeItem(at: fixture.root) }
-      let executor = PinnedAsahiEngineExecutor(effectiveUserID: { 0 })
+      let executor = rootExecutor()
 
       await assertThrowsErrorAsync(
         try await executor.execute(
@@ -436,7 +543,7 @@
     func testTruncatedTranscriptIsRejected() async throws {
       let fixture = try makeFixture(transcript: Data("truncated".utf8))
       defer { try? FileManager.default.removeItem(at: fixture.root) }
-      let executor = PinnedAsahiEngineExecutor(effectiveUserID: { 0 })
+      let executor = rootExecutor()
 
       await assertThrowsErrorAsync(
         try await executor.execute(
@@ -468,7 +575,7 @@
         [.posixPermissions: 0o755],
         ofItemAtPath: journalDirectory.path
       )
-      let executor = PinnedAsahiEngineExecutor(effectiveUserID: { 0 })
+      let executor = rootExecutor()
 
       await assertThrowsErrorAsync(
         try await executor.execute(
@@ -484,6 +591,38 @@
       XCTAssertTrue(try executionEntries(in: fixture.root).isEmpty)
     }
 
+    private static let restoreImageRequirement = RestoreImageHelper.developerIDRequirement(
+      team: "ABCDE12345")
+
+    private func rootExecutor(
+      extractionOptions: [String] = [],
+      restoreImageRequirement: String? = restoreImageRequirement,
+      verifyRestoreImage: @escaping @Sendable (URL, String) throws -> Void = { _, _ in },
+      prepareRecoveryTemplate:
+        @escaping @Sendable (ImportedEngineHandoffPackage) throws -> PreparedNativeRecoveryTemplate =
+        { package in
+          let parent = package.packageURL.deletingLastPathComponent()
+          let directory = parent.appendingPathComponent("fixture-recovery-\(UUID().uuidString)")
+          try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700])
+          let app = directory.appendingPathComponent("Recovery.app")
+          let manifest = directory.appendingPathComponent("inventory.json")
+          try Data("fixture app".utf8).write(to: app)
+          try Data("{}".utf8).write(to: manifest)
+          return PreparedNativeRecoveryTemplate(
+            directory: directory, app: app, manifest: manifest, requirement: "fixture requirement")
+        }
+    ) -> PinnedAsahiEngineExecutor {
+      PinnedAsahiEngineExecutor(
+        effectiveUserID: { 0 },
+        extractionOptions: extractionOptions,
+        restoreImageRequirement: restoreImageRequirement,
+        verifyRestoreImage: verifyRestoreImage,
+        prepareRecoveryTemplate: prepareRecoveryTemplate
+      )
+    }
+
     private func makeFixture(
       escapingSymlink: Bool = false,
       groupWritableBundleEntry: Bool = false,
@@ -492,7 +631,11 @@
       expectedInstallMode: String = "install",
       checkpointEvidence: [String: Data] = [:],
       repairManifest: Data? = nil,
-      standardError: Data? = nil
+      standardError: Data? = nil,
+      includeRestoreImage: Bool = true,
+      includeRecoveryCapability: Bool = true,
+      includeRecoveryTemplate: Bool = true,
+      imageNativeRecovery: Bool = false
     ) throws -> PinnedExecutorFixture {
       let root = FileManager.default.temporaryDirectory.appendingPathComponent(
         "omarchy-pinned-executor-\(UUID().uuidString.lowercased())",
@@ -517,6 +660,10 @@
         attributes: [.posixPermissions: 0o700]
       )
 
+      if includeRecoveryCapability {
+        try Data(#"{"schema":1,"nativeRecoveryInput":"helper-template-v1"}"#.utf8).write(
+          to: bundleSource.appendingPathComponent("engine-capabilities.json"))
+      }
       let main = bundleSource.appendingPathComponent("main.py")
       try writePrivate(Data("# synthetic engine\n".utf8), to: main)
       var checkpointCommands = [String]()
@@ -547,6 +694,7 @@
       let python = bundleSource.appendingPathComponent(
         "Frameworks/Python.framework/Versions/3.13/bin/python3.13"
       )
+      let expectedRecoveryTemplate = includeRecoveryTemplate && !imageNativeRecovery ? "1" : "0"
       try FileManager.default.createDirectory(
         at: python.deletingLastPathComponent(),
         withIntermediateDirectories: true,
@@ -569,6 +717,15 @@
             [ "$OMARCHY_INSTALLER_NAME" = "\(InstallerProductIdentity.appName)" ] || exit 83
             [ "$DISTRO_DOCS" = "https://omarchy.org/manual/" ] || exit 69
             [ "$OMARCHY_MACHINE_OWNER" = "mina" ] || exit 67
+            if [ "\(expectedRecoveryTemplate)" = 1 ]; then
+              [ -r "$OMARCHY_RECOVERY_APP" ] || exit 86
+              [ -r "$OMARCHY_RECOVERY_MANIFEST" ] || exit 87
+              [ "$OMARCHY_RECOVERY_REQUIREMENT" = 'fixture requirement' ] || exit 88
+            else
+              [ -z "${OMARCHY_RECOVERY_APP:-}" ] || exit 86
+              [ -z "${OMARCHY_RECOVERY_MANIFEST:-}" ] || exit 87
+              [ -z "${OMARCHY_RECOVERY_REQUIREMENT:-}" ] || exit 88
+            fi
             IFS= read -r owner_password || exit 66
             [ "$owner_password" = "owner-password" ] || exit 65
             [ "$OMARCHY_ENGINE_PLAN_DIGEST" = "\(String(repeating: "a", count: 64))" ] || exit 71
@@ -578,6 +735,8 @@
             [ -r "$OMARCHY_ENGINE_METADATA" ] || exit 75
             [ -r "$OMARCHY_ENGINE_PAYLOAD" ] || exit 76
             \(repairManifest == nil ? "" : "[ -r \"$OMARCHY_ENGINE_REPAIR_MANIFEST\" ] || exit 82")
+            [ "$OMARCHY_RESTORE_IMAGE" = "\(packageURL.appendingPathComponent(RestoreImageHelper.fileName).path)" ] || exit 84
+            [ "$OMARCHY_RESTORE_IMAGE_REQUIREMENT" = '\(Self.restoreImageRequirement)' ] || exit 85
             ;;
           *) exit 70 ;;
         esac
@@ -621,11 +780,22 @@
       let repairManifestURL = repairManifest.map { _ in
         packageURL.appendingPathComponent("repair.json")
       }
-      for url in [manifestURL, requestURL, identityURL, metadataURL, payloadURL] {
+      for url in [manifestURL, requestURL, identityURL, payloadURL] {
         try writePrivate(Data("fixture".utf8), to: url)
       }
+      let metadata =
+        imageNativeRecovery
+        ? #"{"os_list":[{"omarchy_target":"apple-silicon-full-os","recovery_gui":"omarchy-native-v1"}]}"#
+        : #"{"os_list":[{"omarchy_target":"apple-silicon-full-os"}]}"#
+      try writePrivate(Data(metadata.utf8), to: metadataURL)
       if let repairManifest, let repairManifestURL {
         try writePrivate(repairManifest, to: repairManifestURL)
+      }
+      let restoreImageURL = packageURL.appendingPathComponent(RestoreImageHelper.fileName)
+      try writePrivate(Data("decoder".utf8), to: restoreImageURL)
+      let recoveryTemplateURL = packageURL.appendingPathComponent("native-recovery.json")
+      if includeRecoveryTemplate {
+        try writePrivate(Data("template".utf8), to: recoveryTemplateURL)
       }
 
       return PinnedExecutorFixture(
@@ -639,6 +809,8 @@
           metadataURL: metadataURL,
           payloadURL: payloadURL,
           repairManifestURL: repairManifestURL,
+          restoreImageURL: includeRestoreImage ? restoreImageURL : nil,
+          recoveryTemplateURL: includeRecoveryTemplate ? recoveryTemplateURL : nil,
           bindingDigest: "sha256:" + String(repeating: "b", count: 64),
           planDigest: String(repeating: "a", count: 64),
           deviceIdentifier: "apple,j314s",
@@ -780,6 +952,10 @@
       )
     }
 
+    private func journalDirectory(_ root: URL) -> URL {
+      root.appendingPathComponent("execution-journals", isDirectory: true)
+    }
+
     private func journalEntries(in root: URL) throws -> [URL] {
       let directory = root.appendingPathComponent(
         "execution-journals",
@@ -809,6 +985,17 @@
         candidateKind: "free"
       )
     }
+  }
+
+  private final class CheckedDecoders: @unchecked Sendable {
+    private let lock = NSLock()
+    private var checked = [[String]]()
+
+    func append(_ url: URL, _ requirement: String) {
+      lock.withLock { checked.append([url.path, requirement]) }
+    }
+
+    var values: [[String]] { lock.withLock { checked } }
   }
 
   private struct PinnedExecutorFixture {

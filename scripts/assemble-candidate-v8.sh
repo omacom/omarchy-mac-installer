@@ -121,22 +121,13 @@ verified_copy() {
   printf '         sha256 %s  %s bytes\n' "$after" "$after_size"
 }
 
-# Pull a shell assignment out of build-app.sh so the engine identity is read
-# from the app package's own pin rather than restated here.
-read_pinned_value() {
-  local file=$1 name=$2 value
-  value=$(
-    awk -v name="$name" '
-      $0 ~ "^" name "=" {
-        line = $0
-        sub("^" name "=", "", line)
-        gsub(/^"|"$/, "", line)
-        print line
-        exit
-      }
-    ' "$file"
-  )
-  [[ -n $value ]] || die "cannot read $name from $file"
+# Read the engine identity from the app package's own pin, Engine/source-lock.json,
+# rather than restating it here.
+read_lock_value() {
+  local file=$1 section=$2 key=$3 value
+  value=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]][sys.argv[3]])' "$file" "$section" "$key" 2>/dev/null) ||
+    die "could not read $section.$key from $file"
+  [[ -n $value ]] || die "empty $section.$key in $file"
   printf '%s\n' "$value"
 }
 
@@ -251,10 +242,12 @@ main() {
   [[ $out != */ ]] || die "--out must not end with a slash"
 
   # ---- engine identity, read from the app package's own pin --------------
-  step "Engine pin (from $build_app)"
+  local source_lock="$app_package/Engine/source-lock.json"
+  require_regular_file "$source_lock"
+  step "Engine pin (from $source_lock)"
   local engine_name engine_digest_pin engine_source engine_digest
-  engine_name=$(read_pinned_value "$build_app" engine_file_name) || exit 1
-  engine_digest_pin=$(read_pinned_value "$build_app" engine_digest) || exit 1
+  engine_name=$(read_lock_value "$source_lock" validation_artifact filename) || exit 1
+  engine_digest_pin=$(read_lock_value "$source_lock" validation_artifact sha256) || exit 1
   engine_source="$app_package/Engine/artifacts/$engine_name"
   require_regular_file "$engine_source"
   engine_digest=$(file_digest "$engine_source")
@@ -262,7 +255,7 @@ main() {
   echo "  pinned $engine_digest_pin"
   echo "  actual $engine_digest"
   [[ $engine_digest == "$engine_digest_pin" ]] ||
-    die "engine at $engine_source does not match the pin in build-app.sh"
+    die "engine at $engine_source does not match the pin in $source_lock"
 
   # ---- metadata agreement -------------------------------------------------
   step "Installer metadata agreement"
@@ -284,15 +277,12 @@ main() {
 
   # ---- generator name agreement ------------------------------------------
   step "Catalog inputs name agreement"
-  local generator_payload generator_engine generator_metadata generator_evidence
+  local generator_payload generator_metadata generator_evidence
   generator_payload=$(read_release_input "$release_inputs" payload_name) || exit 1
-  generator_engine=$(read_release_input "$release_inputs" engine_name) || exit 1
   generator_metadata=$(read_release_input "$release_inputs" metadata_name) || exit 1
   generator_evidence=$(read_release_input "$release_inputs" evidence_revision) || exit 1
   [[ $generator_payload == "$payload_name" ]] ||
     warn "release inputs pin payload_name=$generator_payload but this payload is $payload_name; update the inputs before generating the catalog"
-  [[ $generator_engine == "$engine_name" ]] ||
-    warn "release inputs pin engine_name=$generator_engine but the app package pins $engine_name"
   [[ $generator_metadata == "installer_data.json" ]] ||
     warn "release inputs pin metadata_name=$generator_metadata"
   case $generator_evidence in
@@ -401,7 +391,7 @@ notarized, or connected to any device.
 | Installer metadata | \`installer_data.json\`, \`$metadata_size\` bytes |
 | — SHA-256 | \`$(file_digest "$out/engine/installer_data.json")\` |
 | Engine | \`$engine_name\`, \`$engine_size\` bytes |
-| — SHA-256 | \`$engine_digest\` (matches the pin in \`Packaging/build-app.sh\`) |
+| — SHA-256 | \`$engine_digest\` (matches the pin in \`Engine/source-lock.json\`) |
 
 ## Verification performed by the assembler
 
@@ -409,8 +399,8 @@ notarized, or connected to any device.
   re-digested **after**; sizes were compared too. Any drift is a hard error.
 - Copies preferred an APFS clone (\`cp -c\`) and fell back to a plain \`cp\`
   where cloning is unavailable. Clones: $clone_copies. Plain copies: $plain_copies.
-- The engine digest was checked against the pin hard-coded in
-  \`Packaging/build-app.sh\` before embedding.
+- The engine digest was checked against the pin in
+  \`Engine/source-lock.json\` before embedding.
 - The payload's \`installer-data.json\` sidecar was compared byte-for-byte with
   the app package's \`Engine/installer_data.json\` (the bytes the catalog binds).
 - The catalog generator's pinned \`PAYLOAD_NAME\`/\`ENGINE_NAME\` constants were

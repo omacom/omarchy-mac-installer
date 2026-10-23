@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,7 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "make-unsigned-catalog.py"
 TEMPLATE = Path(__file__).resolve().parents[1] / "release-inputs.template.json"
+LOCK = Path(__file__).resolve().parents[2] / "Engine" / "source-lock.json"
 MANIFEST = Path(__file__).resolve().parents[1] / "supported-models.json"
 M3_MACS = [
     "apple,j433", "apple,j434", "apple,j504", "apple,j613", "apple,j615",
@@ -30,19 +32,42 @@ class CatalogGeneratorTests(unittest.TestCase):
         self.assets = self.directory / "assets"
         self.assets.mkdir()
         self.inputs = json.loads(TEMPLATE.read_text())
-        for key in ("engine_name", "metadata_name", "payload_name"):
+        self.lock = json.loads(LOCK.read_text())
+        self.engine_name = self.lock["validation_artifact"]["filename"]
+        engine = b"engine_name" * 64
+        (self.assets / self.engine_name).write_bytes(engine)
+        # The generator checks the engine against the lock beside it, so it
+        # runs from a copy whose lock pins this stand-in engine.
+        self.script = self.pinned_generator(len(engine), hashlib.sha256(engine).hexdigest())
+        for key in ("metadata_name", "payload_name"):
             (self.assets / self.inputs[key]).write_bytes(key.encode() * 64)
+
+    def pinned_generator(self, size: int, sha256: str) -> Path:
+        root = self.directory / "repository"
+        (root / "scripts").mkdir(parents=True, exist_ok=True)
+        (root / "Engine").mkdir(exist_ok=True)
+        for name in ("make-unsigned-catalog.py", "supported_models.py", "supported-models.json"):
+            shutil.copy2(SCRIPT.with_name(name), root / "scripts" / name)
+        lock = json.loads(LOCK.read_text())
+        lock["validation_artifact"].update(size_bytes=size, sha256=sha256)
+        (root / "Engine" / "source-lock.json").write_text(json.dumps(lock, indent=2))
+        return root / "scripts" / SCRIPT.name
 
     def write_inputs(self, document: dict | None = None) -> Path:
         path = self.directory / "inputs.json"
         path.write_text(json.dumps(document or self.inputs, indent=2))
         return path
 
-    def generate(self, document: dict | None = None, output: str = "catalog.json"):
+    def generate(
+        self,
+        document: dict | None = None,
+        output: str = "catalog.json",
+        developer: bool = False,
+    ):
         return subprocess.run(
             [
                 sys.executable,
-                str(SCRIPT),
+                str(self.script),
                 "--base-url",
                 BASE_URL,
                 "--assets-dir",
@@ -53,19 +78,37 @@ class CatalogGeneratorTests(unittest.TestCase):
                 str(self.directory / output),
                 "--now",
                 NOW,
+                *(["--developer"] if developer else []),
             ],
             capture_output=True,
             text=True,
         )
 
-    def assertRejected(self, document: dict, fragment: str) -> None:
-        result = self.generate(document)
+    def with_neo(self) -> dict:
+        """The inputs with the MacBook Neo moved into a group with its own split payload."""
+        document = json.loads(json.dumps(self.inputs))
+        document["device_identifiers"].remove("apple,j700")
+        neo = {
+            "payload_name": "neo-os-package.zip",
+            "metadata_name": "installer_data-neo.json",
+            "device_identifiers": ["apple,j700"],
+        }
+        (self.assets / neo["metadata_name"]).write_bytes(b"neo-metadata" * 8)
+        content = b"neo-payload" * 64
+        (self.assets / neo["payload_name"]).write_bytes(content)
+        (self.assets / f"{neo['payload_name']}.part00").write_bytes(content[:300])
+        (self.assets / f"{neo['payload_name']}.part01").write_bytes(content[300:])
+        document["developer_models"] = [neo]
+        return document
+
+    def assertRejected(self, document: dict, fragment: str, developer: bool = False) -> None:
+        result = self.generate(document, developer=developer)
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(fragment, result.stderr)
 
-    def test_recommendation_engine_rejects_old_installer_minimum(self):
+    def test_every_catalog_rejects_an_installer_minimum_before_2_1(self):
         self.inputs["installer"]["minimum_version"] = "2.0.10"
-        self.assertRejected(self.inputs, "requires installer.minimum_version >= 2.1.0")
+        self.assertRejected(self.inputs, "needs installer.minimum_version >= 2.1.0")
 
     def test_emits_schema_four_without_an_expiry(self) -> None:
         result = self.generate()
@@ -77,17 +120,23 @@ class CatalogGeneratorTests(unittest.TestCase):
         self.assertEqual(catalog["sequence"], 1788480000)
         self.assertEqual(len(catalog["models"]), len(self.inputs["device_identifiers"]))
 
+    def test_an_engine_without_its_own_decoder_rejects_apps_before_2_3_0(self):
+        self.inputs["installer"]["minimum_version"] = "2.2.0"
+        self.assertRejected(self.inputs, "requires installer.minimum_version >= 2.3.0")
+        self.inputs["installer"]["minimum_version"] = "2.3.0"
+        self.assertEqual(self.generate(self.inputs).returncode, 0)
+
     def test_carries_the_installer_compatibility_block(self) -> None:
-        self.inputs["installer"]["minimum_version"] = "2.1.0"
-        self.inputs["installer"]["latest_version"] = "2.3.0"
+        self.inputs["installer"]["minimum_version"] = "2.3.0"
+        self.inputs["installer"]["latest_version"] = "2.4.0"
         result = self.generate()
         self.assertEqual(result.returncode, 0, result.stderr)
         catalog = json.loads((self.directory / "catalog.json").read_text())
         self.assertEqual(
             catalog["installer"],
             {
-                "minimumVersion": "2.1.0",
-                "latestVersion": "2.3.0",
+                "minimumVersion": "2.3.0",
+                "latestVersion": "2.4.0",
                 "downloadURL": self.inputs["installer"]["download_url"],
             },
         )
@@ -140,8 +189,28 @@ class CatalogGeneratorTests(unittest.TestCase):
 
     def test_a_missing_inputs_key_is_rejected(self) -> None:
         document = dict(self.inputs)
-        del document["engine_version"]
+        del document["metadata_name"]
         self.assertRejected(document, "missing keys")
+
+    def test_the_engine_is_the_source_locks(self) -> None:
+        self.assertNotIn("engine_name", self.inputs)
+        result = self.generate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        model = json.loads((self.directory / "catalog.json").read_text())["models"][0]
+        self.assertEqual(model["engineVersion"], self.lock["downstream_overlay"]["version"])
+        self.assertEqual(model["engineArtifact"]["fileName"], self.engine_name)
+
+    def test_an_archive_that_is_not_the_locks_engine_is_refused(self) -> None:
+        engine = self.assets / self.engine_name
+        for name, contents in (("digest", b"Engine_name" * 64), ("size", b"engine_name" * 65)):
+            with self.subTest(name):
+                engine.write_bytes(contents)
+                self.assertRejected(self.inputs, "is not the engine Engine/source-lock.json pins")
+
+    def test_inputs_cannot_name_another_engine(self) -> None:
+        for key in ("engine_name", "engine_version"):
+            with self.subTest(key):
+                self.assertRejected({**self.inputs, key: "v0.9.2-omarchy.27"}, "unknown keys")
 
     def test_a_minimum_newer_than_the_latest_is_rejected(self) -> None:
         document = json.loads(json.dumps(self.inputs))
@@ -181,7 +250,7 @@ class CatalogGeneratorTests(unittest.TestCase):
             for identifier in document["device_identifiers"]
             if identifier not in M3_MACS
         ]
-        self.assertRejected(document, "every M1, M2 and M3 Mac must be enabled")
+        self.assertRejected(document, "every supported Mac must be enabled")
 
     def test_refused_and_unknown_macs_are_rejected_with_a_reason(self) -> None:
         for identifier, fragment in (
@@ -193,11 +262,14 @@ class CatalogGeneratorTests(unittest.TestCase):
             document["device_identifiers"].append(identifier)
             self.assertRejected(document, fragment)
 
-    def test_the_manifest_is_every_m1_m2_and_m3_mac(self) -> None:
+    def test_the_manifest_is_every_m1_m2_and_m3_mac_and_the_neo(self) -> None:
         manifest = json.loads(MANIFEST.read_text())
-        self.assertEqual(len(manifest["supported"]), 34)
+        self.assertEqual(len(manifest["supported"]), 35)
         self.assertTrue(set(M3_MACS) <= set(manifest["supported"]))
+        self.assertIn("apple,j700", manifest["supported"])
+        self.assertIn("apple,j700", manifest["untested"])
         self.assertEqual(set(manifest["refused"]), {"apple,j575d", "apple,j614s"})
+        self.assertEqual(manifest["developer"], {})
         for template in sorted(MANIFEST.parent.glob("release-inputs*.template.json")):
             identifiers = json.loads(template.read_text())["device_identifiers"]
             self.assertEqual(
@@ -246,6 +318,91 @@ class CatalogGeneratorTests(unittest.TestCase):
         self.assertEqual(
             catalog["models"][0]["payloadDigest"], f"sha256:{digest}"
         )
+
+    def test_a_developer_catalog_gives_the_neo_its_own_payload(self) -> None:
+        result = self.generate(self.with_neo(), developer=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        models = json.loads((self.directory / "catalog.json").read_text())["models"]
+        self.assertEqual(
+            [m["deviceIdentifier"] for m in models],
+            [i for i in self.inputs["device_identifiers"] if i != "apple,j700"] + ["apple,j700"],
+        )
+        main, neo = models[0], models[-1]
+        self.assertEqual(main["payloadArtifact"]["fileName"], self.inputs["payload_name"])
+        self.assertNotIn("parts", main["payloadArtifact"])
+        self.assertEqual(neo["payloadArtifact"]["fileName"], "neo-os-package.zip")
+        self.assertEqual(neo["metadataArtifact"]["fileName"], "installer_data-neo.json")
+        self.assertEqual(len(neo["payloadArtifact"]["parts"]), 2)
+        self.assertEqual(neo["engineArtifact"], main["engineArtifact"])
+        neo_digest = hashlib.sha256((self.assets / "neo-os-package.zip").read_bytes()).hexdigest()
+        self.assertEqual(neo["payloadDigest"], f"sha256:{neo_digest}")
+
+    def test_developer_models_need_the_developer_flag(self) -> None:
+        self.assertRejected(self.with_neo(), "unknown keys")
+
+    def test_a_developer_group_takes_only_developer_boards(self) -> None:
+        for identifier, fragment in (
+            ("apple,j293", "lists apple,j293 twice"),
+            ("apple,j614s", "not a developer board"),
+            ("apple,j604", "not a developer board"),
+        ):
+            document = self.with_neo()
+            document["developer_models"][0]["device_identifiers"] = [identifier]
+            self.assertRejected(document, fragment, developer=True)
+
+    def test_a_developer_group_can_give_supported_macs_their_own_metadata(self) -> None:
+        document = self.with_neo()
+        airs = ["apple,j613", "apple,j615"]
+        for identifier in airs:
+            document["device_identifiers"].remove(identifier)
+        (self.assets / "installer_data-m3air.json").write_bytes(b"air-metadata" * 8)
+        document["developer_models"].append({
+            "payload_name": self.inputs["payload_name"],
+            "metadata_name": "installer_data-m3air.json",
+            "device_identifiers": airs,
+        })
+        result = self.generate(document, developer=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        models = {
+            m["deviceIdentifier"]: m
+            for m in json.loads((self.directory / "catalog.json").read_text())["models"]
+        }
+        self.assertEqual(len(models), len(self.inputs["device_identifiers"]))
+        main = models["apple,j293"]
+        for identifier in airs:
+            self.assertEqual(models[identifier]["metadataArtifact"]["fileName"], "installer_data-m3air.json")
+            self.assertEqual(models[identifier]["payloadArtifact"], main["payloadArtifact"])
+            self.assertEqual(models[identifier]["payloadDigest"], main["payloadDigest"])
+        self.assertEqual(main["metadataArtifact"]["fileName"], self.inputs["metadata_name"])
+
+    def test_a_moved_mac_cannot_stay_in_the_main_group(self) -> None:
+        document = self.with_neo()
+        document["developer_models"][0]["device_identifiers"] = ["apple,j613"]
+        self.assertRejected(document, "lists apple,j613 twice", developer=True)
+
+    def test_a_developer_group_reuses_no_file_name(self) -> None:
+        document = self.with_neo()
+        document["developer_models"][0]["metadata_name"] = self.inputs["metadata_name"]
+        self.assertRejected(document, "reuses the file name", developer=True)
+
+    def test_the_main_group_still_covers_every_mac_in_a_developer_catalog(self) -> None:
+        document = self.with_neo()
+        document["device_identifiers"].remove("apple,j613")
+        self.assertRejected(document, "missing apple,j613", developer=True)
+
+    def test_a_developer_catalog_moving_a_supported_mac_still_covers_every_mac(self) -> None:
+        self.generate(self.with_neo(), developer=True)
+        check = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT.with_name("supported_models.py")),
+                "check-catalog",
+                str(self.directory / "catalog.json"),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(check.returncode, 0, check.stderr)
 
 
 if __name__ == "__main__":

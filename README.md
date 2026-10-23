@@ -2,7 +2,22 @@
 
 Development source for the Apple Silicon macOS installer, extracted from [maralcbr/omarchy-mx-mac](https://github.com/maralcbr/omarchy-mx-mac) into [omacom/omarchy-mac-installer](https://github.com/omacom/omarchy-mac-installer).
 
-This first extraction preserves the installer behavior and Git attribution. The app is now named **Omarchy Installer**; it keeps the original `com.omarchy.mx.*` identifiers, download keys and release configuration, and the package removes a copy left under the old name, Omarchy MX Mac Installer. Integration with the shared Omarchy packages and Linux installation image is the next, separate change. This candidate is not an installation release.
+This first extraction preserves the installer behavior and Git attribution. The app is named **Omarchy Installer** and uses Omarchy's `org.omarchy.installer` identifiers (`Packaging/identity.conf`); the package removes a copy left under the old name, Omarchy MX Mac Installer, only when it already carries these identifiers. Integration with the shared Omarchy packages and Linux installation image is the next, separate change. This candidate is not an installation release.
+
+### Upgrading from a `com.omarchy.mx` preview
+
+Earlier preview and lab builds used `com.omarchy.mx.installer`. The new app has the same name, so it replaces the old one in `/Applications`, but it installs its own helper and never touches the old helper, state or a copy still named Omarchy MX Mac Installer: the old helper stays registered (and listed under Login Items in System Settings), and an install or removal record the old app left is not seen by the new one. Finish or clean up any interrupted install or removal with the old app before switching. To remove what the old app left:
+
+```sh
+sudo launchctl bootout system/com.omarchy.mx.installer.helper
+sudo rm -f /Library/LaunchDaemons/com.omarchy.mx.installer.helper.plist /Library/PrivilegedHelperTools/com.omarchy.mx.installer.helper
+sudo rm -rf /var/db/com.omarchy.mx.installer /var/db/com.omarchy.mx.installer.aside
+sudo rm -rf "/Applications/Omarchy MX Mac Installer.app"
+rm -rf ~/Library/Application\ Support/com.omarchy.mx.installer* ~/Library/Caches/com.omarchy.mx.installer
+defaults delete com.omarchy.mx.installer 2>/dev/null
+```
+
+The Application Support line also frees any image the old app downloaded. A Mac that ran the old installer package can also drop its receipt with `sudo pkgutil --forget com.omarchy.mx.installer.pkg`.
 
 ## Source layout
 
@@ -11,14 +26,21 @@ This first extraction preserves the installer behavior and Git attribution. The 
 | `Sources/`, `Tests/`, `Package.swift` | Swift macOS app, trust core, helper, simulation and tests |
 | `Engine/` | Pinned Asahi source lock, Python overlay, build tooling and tests |
 | `Packaging/` | App and macOS package assembly |
+| [`Recovery/`](Recovery/README.md) | Omarchy Step 2 GUI preview, standalone macOS 13 target and app packaging |
 | `Release/` | Inherited public trust root and release descriptor |
 | `scripts/` | Catalog and release tools, with fixture tests |
 | `test/` | Portable aggregate runner and extracted packaging tests |
 | `evidence/` | Recorded journal fixture required by the Swift tests and preview |
 
+## Apple restore inputs
+
+Firmware preparation needs HTTPS access to Apple's restore-image CDN (`updates.cdn-apple.com`) and, for AEA-encrypted inputs, Apple's public release-key service (`wkms-public.apple.com` or `fcs-keys-pub-prod.cdn-apple.com`). An offline Linux image bundle does not remove that Apple-input dependency. The helper requests only the admitted FCS key URL from the archive metadata; it sends no installation credentials. Range extraction checks the recipe, response extent, ciphertext authentication and resulting file hashes before publishing any firmware.
+
+The helper is built from the [Swift source in this repository](Engine/RestoreImage/README.md), ported from Eryk Wieliczko's MIT implementation. Its recorded source hashes, toolchain, two-build comparison and binary digest are checked alongside the engine source lock. It ships in the app at `Contents/Helpers/omarchy-restore-image`, signed by the app's release signing (Developer ID, hardened runtime, secure timestamp, no entitlements), not inside the engine archive. The privileged helper passes an install's engine a root-only copy whose signature satisfies the app team's requirement, and the engine refuses to run an install without one. The helper requires macOS 14 or newer; the installer app already requires macOS 15 or newer.
+
 ## Supported Macs
 
-Every catalog that offers a Mac release enables every M1, M2 and M3 Mac: the 34 boards in [`scripts/supported-models.json`](scripts/supported-models.json). `make-unsigned-catalog.py` refuses inputs that miss, add or refuse one, and `publish-channels envelope` refuses to wrap a catalog that lists a Mac but leaves any of them out or disabled; only an empty "No Mac release yet" catalog lists none. `os-promote` does not re-check an envelope staged before this rule, so a rollback to an older catalog stays possible. The file also names the boards that stay refused and why: the M3 Ultra Mac Studio (`apple,j575d`), which the pinned v0.9.2 engine cannot inspect, and M4 and later (`apple,j614s`). M3 Macs run with software rendering (llvmpipe) until their GPU driver lands.
+Every catalog that offers a Mac release enables every supported Mac from one image: the 35 boards in [`scripts/supported-models.json`](scripts/supported-models.json), every M1, M2 and M3 Mac and the MacBook Neo (`apple,j700`). `make-unsigned-catalog.py` refuses inputs that miss, add or refuse one, and `publish-channels envelope` refuses to wrap a catalog that lists a Mac but leaves any of them out or disabled; only an empty "No Mac release yet" catalog lists none. The MacBook Neo and the M3 Macs are marked untested; the testing team qualifies them on real hardware on edge. `os-promote` does not re-check an envelope staged before this rule, so a rollback to an older catalog stays possible. The file also names the boards that stay refused and why: the M3 Ultra Mac Studio (`apple,j575d`), which the pinned v0.9.2 engine cannot inspect, and M4 and later (`apple,j614s`). M3 Macs run with software rendering (llvmpipe) until their GPU driver lands.
 
 ## Start with the tests
 

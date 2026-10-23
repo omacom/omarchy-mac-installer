@@ -1,0 +1,1 @@
+Archived: the split M1/M2/M3 and Neo developer images (`m1n1-neo`, a board selector for update-m1n1). The release builder now makes one Aurora image for every Mac ([hardware scope](../../README.md#hardware-scope)); nothing builds or installs these files.

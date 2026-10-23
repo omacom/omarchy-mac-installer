@@ -1,0 +1,10 @@
+{
+  "engine": {
+    "downstreamRevision": "32fe594a31217c98841127c49044eb77f8b74536"
+  },
+  "installer": {
+    "minimumVersion": "2.3.8",
+    "latestVersion": "2.3.8",
+    "downloadURL": "https://github.com/omacom/omarchy-mac-installer/releases/download/v2.3.8/Omarchy-Mac-Installer-2.3.8.dmg"
+  }
+}

@@ -99,6 +99,8 @@
         return "The download server answered HTTP \(status)."
       case ArtifactStageError.destinationConflict(let name):
         return "A different copy of \(name) is already in the installer's staging folder."
+      case ArtifactStageError.bundledArtifactMissing(let name):
+        return "The offline installer is missing \(name). Download a complete copy."
       case let urlError as URLError:
         return "The download was interrupted: \(urlError.localizedDescription)"
       default:
@@ -127,6 +129,7 @@
   /// up. Metered or constrained paths pause; quitting cancels.
   public actor PayloadPrefetchController {
     private let network: any InstallerNetworkPathObserving
+    private let requiresNetwork: Bool
     private let freeSpace: any InstallerFreeSpaceChecking
     private let keepAwake: any InstallerKeepAwakeHolding
     private let onState: @Sendable (PayloadPrefetchState) -> Void
@@ -153,9 +156,11 @@
         try await Task.sleep(for: $0)
       },
       retainedBytes: (@Sendable () -> UInt64)? = nil,
+      requiresNetwork: Bool = true,
       onState: @escaping @Sendable (PayloadPrefetchState) -> Void = { _ in }
     ) {
       self.network = network
+      self.requiresNetwork = requiresNetwork
       self.freeSpace = freeSpace
       self.keepAwake = keepAwake
       self.retryDelays = retryDelays
@@ -248,7 +253,7 @@
           total = knownTotal
         }
         let path = network.current()
-        if !path.allowsPrefetch {
+        if requiresNetwork && !path.allowsPrefetch {
           if completed > 0 {
             setState(.paused(completed: completed, total: total))
           } else {
@@ -278,7 +283,7 @@
           return
         }
 
-        setState(.downloading(completed: completed, total: total))
+        setState(requiresNetwork ? .downloading(completed: completed, total: total) : .verifying)
         do {
           keepAwake.acquire()
           defer { keepAwake.release() }
@@ -344,21 +349,35 @@
     private func runInterruptible(
       work: @escaping @Sendable () async throws -> Void
     ) async throws {
+      guard requiresNetwork else {
+        try await work()
+        return
+      }
       let stream = network.updates()
-      try await withThrowingTaskGroup(of: Void.self) { group in
-        group.addTask { try await work() }
+      try await withThrowingTaskGroup(of: Bool.self) { group in
+        group.addTask {
+          try await work()
+          try Task.checkCancellation()
+          return true
+        }
         group.addTask {
           for await path in stream {
             if Task.isCancelled {
-              return
+              return false
             }
             if !path.allowsPrefetch {
               throw PayloadPrefetchError.meteredNetwork
             }
           }
+          return false
         }
         do {
-          try await group.next()
+          // A stopped path observer is not proof that the file was staged.
+          // Only the work task can establish successful verification.
+          while let workFinished = try await group.next() {
+            if workFinished { break }
+          }
+          try Task.checkCancellation()
           group.cancelAll()
         } catch {
           group.cancelAll()
@@ -527,11 +546,13 @@
     private let makeFreeSpace: @Sendable (URL) -> any InstallerFreeSpaceChecking
     private let matchesPinned: @Sendable (PinnedInstallerArtifact, URL) -> Bool
     private let requiredFreeBytes: @Sendable (UInt64) -> UInt64
+    private let requiresNetwork: @Sendable (PinnedInstallerArtifact) -> Bool
     private let stage: StageHandler
 
     private var generation = UUID()
     private var controller: PayloadPrefetchController?
-    private var runningDigest: String?
+    private var runningArtifact: PinnedInstallerArtifact?
+    private var runningDestination: URL?
     private var latest: PayloadPrefetchState = .idle
     private var observers: [UUID: @Sendable (PayloadPrefetchState) -> Void] = [:]
     private var waiters: [UUID: CheckedContinuation<Void, any Error>] = [:]
@@ -548,6 +569,7 @@
         makeFreeSpace: { StagingVolumeFreeSpace(directory: $0) },
         matchesPinned: { VerifiedArtifactStager().matches($0, at: $1) },
         requiredFreeBytes: { VerifiedArtifactStager.requiredFreeBytes(forPayloadSize: $0) },
+        requiresNetwork: { VerifiedArtifactStager().requiresNetwork(for: $0) },
         stage: { artifact, directory, progress in
           try await InstallerAssetPreparer().stagePayload(
             artifact, in: directory, progress: progress)
@@ -561,6 +583,7 @@
       makeFreeSpace: @escaping @Sendable (URL) -> any InstallerFreeSpaceChecking,
       matchesPinned: @escaping @Sendable (PinnedInstallerArtifact, URL) -> Bool,
       requiredFreeBytes: @escaping @Sendable (UInt64) -> UInt64,
+      requiresNetwork: @escaping @Sendable (PinnedInstallerArtifact) -> Bool = { _ in true },
       stage: @escaping StageHandler
     ) {
       self.makeNetwork = makeNetwork
@@ -568,6 +591,7 @@
       self.makeFreeSpace = makeFreeSpace
       self.matchesPinned = matchesPinned
       self.requiredFreeBytes = requiredFreeBytes
+      self.requiresNetwork = requiresNetwork
       self.stage = stage
     }
 
@@ -581,7 +605,9 @@
       let parent = canonical.deletingLastPathComponent()
 
       let reuse = lock.withLock { () -> Bool in
-        if runningDigest == artifact.expectedDigest {
+        if runningArtifact == artifact,
+          runningDestination == canonical.standardizedFileURL
+        {
           switch latest {
           case .failed, .cancelled:
             return false
@@ -600,7 +626,8 @@
       lock.lock()
       predecessor = controller
       controller = nil
-      runningDigest = artifact.expectedDigest
+      runningArtifact = artifact
+      runningDestination = canonical.standardizedFileURL
       generation = UUID()
       self.generation = generation
       latest = .idle
@@ -659,6 +686,7 @@
           freeSpace: self.makeFreeSpace(work),
           keepAwake: self.makeKeepAwake(),
           retainedBytes: { Self.regularFileBytes(in: work) },
+          requiresNetwork: self.requiresNetwork(artifact),
           onState: { [weak self] state in
             self?.publish(state, generation: generation)
           }
@@ -683,7 +711,11 @@
               }
             }
           }
-          try self.promote(staged.fileURL, to: canonical)
+          try Task.checkCancellation()
+          try self.lock.withLock {
+            guard self.generation == generation else { throw CancellationError() }
+            try self.promote(staged.fileURL, to: canonical)
+          }
           try? FileManager.default.removeItem(at: work)
         }
       }
@@ -767,7 +799,8 @@
     public func cancel() {
       lock.lock()
       latest = .idle
-      runningDigest = nil
+      runningArtifact = nil
+      runningDestination = nil
       cancelEpoch &+= 1
       let existing = controller
       controller = nil

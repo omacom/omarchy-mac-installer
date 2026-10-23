@@ -174,6 +174,51 @@
         .unclassified)
     }
 
+    func testPreparedResumeMismatchHasItsOwnDiagnostic() {
+      XCTAssertEqual(
+        EngineFailureReason.classify(
+          exception: "AsahiAdapterError",
+          message: "prepared resume target does not match checkpoint"
+        ).rawValue, 5)
+      XCTAssertEqual(
+        EngineFailureReason.classify(
+          exception: "ValueError",
+          message: "prepared resume target does not match checkpoint"), .unclassified)
+    }
+
+    func testFirmwareTooOldNamesTheMacOSToUpdateTo() throws {
+      // The end of the engine's stderr on a MacBook Neo running macOS 26.6.
+      let text = """
+        Traceback (most recent call last):
+          File "main.py", line 618, in choose_ipsw
+        omarchy_firmware.FirmwareRequirementError: system firmware is older than macOS 26.6.2
+
+        """
+      let final = try XCTUnwrap(EngineStandardErrorRedactor.finalException(in: text))
+      XCTAssertEqual(
+        EngineFailureReason.classify(exception: final.exception, message: final.message),
+        .macOSUpdateRequired)
+      XCTAssertEqual(EngineFailureReason.requiredMacOSVersion(inSummary: final.line), "26.6.2")
+      XCTAssertEqual(
+        EngineFailureReason.classify(
+          exception: "FirmwareRequirementError", message: "no installation firmware fits this Mac"),
+        .unclassified)
+      for message in [
+        "system firmware is older than macOS 26.6.2 or newer",
+        "system firmware is older than macOS",
+        "system firmware is older than macOS 26.6.2.1",
+      ] {
+        XCTAssertEqual(
+          EngineFailureReason.classify(exception: "FirmwareRequirementError", message: message),
+          .unclassified, message)
+      }
+      XCTAssertEqual(
+        EngineFailureReason.classify(
+          exception: "AsahiAdapterError", message: "system firmware is older than macOS 26.6.2"),
+        .unclassified)
+      XCTAssertNil(EngineFailureReason.requiredMacOSVersion(inSummary: "unrelated: text"))
+    }
+
     func testSummaryIsOneBoundedPrintableLine() {
       let notice = EngineFailureNotice(
         reason: .unclassified, exitStatus: 1, diskUnchanged: false,

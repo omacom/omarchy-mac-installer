@@ -12,6 +12,7 @@ import importlib.util
 import io
 import json
 import os
+import plistlib
 from pathlib import Path
 import shutil
 import struct
@@ -24,7 +25,20 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "a" * 40
 BOOT_SOURCE = "b" * 40
 RELEASE = "7.0.0-1-ARCH"
-MODELS = ("t6000-j314s", "t8103-j274")
+# Every supported Mac's kernel device tree, as the trust policy names them.
+MODELS = tuple(json.loads((Path(__file__).resolve().parents[1] / "builder/candidate-trust/policy.json")
+                          .read_text())["device_trees"])
+# The runtime layouts the builder takes, by the omacom/omarchy commit that has
+# them: the Apple package list and the pacman template directories it ships,
+# and the directories build-mac-image installs pacman.conf and the mirror list
+# from. Without a layout, a fixture is an older runtime's: apple-silicon's list
+# and aarch64 templates alone.
+RUNTIME_LAYOUTS = {
+    "e1b0e5e9b": {"apple_list": "omarchy-aarch64-apple.packages", "templates": ("aarch64", "aarch64-apple"),
+                  "installed": ("aarch64-apple", "aarch64-apple")},
+    "5397950a2": {"apple_list": "omarchy-apple-silicon.packages", "templates": ("aarch64", "apple-silicon"),
+                  "installed": ("apple-silicon", "aarch64")},
+}
 
 
 def load(name: str, relative: str):
@@ -36,6 +50,7 @@ def load(name: str, relative: str):
 
 candidate_set = load("candidate_set", "builder/candidate_set.py")
 test_image_pin = load("test_image_pin", "builder/test_image_pin.py")
+recovery_app = load("recovery_app", "builder/recovery_app.py")
 POLICY = json.loads((ROOT / "builder/candidate-trust/policy.json").read_text())
 
 VERSIONS = {
@@ -45,9 +60,16 @@ VERSIONS = {
     "omarchy-mac-boot": "20260921-10",
     "linux-aurora": "7.0.0.aurora1-1",
     "linux-aurora-headers": "7.0.0.aurora1-1",
-    "m1n1-aurora": "1.6.1.aurora1-1",
-    "uboot-asahi": "2026.07.asahi2-1",
     "limine-mkinitcpio-hook": "1.39.0-2",
+    "aura": "0.1.0.r20261014-2",
+    "uboot-aurora": "2026.07.asahi2-1",
+    "aurora-audio": "4.1.aurora2-1",
+    "alsa-ucm-conf-aurora": "10.aurora2-1",
+    "speakerguardd": "0.1.0.aurora2-1",
+    "omarchy-aurora-firmware": "20261014-2",
+    "mesa-aurora": "26.3.0_devel-1",
+    "vulkan-aurora": "26.3.0_devel-1",
+    "aurora-bless": "0.4.4.aurora2-1",
 }
 
 
@@ -56,7 +78,25 @@ def dtb(model: str) -> bytes:
     return b"\xd0\x0d\xfe\xed" + struct.pack(">I", 8 + len(body)) + body
 
 
-def default_contents() -> dict[str, dict[str, bytes]]:
+def aura_stage1() -> bytes:
+    body = struct.pack("<II40s192s", 1, 0, b"", b";m1n1/boot.bin")
+    return b"stage1" + b"AURORA-S1-CFG01\0" + body + struct.pack("<I", zlib.crc32(body)) + b"STACKBOT"
+
+
+SPEAKERGUARDD_RULES = (
+    b'SUBSYSTEM=="sound", DRIVERS=="snd-soc-macaudio", GOTO="speakerguardd_macaudio"\n'
+    b'GOTO="speakerguardd_end"\n\nLABEL="speakerguardd_macaudio"\n'
+    b'KERNEL=="pcmC*D2c", ATTRS{id}=="AppleJ*", ENV{ACP_IGNORE}="1"\n\n'
+    b'KERNEL=="pcmC*D2c", ATTRS{id}=="AppleJ700", TAG+="systemd", ENV{SYSTEMD_WANTS}="speakerguardd.service"\n\n'
+    b'LABEL="speakerguardd_end"\n')
+SPEAKERGUARDD_SERVICE = (b"[Unit]\nDescription=Speaker Protection Daemon (feed-forward)\n\n[Service]\n"
+                         b"ExecStart=/usr/bin/speakerguardd -c /usr/share/speakerguardd -C AppleJ700\n\n"
+                         b"[Install]\nWantedBy=multi-user.target\n")
+USE_FEEDBACK_GUARD = (b"#!/bin/sh\ntest -r /proc/device-tree/compatible || exit 0\n"
+                      b"tr '\\000' '\\n' < /proc/device-tree/compatible | grep -Fxq apple,j700 && exit 1\nexit 0\n")
+
+
+def default_contents(layout: str | None = None) -> dict[str, dict[str, bytes]]:
     first_boot = b"#!/bin/bash\ncmp -s \"$steps\" <(printf '%s\\n' 'install/hardware/apple/limine-boot.sh')\n"
     contents = {
         "omarchy": {
@@ -82,13 +122,26 @@ def default_contents() -> dict[str, dict[str, bytes]]:
         },
         "linux-aurora-headers": {f"usr/lib/modules/{RELEASE}/build/Makefile": b"# headers\n",
                                  f"usr/lib/modules/{RELEASE}/source": "build"},
-        "m1n1-aurora": {"usr/lib/asahi-boot/m1n1.bin": b"m1n1 stage 1 payload"},
-        "uboot-asahi": {
-            "usr/lib/asahi-boot/u-boot-nodtb.bin": b"u-boot for apple silicon" * 8,
-            **{f"usr/lib/asahi-boot/dtb/{model}.dtb": b"uboot " + model.encode() for model in MODELS},
-        },
+        "aura": {"usr/lib/asahi-boot/m1n1.bin": b"m1n1 stage 1 payload",
+                 "usr/share/aura/stage1/aura-raw.bin": aura_stage1()},
+        # Like the published package: U-Boot only, its device trees come from the kernel.
+        "uboot-aurora": {"usr/lib/asahi-boot/u-boot-nodtb.bin": b"u-boot for apple silicon" * 8},
         "limine-mkinitcpio-hook": {"usr/share/libalpm/scripts/limine-apple-gate": b"#!/bin/bash\n"},
+        # The speaker routing of omacom/omarchy-pkgs pkgbuilds/speakerguardd.
+        "speakerguardd": {
+            "usr/lib/udev/rules.d/95-speakerguardd.rules": SPEAKERGUARDD_RULES,
+            "usr/lib/systemd/system/speakerguardd.service": SPEAKERGUARDD_SERVICE,
+            "usr/lib/systemd/system/speakersafetyd.service.d/50-j700-guard.conf":
+                b"[Service]\nExecCondition=/usr/lib/speakerguardd/use-feedback-guard\n",
+            "usr/lib/speakerguardd/use-feedback-guard": USE_FEEDBACK_GUARD,
+        },
     }
+    if layout:
+        install = "usr/share/omarchy/install/"
+        runtime = contents["omarchy"]
+        runtime[install + RUNTIME_LAYOUTS[layout]["apple_list"]] = runtime.pop(install + "omarchy-apple-silicon.packages")
+        runtime[install + "omarchy-aarch64.packages"] = b"# aarch64\nzram-generator\n"
+        runtime[install + "omarchy-x86_64-only.packages"] = b"# x86_64 only\nobs-studio\n"
     return contents
 
 
@@ -105,7 +158,10 @@ def write_archive(path: Path, name: str, version: str, files: dict[str, bytes], 
     pkginfo = "\n".join([f"pkgname = {name}", f"pkgver = {version}", f"arch = {arch}",
                          *[f"depend = {d}" for d in deps]]) + "\n"
     with tarfile.open(path, "w:xz") as archive:
-        for member, data in {".PKGINFO": pkginfo.encode(), **files}.items():
+        metadata = "#mtree\n" + "".join(
+            f"./{name} size={len(data)} sha256digest={hashlib.sha256(data).hexdigest()}\n"
+            for name, data in {".PKGINFO": pkginfo.encode(), **files}.items() if isinstance(data, bytes))
+        for member, data in {".PKGINFO": pkginfo.encode(), ".MTREE": gzip.compress(metadata.encode()), **files}.items():
             info = tarfile.TarInfo(member)
             if isinstance(data, str):
                 # A symlink to TARGET.
@@ -157,6 +213,7 @@ def make_set(directory: Path, signer: Signer, *, versions=None, contents=None, n
              manifest_edit=None, key_signer: Signer | None = None, channel=(), arches=None) -> str:
     """Writes a signed set into DIRECTORY; returns its receipt's sha256. Packages
     named in CHANNEL, and any outside the plan (the closure), come from edge."""
+    policy = POLICY
     versions = dict(VERSIONS, **(versions or {}))
     contents = contents or default_contents()
     names = names or list(VERSIONS)
@@ -169,18 +226,18 @@ def make_set(directory: Path, signer: Signer, *, versions=None, contents=None, n
         filename = f"{name}-{version.replace(':', '.')}-{arch}.pkg.tar.xz"
         write_archive(directory / filename, name, version, contents.get(name, {}), depends(name, versions), arch)
         runtime = name in POLICY["runtime_packages"]
-        planned = runtime or name in POLICY["boot_packages"]
+        planned = runtime or name in policy["boot_packages"] + policy["support_packages"]
         if name in channel or not planned:
             source = channel_source(f"{name}-{version}-{arch}.pkg.tar.xz")
         else:
-            source = {"repository": POLICY["source_repository"] if runtime else POLICY["boot_repository"],
+            source = {"repository": POLICY["source_repositories"][0] if runtime else POLICY["boot_repository"],
                       "commit": SOURCE if runtime else BOOT_SOURCE}
         packages.append({
             "name": name, "version": version, "arch": arch, "filename": filename,
             "sha256": candidate_set.digest(directory / filename), "source": source,
         })
     manifest = {"schema": 1, "candidate_only": True, "set": "apple-test-fixture",
-                "source": {"repository": POLICY["source_repository"], "commit": SOURCE}, "packages": packages}
+                "source": {"repository": POLICY["source_repositories"][0], "commit": SOURCE}, "packages": packages}
     manifest["set_sha256"] = candidate_set.set_digest(manifest)
     if manifest_edit:
         manifest_edit(manifest)
@@ -201,6 +258,158 @@ def make_set(directory: Path, signer: Signer, *, versions=None, contents=None, n
     signing.sign(directory / "signing.json")
     shutil.copy(signing.trust / "public.asc", directory / "candidate-signing-key.asc")
     return candidate_set.digest(directory / "signing.json")
+
+
+# ── channel ───────────────────────────────────────────────────────────────
+# What edge serves for each runtime role (the policy's channel runtime_packages).
+CHANNEL_NAMES = {"omarchy": "omarchy-dev", "omarchy-settings": "omarchy-settings-dev"}
+CHANNEL_VERSIONS = dict(VERSIONS, **{"omarchy": "4.0.0.r6971.g492b883-1", "omarchy-settings": "4.0.0.r6971.g492b883-1",
+                                     "omarchy-mac": "0.1.4-1", "omarchy-mac-boot": "20261010-1"})
+
+
+def channel_trust(base: Path, candidate: Signer, channel: Signer) -> Path:
+    """A trust directory pinning CANDIDATE as the candidate test key and CHANNEL as the channel key."""
+    trust = base / "channel-trust"
+    trust.mkdir(parents=True)
+    shutil.copy(candidate.trust / "public.asc", trust / "public.asc")
+    (trust / "omarchy-channel.asc").write_bytes(channel.gpg(["--armor", "--export", channel.fingerprint]))
+    policy = json.loads((candidate.trust / "policy.json").read_text())
+    policy["channel"] = dict(POLICY["channel"], primary_fingerprint=channel.fingerprint.upper(),
+                             signing_fingerprint=channel.fingerprint.upper(),
+                             public_key_sha256=candidate_set.digest(trust / "omarchy-channel.asc"))
+    (trust / "policy.json").write_text(json.dumps(policy))
+    return trust
+
+
+def channel_contents() -> dict[str, dict[str, bytes]]:
+    """Each set package's files as edge builds them: the -dev runtime ships no source revision."""
+    contents = default_contents("e1b0e5e9b")
+    for role in CHANNEL_NAMES:
+        contents[role] = {path: data for path, data in contents[role].items() if "source-revision" not in path}
+    return contents
+
+
+def desc(name: str, version: str, filename: str, path: Path, arch: str, provides=(), deps=()) -> str:
+    lines = [("FILENAME", [filename]), ("NAME", [name]), ("VERSION", [version]), ("CSIZE", [str(path.stat().st_size)]),
+             ("SHA256SUM", [candidate_set.digest(path)]), ("ARCH", [arch]), ("PROVIDES", list(provides)),
+             ("DEPENDS", list(deps))]
+    return "".join(f"%{key}%\n" + "".join(v + "\n" for v in values) + "\n" for key, values in lines if values)
+
+
+def make_channel(directory: Path, signer: Signer, *, versions=None, contents=None, extra=(), unsigned=(),
+                 signers=None, entry_edit=None) -> tuple[Path, str]:
+    """An edge snapshot in DIRECTORY: packages/ holds every set archive and its detached signature by
+    SIGNER (SIGNERS per name, none for UNSIGNED), and omarchy.db lists them, plus EXTRA (name, version)
+    entries. ENTRY_EDIT(name, desc) may rewrite an entry. Returns the database and its sha256."""
+    base_versions = dict(VERSIONS)
+    base_versions.update({role: version for role, version in CHANNEL_VERSIONS.items() if role in base_versions})
+    versions = dict(base_versions, **(versions or {}))
+    contents = contents or channel_contents()
+    packages = directory / "packages"
+    packages.mkdir(parents=True)
+    entries = directory / "entries"
+    entries.mkdir()
+    signers = signers or {}
+    for role in base_versions:
+        name = CHANNEL_NAMES.get(role, role)
+        version = versions[role]
+        filename = f"{name}-{version}-aarch64.pkg.tar.xz"
+        deps = ["omarchy-settings-dev"] if role == "omarchy" else ["omarchy"] if role == "omarchy-mac-boot" else []
+        write_archive(packages / filename, name, version, contents.get(role, {}), deps)
+        if name not in unsigned:
+            signers.get(name, signer).sign(packages / filename)
+        text = desc(name, version, filename, packages / filename, "aarch64",
+                    provides=[role] if name != role else [], deps=deps)
+        (entries / f"{name}-{version}").mkdir()
+        (entries / f"{name}-{version}" / "desc").write_text(entry_edit(name, text) if entry_edit else text)
+    for name, version in extra:
+        path = packages / f"{name}-{version}-any.pkg.tar.xz"
+        write_archive(path, name, version, {}, [], "any")
+        (entries / f"{name}-{version}").mkdir()
+        (entries / f"{name}-{version}" / "desc").write_text(desc(name, version, path.name, path, "any"))
+    database = directory / "omarchy.db"
+    subprocess.run(["bsdtar", "-czf", str(database), "-C", str(entries), *sorted(e.name for e in entries.iterdir())],
+                   check=True)
+    return database, candidate_set.digest(database)
+
+
+def make_recovery_app(directory: Path, **info_changes) -> str:
+    """Synthetic bundle inventory, not a valid code signature or runnable app."""
+    files = {
+        "Contents/Info.plist": plistlib.dumps(dict({
+            "OmarchyRecoveryBuildMode": "recovery", "CFBundleExecutable": "OmarchyRecovery",
+            "CFBundleDisplayName": recovery_app.APP.removesuffix(".app"),
+            "OmarchyRecoveryDataLayout": "external-install-data-v1",
+        }, **info_changes)),
+        "Contents/MacOS/OmarchyRecovery": b"synthetic Recovery executable",
+        "Contents/Resources/en.lproj/InfoPlist.strings": ('"CFBundleDisplayName" = "' + recovery_app.APP.removesuffix(".app") + '";').encode(),
+        "Contents/_CodeSignature/CodeResources": b"synthetic signature resource inventory",
+    }
+    for name, data in files.items():
+        path = directory / recovery_app.APP / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    manifest = directory / "omarchy-recovery-app.json"
+    manifest.write_text(json.dumps({"schema": 1, "buildMode": "recovery", "files": {
+        name: {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+        for name, data in files.items()
+    }}, sort_keys=True))
+    return candidate_set.digest(manifest)
+
+
+# ── payload ───────────────────────────────────────────────────────────────
+PAYLOAD_MEMBERS = ("esp", "boot.img", "root.img", "omarchy-volume.icns")
+
+
+def payload_pe(extra: bytes) -> bytes:
+    """The start of an ARM64 PE image, as far as the payload check reads it."""
+    data = bytearray(0x200)
+    data[:2] = b"MZ"
+    struct.pack_into("<I", data, 0x3C, 0x80)
+    data[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<H", data, 0x84, 0xAA64)
+    return bytes(data) + extra
+
+
+def write_payload(zip_path: Path, boot_uuid: str, root_uuid: str, omit: tuple[str, ...] = (),
+                  empty: tuple[str, ...] = (), grow: dict[str, int] | None = None, recovery_app: Path | None = None) -> None:
+    """The payload zip build-mac-image packages, with small stand-ins for its images. OMIT drops members,
+    EMPTY truncates them and GROW appends that many zero bytes to each member it names."""
+    with tempfile.TemporaryDirectory() as temporary:
+        payload = Path(temporary)
+        for directory in ("esp/EFI/BOOT", "esp/EFI/Linux", "esp/m1n1", "esp/omarchy"):
+            (payload / directory).mkdir(parents=True)
+        boot = bytearray(1 << 16)
+        boot[0x438:0x43A] = b"\x53\xef"
+        boot[0x468:0x478] = bytes.fromhex(boot_uuid.replace("-", ""))
+        boot[0x478:0x484] = b"OMARCHY_BOOT"
+        (payload / "boot.img").write_bytes(boot)
+        root = bytearray(1 << 17)
+        root[0x10020:0x10030] = bytes.fromhex(root_uuid.replace("-", ""))
+        root[0x10040:0x10048] = b"_BHRfS_M"
+        root[0x1012B:0x1012B + 12] = b"OMARCHY_ROOT"
+        (payload / "root.img").write_bytes(root)
+        (payload / "esp/EFI/BOOT/BOOTAA64.EFI").write_bytes(payload_pe(b"Limine 12.9.0\n"))
+        (payload / "esp/EFI/Linux/omarchy_linux-aurora.efi").write_bytes(payload_pe(b".linux\0.initrd\0"))
+        (payload / "esp/limine.conf").write_text("interface_branding: Omarchy Bootloader\n//linux-aurora\n"
+                                                 "  protocol: efi\n  path: boot():/EFI/Linux/omarchy_linux-aurora.efi\n")
+        (payload / "esp/m1n1/boot.bin").write_bytes(b"m1n1" * 64)
+        shutil.copy(ROOT / "builder/omarchy-volume.icns", payload / "omarchy-volume.icns")
+        (payload / "esp/aurora").mkdir()
+        (payload / "esp/aurora/stage1-j700.bin").write_bytes(aura_stage1())
+        shutil.copy(payload / "esp/m1n1/boot.bin", payload / "esp/m1n1/boot-j700.bin")
+        if recovery_app is not None:
+            shutil.copytree(recovery_app, payload / "esp/aurora/recovery")
+        for member in omit:
+            (payload / member).unlink()
+        for member in empty:
+            (payload / member).write_bytes(b"")
+        for member, count in (grow or {}).items():
+            with (payload / member).open("ab") as stream:
+                stream.write(bytes(count))
+        zip_path.unlink(missing_ok=True)
+        members = [member for member in PAYLOAD_MEMBERS if (payload / member).exists()]
+        subprocess.run(["bsdtar", "--format", "zip", "-cf", str(zip_path), *members], cwd=payload, check=True)
 
 
 # ── image root ────────────────────────────────────────────────────────────
@@ -260,6 +469,10 @@ def plymouth_members(config: bytes | None = PLYMOUTH_CONFIG, theme: bool = True)
 def good_initramfs(plymouth: dict[str, bytes] | None = None) -> bytes:
     limine = load("apple_limine", "builder/apple_limine.py")
     members: dict[str, bytes | str] = {name: b"#!/bin/sh\n" for name in limine.INITRD_FILES}
+    header = bytearray(64)
+    header[:7] = b"\x7fELF\x02\x01\x01"
+    struct.pack_into("<H", header, 18, 183)
+    members["usr/bin/btrfs"] = bytes(header)
     members.update(limine.INITRD_LINKS)
     members.update(plymouth_members() if plymouth is None else plymouth)
     return initramfs(members)
@@ -273,10 +486,12 @@ def write(root: Path, relative: str, data: bytes | str, mode: int = 0o644) -> Pa
     return path
 
 
-def local_package(root: Path, name: str, version: str, files: list[str]) -> None:
+def local_package(root: Path, name: str, version: str, files: list[str], provides: tuple[str, ...] = ()) -> None:
     entry = root / "var/lib/pacman/local" / f"{name}-{version}"
     entry.mkdir(parents=True, exist_ok=True)
-    (entry / "desc").write_text(f"%NAME%\n{name}\n\n%VERSION%\n{version}\n\n")
+    provided = "".join(f"{p}\n" for p in provides)
+    (entry / "desc").write_text(f"%NAME%\n{name}\n\n%VERSION%\n{version}\n\n"
+                                + (f"%PROVIDES%\n{provided}\n" if provides else ""))
     (entry / "files").write_text("%FILES%\n" + "".join(f + "\n" for f in files) + "\n")
     mtree = "#mtree\n" + "".join(
         f"./{f} time=1.0 size={(root / f).stat().st_size} "
@@ -294,16 +509,24 @@ PACKAGE_SET_SHA256 = "9" * 64
 BUILT = "2026-09-28T03:04:05Z"
 
 
-def image_target(summary: dict, profile: str = "test") -> str:
+def set_lines(summary: dict) -> str:
+    """The set's lines in the image-target manifest and the factory seal: a channel set names its database."""
+    if summary.get("kind") == "channel":
+        return f"channel_set={summary['set']}\nchannel_db_sha256={summary['database_sha256']}\n"
+    return f"candidate_set={summary['set']}\ncandidate_source_commit={summary['source_commit']}\n"
+
+
+def image_target(summary: dict, profile: str | None = None) -> str:
     """The image-target manifest build-mac-image writes for SUMMARY's set."""
-    return (f"format=1\nplatform=apple-silicon\ncandidate_set={summary['set']}\n"
-            f"candidate_source_commit={summary['source_commit']}\nbuilder_commit={'c' * 40}\n"
+    profile = profile or ("release" if summary.get("kind") == "channel" else "test")
+    return (f"format=1\nplatform=apple-silicon\n{set_lines(summary)}builder_commit={'c' * 40}\n"
             f"builder_tree_clean=true\nimage_profile={profile}\n"
             f"package_set_sha256={PACKAGE_SET_SHA256}\nbuilt={BUILT}\n")
 
 
-def make_root(root: Path, candidates: Path) -> None:
-    """An image root that passes inspection against the imported set CANDIDATES."""
+def make_root(root: Path, candidates: Path, layout: str | None = None) -> None:
+    """An image root that passes inspection against the imported set CANDIDATES,
+    with the pacman templates of the runtime LAYOUT (RUNTIME_LAYOUTS)."""
     summary = json.loads((candidates / "import.json").read_text())
 
     def member(name: str, path: str) -> bytes:
@@ -314,7 +537,7 @@ def make_root(root: Path, candidates: Path) -> None:
     root.mkdir(parents=True, exist_ok=True)
     for package in summary["packages"]:
         subprocess.run(["bsdtar", "-xf", str(candidates / package["filename"]), "-C", str(root),
-                        "--exclude", ".PKGINFO"], check=True)
+                        "--exclude", ".PKGINFO", "--exclude", ".MTREE"], check=True)
     uuid = "4f4d5801-524f-4f54-8000-000000000001"
     cmdline = f"root=UUID={uuid} rootflags=subvol=@ rw rootfstype=btrfs {SPLASH}"
     write(root, "etc/fstab", f"UUID={uuid} / btrfs noatime,subvol=@ 0 0\n")
@@ -325,15 +548,18 @@ def make_root(root: Path, candidates: Path) -> None:
     for path in (f"usr/lib/modules/{RELEASE}/vmlinuz", f"usr/lib/modules/{RELEASE}/pkgbase",
                  *[f"usr/lib/modules/{RELEASE}/dtbs/{m}.dtb" for m in (*MODELS, "s8000-n66")]):
         write(root, path, member("linux-aurora", path))
-    m1n1 = member("m1n1-aurora", "usr/lib/asahi-boot/m1n1.bin")
-    uboot = member("uboot-asahi", "usr/lib/asahi-boot/u-boot-nodtb.bin")
+    m1n1 = member(candidate_set.REQUIRED_OWNERS["usr/lib/asahi-boot/m1n1.bin"], "usr/lib/asahi-boot/m1n1.bin")
+    uboot = member(candidate_set.REQUIRED_OWNERS["usr/lib/asahi-boot/u-boot-nodtb.bin"], "usr/lib/asahi-boot/u-boot-nodtb.bin")
     write(root, "usr/lib/asahi-boot/m1n1.bin", m1n1)
     write(root, "usr/lib/asahi-boot/u-boot-nodtb.bin", uboot)
-    dtbs = sorted((f"{m}.dtb" for m in (*MODELS, "s8000-n66")), key=str.encode)
+    models = (*MODELS, "s8000-n66")
+    dtbs = sorted((f"{m}.dtb" for m in models), key=str.encode)
     stage2 = m1n1 + b"".join(dtb(name.removesuffix(".dtb")) for name in dtbs)
     compressor = zlib.compressobj(wbits=31)
     stage2 += compressor.compress(uboot) + compressor.flush() + b"chosen.asahi,efi-system-partition=EFI\n"
     write(root, "boot/efi/m1n1/boot.bin", stage2)
+    write(root, "boot/efi/m1n1/boot-j700.bin", stage2)
+    write(root, "boot/efi/aurora/stage1-j700.bin", member("aura", "usr/share/aura/stage1/aura-raw.bin"))
     write(root, "etc/m1n1.conf", "# m1n1 options\nchosen.asahi,efi-system-partition=EFI\nunknown=ignored\n")
     loader = pe_image({".text": b"Limine loader"})
     write(root, "usr/share/limine/BOOTAA64.EFI", loader)
@@ -360,8 +586,18 @@ def make_root(root: Path, candidates: Path) -> None:
     others = {name: "1.0-1" for name in ("limine", "limine-snapper-sync", "asahi-fwextract", "speakersafetyd",
                                          "alsa-ucm-conf-asahi", "asahi-audio", "vulkan-asahi", "asahi-bless", "iwd",
                                          "networkmanager", "bluez", "wireplumber")}
+    provides = {p["name"]: (p["role"],) for p in summary["packages"] if p.get("role", p["name"]) != p["name"]}
+    replacements = {"aura": "m1n1-aurora", "uboot-aurora": "uboot-asahi", "mesa-aurora": "mesa",
+                    "vulkan-aurora": "vulkan-asahi", "aurora-bless": "asahi-bless",
+                    "aurora-audio": "asahi-audio", "alsa-ucm-conf-aurora": "alsa-ucm-conf-asahi"}
+    for name, role in replacements.items():
+        if name in versions:
+            provides[name] = (role,)
+            others.pop(role, None)
     for name, version in {**versions, **others}.items():
-        local_package(root, name, version, owners.get(name, []))
+        local_package(root, name, version, owners.get(name, []), provides.get(name, ()))
+        if name in versions:
+            write(root, f"var/lib/pacman/local/{name}-{version}/mtree", member(name, ".MTREE"))
     state = root / "var/lib/omarchy"
     write(root, "var/lib/omarchy/image/target", image_target(summary))
     (state / "image").chmod(0o755)
@@ -378,10 +614,18 @@ def make_root(root: Path, candidates: Path) -> None:
     template = "[options]\nArchitecture = auto\n\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
     template += "".join(f"\n[{r}]\nInclude = /etc/pacman.d/mirrorlist\n" for r in ("core", "extra", "alarm", "aur"))
     template += "\n[omarchy]\nServer = https://pkgs.omarchy.org/edge/$arch\n"
-    write(root, "usr/share/omarchy/default/pacman/aarch64/pacman-edge.conf", template)
-    write(root, "usr/share/omarchy/default/pacman/aarch64/mirrorlist-edge", "Server = https://mirror.invalid/$arch/$repo\n")
-    write(root, "etc/pacman.conf", test_image_pin.render(template.encode(), test_image_pin.pinned(summary)))
-    write(root, "etc/pacman.d/mirrorlist", "Server = https://mirror.invalid/$arch/$repo\n")
+    # A runtime with a platform template keeps asahi-alarm out of its plain aarch64 one.
+    asahi = "\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
+    templates = {"aarch64": (template.replace(asahi, "") if layout else template,
+                             "Server = https://mirror.invalid/$arch/$repo\n")}
+    for name in RUNTIME_LAYOUTS[layout]["templates"] if layout else ():
+        templates.setdefault(name, (f"# {name}\n" + template, f"Server = https://{name}.mirror.invalid/$arch/$repo\n"))
+    for name, (conf, mirrors) in templates.items():
+        write(root, f"usr/share/omarchy/default/pacman/{name}/pacman-edge.conf", conf)
+        write(root, f"usr/share/omarchy/default/pacman/{name}/mirrorlist-edge", mirrors)
+    conf, mirrors = RUNTIME_LAYOUTS[layout]["installed"] if layout else ("aarch64", "aarch64")
+    write(root, "etc/pacman.conf", test_image_pin.render(templates[conf][0].encode(), test_image_pin.pinned(summary)))
+    write(root, "etc/pacman.d/mirrorlist", templates[mirrors][1])
     # What the installed-system checks read.
     write(root, "usr/lib/NetworkManager/conf.d/20-omarchy-mac-wifi.conf", "[device]\nwifi.backend=iwd\n")
     write(root, "etc/systemd/system/omarchy-vendor-firmware.service",
@@ -406,8 +650,7 @@ def make_factory(factory: Path, root: Path, summary: dict) -> None:
     for rel in ("var/lib/omarchy/mac-first-boot", "var/lib/omarchy/provisioning/pending"):
         path = factory / rel
         shutil.rmtree(path) if path.is_dir() else path.unlink()
-    write(factory, "var/lib/omarchy/factory-sealed",
-          f"format=2\ncandidate_set={summary['set']}\ncandidate_source_commit={summary['source_commit']}\n")
+    write(factory, "var/lib/omarchy/factory-sealed", "format=2\n" + set_lines(summary))
 
 
 def owner_uid() -> int:

@@ -16,9 +16,9 @@ import fixtures  # noqa: E402
 inspection = fixtures.load("inspection", "builder/inspection.py")
 inspection.OWNER_UID = os.geteuid()
 CHECKS = ("candidate-versions", "runtime-sources", "minimum-versions", "refused-packages", "apple-packages", "installed-boot-payloads",
-          "candidate-files",
+          "candidate-files", "package-mtrees",
           "m1n1-stage2", "aurora-device-trees", "limine-uki", "embedded-initramfs", "boot-splash", "boot-maintenance",
-          "image-target", "first-boot", "snapshots", "pacman-config", "installed-system", "factory")
+          "image-target", "first-boot", "snapshots", "pacman-config", "installed-system", "speaker-routing", "factory")
 # Fixture roots live on whatever filesystem the tests run on: these paths stand in for btrfs subvolumes.
 SUBVOLUMES: set[Path] = set()
 real_is_subvolume = inspection.is_subvolume
@@ -67,13 +67,35 @@ class InspectionTest(unittest.TestCase):
         return report
 
     def stage2(self, m1n1=None, dtbs=None, uboot=None, tail=b""):
-        m1n1 = m1n1 if m1n1 is not None else fixtures.default_contents()["m1n1-aurora"]["usr/lib/asahi-boot/m1n1.bin"]
-        uboot = uboot if uboot is not None else fixtures.default_contents()["uboot-asahi"]["usr/lib/asahi-boot/u-boot-nodtb.bin"]
+        m1n1 = m1n1 if m1n1 is not None else fixtures.default_contents()["aura"]["usr/lib/asahi-boot/m1n1.bin"]
+        uboot = uboot if uboot is not None else fixtures.default_contents()["uboot-aurora"]["usr/lib/asahi-boot/u-boot-nodtb.bin"]
         if dtbs is None:
             dtbs = sorted(["s8000-n66", *fixtures.MODELS], key=str.encode)
         compressor = zlib.compressobj(wbits=31)
         data = m1n1 + b"".join(fixtures.dtb(name) for name in dtbs) + compressor.compress(uboot) + compressor.flush() + tail
         (self.root / "boot/efi/m1n1/boot.bin").write_bytes(data)
+
+    def test_missing_corrupt_and_replaced_integrity_references_fail(self):
+        import gzip
+        entry = next((self.root / 'var/lib/pacman/local').glob('linux-aurora-*')) / 'mtree'
+        original = entry.read_bytes()
+        for data, reason in [(None, 'no installed mtree'), (b'not gzip', 'invalid compressed mtree'),
+                             (gzip.compress(b'#mtree\n./changed sha256digest=' + b'0' * 64 + b'\n'),
+                              'differs from its source')]:
+            with self.subTest(reason=reason):
+                if data is None:
+                    entry.unlink()
+                else:
+                    entry.write_bytes(data)
+                self.assertFails('package-mtrees', reason)
+                entry.write_bytes(original)
+
+    def test_source_package_without_mtree_is_rejected_even_with_installed_reference(self):
+        candidates = inspection.Candidates(self.candidates)
+        listing = candidates.listing(inspection.KERNEL)
+        candidates._listings[inspection.KERNEL] = [p for p in listing if p != '.MTREE']
+        with self.assertRaisesRegex(inspection.InspectionError, 'source package has no .MTREE'):
+            inspection.check_package_mtrees(self.root, candidates)
 
     def test_image_built_from_the_set_passes_inspection(self):
         report = self.inspect()
@@ -81,16 +103,83 @@ class InspectionTest(unittest.TestCase):
         for check in CHECKS:
             self.assertEqual(report["checks"][check]["result"], "passed", (check, report["checks"][check]))
         self.assertEqual(report["result"], "passed")
-        self.assertEqual(report["m1n1_stage2"]["device_trees"], 3)
-        self.assertEqual(report["supported_models"], list(fixtures.MODELS))
+        self.assertEqual(report["m1n1_stage2"]["device_trees"], 36)
+        self.assertEqual(report["supported_models"], sorted(fixtures.MODELS))
+        self.assertEqual(len(report["supported_models"]), 35)
+        self.assertNotIn("hardware_profile", report)
         self.assertEqual(report["hardware_setup"], "build")
+
+    def test_every_supported_mac_comes_from_the_policy_and_needs_its_kernel_tree(self):
+        candidates = inspection.Candidates(self.candidates)
+        boot_owner = candidates.boot_owners["usr/lib/asahi-boot/u-boot-nodtb.bin"]
+        self.assertEqual(boot_owner, "uboot-aurora")
+        self.assertFalse([p for p in candidates.listing(boot_owner) if "/dtb/" in p])
+        for tree in ("t8140-j700", "t8122-j613", "t6034-j516m", "t8103-j274"):
+            with self.subTest(tree):
+                candidates.dtbs = lambda tree=tree: [p for p in inspection.Candidates.dtbs(candidates)
+                                                     if not p.endswith(f"/{tree}.dtb")]
+                with self.assertRaisesRegex(inspection.InspectionError, f"lacks device trees for {tree}"):
+                    inspection.check_supported_models(self.root, candidates, {}, fixtures.POLICY)
+
+    def test_a_set_recording_a_hardware_profile_is_refused(self):
+        imported = self.root.parent / "profile-import"
+        shutil.copytree(self.candidates, imported)
+        summary = imported / "import.json"
+        summary.chmod(0o644)
+        value = __import__("json").loads(summary.read_text())
+        value["hardware_profile"] = "neo"
+        summary.write_text(__import__("json").dumps(value))
+        with self.assertRaisesRegex(inspection.InspectionError, "retired hardware profile"):
+            inspection.Candidates(imported)
+
+    def test_the_j700_boot_payloads_must_be_the_sets(self):
+        for rel, data in (("boot/efi/aurora/stage1-j700.bin", b"another stage 1"),
+                          ("boot/efi/m1n1/boot-j700.bin", b"another stage 2")):
+            with self.subTest(rel):
+                self.setUp()
+                (self.root / rel).write_bytes(data)
+                self.assertFails("installed-boot-payloads", "J700 Stage")
+
+    def test_speakerguardd_starts_only_for_the_j700_and_speakersafetyd_skips_it(self):
+        self.assertIn("starts only for AppleJ700", self.inspect()["checks"]["speaker-routing"]["detail"])
+
+        def rules():
+            return self.root / "usr/lib/udev/rules.d/95-speakerguardd.rules"
+
+        def guard():
+            return self.root / "usr/lib/systemd/system/speakersafetyd.service.d/50-j700-guard.conf"
+
+        def enable():
+            wants = self.root / "etc/systemd/system/multi-user.target.wants"
+            wants.mkdir(parents=True, exist_ok=True)
+            (wants / "speakerguardd.service").symlink_to("/usr/lib/systemd/system/speakerguardd.service")
+
+        cases = (
+            ("for more than the AppleJ700 codec", lambda: rules().write_text(
+                rules().read_text().replace('ATTRS{id}=="AppleJ700", TAG', 'ATTRS{id}=="AppleJ*", TAG'))),
+            ("no udev rule starts", lambda: rules().write_text(
+                "\n".join(line for line in rules().read_text().splitlines() if "SYSTEMD_WANTS" not in line))),
+            ("90-speaker.rules:1 starts speakerguardd.service for more than", lambda: fixtures.write(
+                self.root, "etc/udev/rules.d/90-speaker.rules",
+                'SUBSYSTEM=="sound", ENV{SYSTEMD_WANTS}="speakerguardd.service"\n')),
+            ("enabled for every Mac", enable),
+            ("also runs on the J700", lambda: guard().unlink()),
+            ("does not hold speakersafetyd", lambda: guard().write_text("[Service]\nExecCondition=/bin/true\n")),
+            ("does not test for the J700", lambda: (self.root / "usr/lib/speakerguardd/use-feedback-guard")
+                .write_text("#!/bin/sh\nexit 0\n")),
+        )
+        for pattern, change in cases:
+            with self.subTest(pattern):
+                self.setUp()
+                change()
+                self.assertFails("speaker-routing", re.escape(pattern))
 
     def test_m1n1_stage2_mismatches(self):
         cases = {
             "another m1n1": dict(m1n1=b"some other m1n1 build"),
-            "a missing device tree": dict(dtbs=["s8000-n66", "t6000-j314s"]),
-            "device trees out of C order": dict(dtbs=["t6000-j314s", "s8000-n66", "t8103-j274"]),
-            "an extra device tree": dict(dtbs=[*sorted(["s8000-n66", *fixtures.MODELS]), "t6020-j414s"]),
+            "a missing device tree": dict(dtbs=sorted(["s8000-n66", *fixtures.MODELS], key=str.encode)[:-1]),
+            "device trees out of C order": dict(dtbs=sorted(["s8000-n66", *fixtures.MODELS], key=str.encode, reverse=True)),
+            "an extra device tree": dict(dtbs=[*sorted(["s8000-n66", *fixtures.MODELS], key=str.encode), "t8132-j604"]),
             "another U-Boot": dict(uboot=b"stock asahi u-boot"),
             "trailing bytes": dict(tail=b"\x00\x01binary"),
             "options the image does not set": dict(tail=b"chosen.bootargs=init=/bin/sh\n"),
@@ -145,12 +234,10 @@ class InspectionTest(unittest.TestCase):
         self.assertFails("boot-maintenance", "Limine loader")
 
     def test_mac_without_an_aurora_device_tree(self):
-        contents = fixtures.default_contents()
-        contents["uboot-asahi"]["usr/lib/asahi-boot/dtb/t6020-j414s.dtb"] = b"uboot t6020"
-        work = Path(tempfile.mkdtemp(dir=self.base))
-        receipt = fixtures.make_set(work / "set", self.signer, contents=contents)
-        fixtures.import_set(work / "set", work / "candidates", self.signer, receipt)
-        self.assertFails("aurora-device-trees", "t6020-j414s", work / "candidates")
+        policy = dict(fixtures.POLICY, device_trees=[*fixtures.POLICY["device_trees"], "t8132-j604"])
+        report = {}
+        with self.assertRaisesRegex(inspection.InspectionError, "t8132-j604"):
+            inspection.check_supported_models(self.root, inspection.Candidates(self.candidates), report, policy)
 
     def test_limine_loader_menu_and_uki(self):
         esp = type("Esp", (), {"__truediv__": lambda _, rel: self.root / "boot/efi" / rel})()
@@ -173,6 +260,195 @@ class InspectionTest(unittest.TestCase):
                 change()
                 self.assertFails("limine-uki", pattern)
 
+    def limine_cmdline(self, defaults, uki, drop_ins=None, menu_cmdline=None):
+        """Writes /etc/default/limine's command line lines DEFAULTS, the DROP_INS
+        ({path: text}) and a UKI embedding UKI, then validates the Limine artifacts."""
+        limine = inspection.limine
+        fixtures.write(self.root, "etc/default/limine", 'ESP_PATH="/boot/efi"\n' + defaults)
+        for rel, text in (drop_ins or {}).items():
+            fixtures.write(self.root, rel, text)
+        path = self.root / "boot/efi/EFI/Linux/omarchy_linux-aurora.efi"
+        sections = limine.pe_sections(path)
+        sections[".cmdline"] = uki.encode() + b" \n\0"
+        data = fixtures.pe_image(sections)
+        path.write_bytes(data)
+        menu = self.root / "boot/efi/limine.conf"
+        menu.write_text(menu.read_text().split("#")[0] + "#" + hashlib.blake2b(data).hexdigest() + "\n"
+                        + (f"    cmdline: {menu_cmdline}\n" if menu_cmdline is not None else ""))
+        return limine.validate_artifacts(self.root, "linux-aurora")
+
+    def test_limine_command_line_composition_is_limine_entry_tools(self):
+        """Each case's expected line is limine-entry-tool 1.40.0's --get-cmdline
+        output for the same files (limine-mkinitcpio-hook 1.40.0-2)."""
+        limine = inspection.limine
+        usr, etc, conf = "usr/share/limine-entry-tool.d", "etc/limine-entry-tool.d", "etc/limine-entry-tool.conf"
+
+        def line(operator, value):
+            return f'KERNEL_CMDLINE[default]{operator}"{value}"\n'
+
+        cases = {
+            "= only": ({}, line("=", "base"), "base"),
+            "+= only": ({}, line("+=", "base"), "base"),
+            "= discards drop-ins": ({f"{etc}/10-a.conf": line("+=", "a")}, line("=", "base"), "base"),
+            "one drop-in": ({f"{etc}/10-a.conf": line("+=", "dropin=1")}, line("+=", "base"), "base dropin=1"),
+            "two drop-ins, in reverse": ({f"{etc}/10-a.conf": line("+=", "a"), f"{etc}/20-b.conf": line("+=", "b")},
+                                         line("+=", "base"), "base b a"),
+            "/usr, then /etc": ({f"{usr}/10-u.conf": line("+=", "u"), f"{etc}/10-e.conf": line("+=", "e")},
+                                line("+=", "base"), "base e u"),
+            "= in /etc resets /usr": ({f"{usr}/10-u.conf": line("+=", "u"), f"{etc}/10-e.conf": line("=", "e")},
+                                      line("+=", "base"), "base e"),
+            "= in a later drop-in resets": ({f"{etc}/10-a.conf": line("+=", "a"), f"{etc}/20-b.conf": line("=", "b")},
+                                            line("+=", "base"), "base b"),
+            "the conf file, after /usr": ({conf: line("+=", "conf"), f"{usr}/10-u.conf": line("+=", "u")},
+                                          line("+=", "base"), "base conf u"),
+            "the conf file, before /etc": ({conf: line("+=", "conf"), f"{etc}/10-x.conf": line("+=", "x")},
+                                           line("+=", "base"), "base x conf"),
+            "two default lines": ({}, line("+=", "base") + line("+=", "more"), "more base"),
+            "spacing kept": ({f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default] += "a b"\n'}, line("+=", "base  x"),
+                             "base  x a b"),
+            "an empty drop-in value": ({f"{etc}/10-a.conf": line("+=", "")}, line("+=", "base"), "base "),
+        }
+        for name, (files, defaults, expected) in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for rel, text in files.items():
+                    fixtures.write(root, rel, text)
+                settings = limine.cmdline_sources(root, "linux-aurora") + limine.cmdline_settings(defaults, "defaults")
+                self.assertEqual(limine.compose_cmdline(settings), expected)
+
+    def test_limine_command_line_set_or_extended_by_drop_ins(self):
+        base = self.inspect()["uki"]["cmdline"]
+        etc, usr = "etc/limine-entry-tool.d", "usr/share/limine-entry-tool.d"
+        two = {f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default]+="a=1 x"\n',
+               f"{etc}/20-b.conf": '# b\nKERNEL_CMDLINE[default] += "b=2"\n'}
+        cases = {
+            "set": (f'KERNEL_CMDLINE[default]="{base}"\n', base, {}),
+            "set, drop-ins discarded": (f'KERNEL_CMDLINE[default]="{base}"\n', base, two),
+            "extended, no drop-ins": (f'KERNEL_CMDLINE[default]+="{base}"\n', base, {}),
+            "extended by one drop-in": (f'KERNEL_CMDLINE[default]+="{base}"\n', f"{base} dropin=1",
+                                        {f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default]+="dropin=1"\n'}),
+            "extended by two, in reverse": (f'KERNEL_CMDLINE[default]+="{base}"\n', f"{base} b=2 a=1 x", two),
+            "extended by /etc, /usr and the conf file": (
+                f'KERNEL_CMDLINE[default] += "{base}"\n', f"{base} e c u",
+                {f"{etc}/10-e.conf": 'KERNEL_CMDLINE[default]+="e"\n', f"{usr}/10-u.conf": 'KERNEL_CMDLINE[default]+="u"\n',
+                 "etc/limine-entry-tool.conf": 'KERNEL_CMDLINE[default]+="c"\n'}),
+            "a drop-in's = resetting": (f'KERNEL_CMDLINE[default]+="{base}"\n', f"{base} e",
+                                        {f"{usr}/10-u.conf": 'KERNEL_CMDLINE[default]+="u"\n',
+                                         f"{etc}/10-e.conf": 'KERNEL_CMDLINE[default]="e"\n'}),
+        }
+        for name, (defaults, uki, drop_ins) in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                sections = self.limine_cmdline(defaults, uki, drop_ins, menu_cmdline=uki)
+                self.assertEqual(sections[".cmdline"], uki.encode() + b" \n\0")
+                self.assertEqual(self.inspect()["checks"]["limine-uki"]["result"], "passed")
+
+    def test_limine_command_line_refusals(self):
+        limine = inspection.limine
+        base = self.inspect()["uki"]["cmdline"]
+        etc = "etc/limine-entry-tool.d"
+        extend = f'KERNEL_CMDLINE[default]+="{base}"\n'
+        two = {f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default]+="a=1"\n',
+               f"{etc}/20-b.conf": 'KERNEL_CMDLINE[default]+="b=2"\n'}
+        evil = f"root=UUID={'0' * 8}-0000-0000-0000-{'0' * 12}"
+        cases = {
+            "two default lines": (extend + extend, f"{base} {base}", {}, "one generated"),
+            "no default line": ("", "a=1", {f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default]+="a=1"\n'}, "one generated"),
+            "a kernel's own key": (extend + 'KERNEL_CMDLINE[linux-aurora]+="quiet"\n', base, {}, "replaces the linux-aurora"),
+            "a drop-in's kernel key": (extend, base, {f"{etc}/10-k.conf": 'KERNEL_CMDLINE["linux-aurora"]+="k"\n'},
+                                       "replaces the linux-aurora"),
+            "the conf file's kernel key": (extend, base, {"etc/limine-entry-tool.conf": 'KERNEL_CMDLINE[linux-aurora]="k"\n'},
+                                           "replaces the linux-aurora"),
+            "an unreadable drop-in": (extend, f"{base} a", {f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default]+="a" # c\n'},
+                                      "unreadable"),
+            "a quote inside a value": (extend, f'{base} a"b', {f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default]+="a"b"\n'},
+                                       "unreadable"),
+            "a drop-in's single quotes": (extend, f"{base} a=' {evil} '",
+                                          {f"{etc}/10-a.conf": f'KERNEL_CMDLINE[default]+="a=\' {evil} \'"\n'},
+                                          "quotes or escapes"),
+            "the defaults' single quotes": (f'KERNEL_CMDLINE[default]+="{base} a=\' {evil} \'"\n',
+                                            f"{base} a=' {evil} '", {}, "quotes or escapes"),
+            "a drop-in's backslash": (extend, f"{base} a=\\ b", {f"{etc}/10-a.conf": 'KERNEL_CMDLINE[default]+="a=\\ b"\n'},
+                                      "quotes or escapes"),
+            "a drop-in's encryption": (extend, f"{base} rd.luks.name=x=root",
+                                       {f"{etc}/10-l.conf": 'KERNEL_CMDLINE[default]+="rd.luks.name=x=root"\n'}, "unsafe"),
+            "a drop-in's second root": (extend, f"{base} {evil}",
+                                        {f"{etc}/10-r.conf": f'KERNEL_CMDLINE[default]+="{evil}"\n'}, "unsafe"),
+            "a drop-in's second rootfstype": (extend, f"{base} rootfstype=ext4 rootfstype=btrfs",
+                                              {f"{etc}/10-t.conf": 'KERNEL_CMDLINE[default]+="rootfstype=ext4 rootfstype=btrfs"\n'},
+                                              "unsafe"),
+            "a drop-in's ro": (extend, f"{base} ro", {f"{etc}/10-r.conf": 'KERNEL_CMDLINE[default]+="ro"\n'}, "unsafe"),
+            "a UKI missing a drop-in word": (extend, f"{base} b=2", two, "drop-ins"),
+            "a UKI with an extra word": (extend, f"{base} b=2 a=1 c=3", two, "drop-ins"),
+            "a UKI with the drop-ins in file order": (extend, f"{base} a=1 b=2", two, "drop-ins"),
+            "a UKI with drop-in words before the defaults": (extend, f"b=2 a=1 {base}", two, "drop-ins"),
+            "a UKI keeping words a drop-in's = reset": (
+                extend, f"{base} b=2 a=1",
+                {**two, f"{etc}/20-b.conf": 'KERNEL_CMDLINE[default]="b=2"\n'}, "drop-ins"),
+            "a UKI ignoring the conf file": (extend, base, {"etc/limine-entry-tool.conf": 'KERNEL_CMDLINE[default]+="c"\n'},
+                                             "drop-ins"),
+            "a UKI with words no drop-in adds": (extend, f"{base} c=3", {}, "finalized defaults"),
+            "a set line with drop-ins": (f'KERNEL_CMDLINE[default]="{base}"\n', f"{base} b=2 a=1", two, "finalized defaults"),
+        }
+        for name, (defaults, uki, drop_ins, pattern) in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                with self.assertRaisesRegex(limine.ContractError, pattern):
+                    self.limine_cmdline(defaults, uki, drop_ins)
+        with self.subTest("a drop-in that is a link"):
+            self.setUp()
+            (self.root / etc).mkdir(parents=True)
+            (self.root / etc / "10-a.conf").symlink_to("/dev/null")
+            with self.assertRaisesRegex(limine.ContractError, "not a regular file"):
+                self.limine_cmdline(extend, base)
+        with self.subTest("a menu override of the verified line"):
+            self.setUp()
+            with self.assertRaisesRegex(limine.ContractError, "overrides the verified"):
+                self.limine_cmdline(extend, f"{base} b=2 a=1", two, menu_cmdline=base)
+
+    def test_limine_menu_command_line_is_the_form_limine_entry_tool_writes(self):
+        """Omarchy's drop-in leads its values with a space and repeats words: the
+        UKI keeps the composed line as is (limine-entry-tool 1.40.0's output for
+        these files); --add-uki writes the menu's cmdline: without repeated words
+        or extra spaces."""
+        limine = inspection.limine
+        base = self.inspect()["uki"]["cmdline"]
+        drop_in = {"etc/limine-entry-tool.d/omarchy-defaults.conf":
+                   'TARGET_OS_NAME="Omarchy"\n\n'
+                   'KERNEL_CMDLINE[default]+=" quiet splash loglevel=0 systemd.show_status=false"\n\n'
+                   '# Unpack synchronously.\nKERNEL_CMDLINE[default]+=" initramfs_async=0"\n'}
+        defaults = f'KERNEL_CMDLINE[default]+="{base}"\n'
+        raw = f"{base}  initramfs_async=0  quiet splash loglevel=0 systemd.show_status=false"
+        cleaned = f"{base} initramfs_async=0 systemd.show_status=false"
+        for name, menu in (("the menu's form", cleaned), ("no menu override", None)):
+            with self.subTest(name):
+                self.setUp()
+                sections = self.limine_cmdline(defaults, raw, drop_in, menu_cmdline=menu)
+                self.assertEqual(sections[".cmdline"], raw.encode() + b" \n\0")
+                self.assertEqual(self.inspect()["checks"]["limine-uki"]["result"], "passed")
+        for name, menu in (("the UKI's raw line", raw), ("a word missing", cleaned.replace(" initramfs_async=0", "")),
+                           ("an extra word", cleaned + " nomodeset"), ("another order", f"initramfs_async=0 {base}")):
+            with self.subTest(name):
+                self.setUp()
+                with self.assertRaisesRegex(limine.ContractError, "overrides the verified"):
+                    self.limine_cmdline(defaults, raw, drop_in, menu_cmdline=menu)
+        with self.subTest("a repeated root, which the menu's form would hide"):
+            self.setUp()
+            root = next(word for word in base.split() if word.startswith("root="))
+            repeated = {"etc/limine-entry-tool.d/10-root.conf": f'KERNEL_CMDLINE[default]+=" {root}"\n'}
+            with self.assertRaisesRegex(limine.ContractError, "unsafe"):
+                self.limine_cmdline(defaults, f"{base}  {root}", repeated, menu_cmdline=base)
+        self.assertEqual(limine.menu_cmdline(raw), cleaned)
+
+    def test_built_command_line_is_limine_entry_tools(self):
+        limine = inspection.limine
+        uki = self.root / "boot/efi/EFI/Linux/omarchy_linux-aurora.efi"
+        line = limine.pe_sections(uki)[".cmdline"][:-3].decode()
+        limine.check_built_cmdline(uki, line)
+        for expected in ("", line + " a=1", line.replace(" splash", ""), line + "\nother"):
+            with self.subTest(expected=expected), self.assertRaises(limine.ContractError):
+                limine.check_built_cmdline(uki, expected)
+
     def test_embedded_initramfs_without_the_boot_packages_hooks(self):
         limine = inspection.limine
         members = {name: b"x" for name in limine.INITRD_FILES if "omarchy-mac-encrypt" not in name}
@@ -185,6 +461,18 @@ class InspectionTest(unittest.TestCase):
         menu = self.root / "boot/efi/limine.conf"
         menu.write_text(menu.read_text().split("#")[0] + "#" + hashlib.blake2b(data).hexdigest() + "\n")
         self.assertFails("embedded-initramfs", "omarchy-mac-encrypt")
+
+    def test_embedded_initramfs_accepts_published_boot_package_without_extra_root_gate(self):
+        limine = inspection.limine
+        extra_gate = "usr/lib/systemd/system/sysroot.mount.d/10-omarchy-mac-encrypt-required.conf"
+        members = limine.initramfs_files(fixtures.good_initramfs(),
+                                        set(limine.INITRD_FILES) | {extra_gate})
+        members.update(limine.INITRD_LINKS)
+        members.pop(extra_gate, None)
+        self.replace_uki(initrd=fixtures.initramfs(members))
+        report = self.inspect()
+        self.assertEqual(report["checks"]["embedded-initramfs"]["result"], "passed",
+                         report["checks"]["embedded-initramfs"])
 
     def replace_uki(self, initrd=None, cmdline=None):
         """Rebuilds the UKI with another initramfs or command line, keeping the menu's hash and
@@ -201,6 +489,22 @@ class InspectionTest(unittest.TestCase):
         uki.write_bytes(data)
         menu = self.root / "boot/efi/limine.conf"
         menu.write_text(menu.read_text().split("#")[0] + "#" + hashlib.blake2b(data).hexdigest() + "\n")
+
+    def test_embedded_btrfs_must_run_on_target_without_build_host(self):
+        limine = inspection.limine
+        base = limine.initramfs_files(fixtures.good_initramfs(), set(limine.INITRD_FILES))
+        base.update(limine.INITRD_LINKS)
+        wrong_arch = bytearray(base["usr/bin/btrfs"])
+        wrong_arch[18:20] = (62).to_bytes(2, "little")
+        cases = (
+            b'#!/bin/sh\nexec /run/omarchy-native-fs/bin/btrfs "$@"\n',
+            bytes(wrong_arch),
+            b"\x7fELF\x02\x01\x01",
+        )
+        for contents in cases:
+            with self.subTest(contents=contents):
+                self.replace_uki(initrd=fixtures.initramfs({**base, "usr/bin/btrfs": contents}))
+                self.assertFails("embedded-initramfs", "btrfs is not an AArch64 ELF")
 
     def test_boot_splash(self):
         bgrt = b"# Administrator customizations go in this file\n[Daemon]\nTheme=bgrt\n"
@@ -265,18 +569,20 @@ class InspectionTest(unittest.TestCase):
         self.assertFalse(real_is_subvolume(self.root / "etc"))
 
     def test_audio_stack_missing(self):
-        for name in ("alsa-ucm-conf-asahi", "asahi-audio"):
+        # The image fills each role with its Aurora replacement.
+        for name, package in (("alsa-ucm-conf-asahi", "alsa-ucm-conf-aurora"), ("asahi-audio", "aurora-audio")):
             with self.subTest(name):
                 self.setUp()
-                shutil.rmtree(next((self.root / "var/lib/pacman/local").glob(f"{name}-1.0-1")))
+                shutil.rmtree(next((self.root / "var/lib/pacman/local").glob(f"{package}-*")))
                 report = self.assertFails("installed-system", "packages-required-present")
                 self.assertIn(name, report["installed_system"]["packages-required-present"]["detail"])
 
     def test_first_boot_packages_missing(self):
-        for name in ("vulkan-asahi", "asahi-bless"):
+        # The image fills each role with its Aurora replacement.
+        for name, package in (("vulkan-asahi", "vulkan-aurora"), ("asahi-bless", "aurora-bless")):
             with self.subTest(name):
                 self.setUp()
-                shutil.rmtree(next((self.root / "var/lib/pacman/local").glob(f"{name}-1.0-1")))
+                shutil.rmtree(next((self.root / "var/lib/pacman/local").glob(f"{package}-*")))
                 report = self.assertFails("installed-system", "packages-required-present")
                 self.assertIn(name, report["installed_system"]["packages-required-present"]["detail"])
 
@@ -305,6 +611,15 @@ class InspectionTest(unittest.TestCase):
         self.assertEqual(report["checks"]["apple-packages"]["result"], "passed", report["checks"]["apple-packages"])
         self.assertEqual(report["apple_package_list"], "omarchy-apple.packages")
         self.assertIn("omarchy-apple.packages", report["checks"]["apple-packages"]["detail"])
+        # The platform's name (omacom/omarchy e1b0e5e9b) alone.
+        (install / "omarchy-apple.packages").rename(install / "omarchy-aarch64-apple.packages")
+        report = self.inspect()
+        self.assertEqual(report["checks"]["apple-packages"]["result"], "passed", report["checks"]["apple-packages"])
+        self.assertEqual(report["apple_package_list"], "omarchy-aarch64-apple.packages")
+        # A link by the platform's name is passed over for the list it names.
+        (install / "omarchy-aarch64-apple.packages").rename(install / "omarchy-apple-silicon.packages")
+        (install / "omarchy-aarch64-apple.packages").symlink_to("omarchy-apple-silicon.packages")
+        self.assertEqual(self.inspect()["apple_package_list"], "omarchy-apple-silicon.packages")
 
     def test_apple_package_list_prefers_upstreams_name(self):
         install = self.root / "usr/share/omarchy/install"
@@ -313,6 +628,30 @@ class InspectionTest(unittest.TestCase):
         self.assertEqual(report["checks"]["apple-packages"]["result"], "passed", report["checks"]["apple-packages"])
         (install / "omarchy-apple-silicon.packages").write_text("# Apple\nomarchy-mac\n  # indented\nwf-recorder\n")
         self.assertFails("apple-packages", "omarchy-apple-silicon.packages names packages that are not installed: wf-recorder$")
+        # The platform's name wins over apple-silicon's.
+        (install / "omarchy-aarch64-apple.packages").write_text("omarchy-mac\n")
+        report = self.inspect()
+        self.assertEqual(report["checks"]["apple-packages"]["result"], "passed", report["checks"]["apple-packages"])
+        self.assertEqual(report["apple_package_list"], "omarchy-aarch64-apple.packages")
+        (install / "omarchy-aarch64-apple.packages").write_text("omarchy-mac\nnot-installed\n")
+        self.assertFails("apple-packages", "omarchy-aarch64-apple.packages names packages that are not installed: not-installed$")
+
+    def test_apple_package_list_accepts_only_exact_aurora_replacements(self):
+        install = self.root / "usr/share/omarchy/install"
+        (install / "omarchy-aarch64-apple.packages").write_text("omarchy-mac\nasahi-bless\n")
+        local = self.root / "var/lib/pacman/local"
+        for installed in (*local.glob("asahi-bless-*"), *local.glob("aurora-bless-*")):
+            shutil.rmtree(installed)
+        self.assertFails("apple-packages", "names packages that are not installed: asahi-bless$")
+        fixtures.local_package(self.root, "aurora-bless", "0.4.4.aurora2-1", [], provides=("asahi-bless=0.4.4.aurora2",))
+        report = self.inspect()
+        self.assertEqual(report["checks"]["apple-packages"]["result"], "passed", report["checks"]["apple-packages"])
+        shutil.rmtree(local / "aurora-bless-0.4.4.aurora2-1")
+        fixtures.local_package(self.root, "aurora-bless", "0.4.4.aurora2-1", [])
+        self.assertFails("apple-packages", "names packages that are not installed: asahi-bless$")
+        shutil.rmtree(local / "aurora-bless-0.4.4.aurora2-1")
+        fixtures.local_package(self.root, "bless-impostor", "1-1", [], provides=("asahi-bless",))
+        self.assertFails("apple-packages", "names packages that are not installed: asahi-bless$")
 
     def test_apple_package_list_missing(self):
         install = self.root / "usr/share/omarchy/install"
@@ -530,6 +869,33 @@ class InspectionTest(unittest.TestCase):
         self.assertEqual(report["checks"]["pacman-config"]["result"], "passed", report["checks"]["pacman-config"])
         self.assertIn("omarchy-mac's apple-silicon edge pacman.conf", report["checks"]["pacman-config"]["detail"])
 
+    def test_pacman_config_follows_the_runtimes_aarch64_apple_templates(self):
+        runtime = self.root / "usr/share/omarchy/default/pacman"
+        apple = "[options]\nArchitecture = auto\n\n[omarchy]\nServer = https://pkgs.omarchy.org/edge/$arch\n"
+        apple += "\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
+        apple += "".join(f"\n[{r}]\nInclude = /etc/pacman.d/mirrorlist\n" for r in ("core", "extra", "alarm", "aur"))
+        for directory in (runtime / "apple-silicon", self.root / "usr/share/omarchy-mac/pacman"):
+            directory.mkdir(parents=True)
+            (directory / "pacman-edge.conf").write_text(apple + f"\n# {directory.name}\n")
+        (runtime / "aarch64-apple").mkdir()
+        (runtime / "aarch64-apple/pacman-edge.conf").write_text(apple)
+        (runtime / "aarch64-apple/mirrorlist-edge").write_text("Server = https://arm-mirror.omarchy.org/$arch/$repo\n")
+        pinned = fixtures.test_image_pin.pinned(self.summary)
+        self.assertFails("pacman-config", "is not the runtime's aarch64-apple edge configuration")
+        (self.root / "etc/pacman.conf").write_bytes(fixtures.test_image_pin.render(apple.encode(), pinned))
+        self.assertFails("pacman-config", "mirrorlist is not the runtime's aarch64-apple edge mirror list")
+        (self.root / "etc/pacman.d/mirrorlist").write_text("Server = https://arm-mirror.omarchy.org/$arch/$repo\n")
+        report = self.inspect()
+        self.assertEqual(report["checks"]["pacman-config"]["result"], "passed", report["checks"]["pacman-config"])
+        self.assertIn("the runtime's aarch64-apple edge pacman.conf and the runtime's aarch64-apple mirror list",
+                      report["checks"]["pacman-config"]["detail"])
+        # Without a mirror list of its own, the aarch64-apple template takes the aarch64 one.
+        (runtime / "aarch64-apple/mirrorlist-edge").unlink()
+        self.assertFails("pacman-config", "mirrorlist is not the runtime's aarch64 edge mirror list")
+        (self.root / "etc/pacman.d/mirrorlist").write_bytes((runtime / "aarch64/mirrorlist-edge").read_bytes())
+        report = self.inspect()
+        self.assertEqual(report["checks"]["pacman-config"]["result"], "passed", report["checks"]["pacman-config"])
+
     def test_pacman_config_needs_a_template(self):
         (self.root / "usr/share/omarchy/default/pacman/aarch64/pacman-edge.conf").unlink()
         self.assertFails("pacman-config", "the image ships no Apple Silicon pacman configuration for edge")
@@ -586,7 +952,7 @@ class ClosureInspectionTest(unittest.TestCase):
                 report = inspection.inspect(root, candidates, "edge", trust=signer.trust)
                 self.assertEqual(report["checks"]["candidate-files"]["result"], "passed", report["checks"]["candidate-files"])
                 self.assertEqual(report["checks"]["candidate-versions"]["result"], "passed")
-                self.assertIn("of the 9 runtime and boot packages", report["checks"]["candidate-files"]["detail"])
+                self.assertIn("of the 16 required packages", report["checks"]["candidate-files"]["detail"])
                 (root / "usr/share/icons/Yaru/scalable/actions/go-next-symbolic.svg").unlink()
                 local = next((root / "var/lib/pacman/local").glob("yaru-icon-theme-*"))
                 (local / "desc").write_text((local / "desc").read_text().replace("26.04-1", "26.04-2"))
@@ -599,6 +965,136 @@ class ClosureInspectionTest(unittest.TestCase):
                         path.chmod(0o700)
 
 
+class RuntimeLayoutInspectionTest(unittest.TestCase):
+    """Images built from each runtime layout the builder takes (fixtures.RUNTIME_LAYOUTS)."""
+
+    EXPECTED = {
+        "e1b0e5e9b": ("omarchy-aarch64-apple.packages",
+                      "the runtime's aarch64-apple edge pacman.conf and the runtime's aarch64-apple mirror list"),
+        "5397950a2": ("omarchy-apple-silicon.packages",
+                      "the runtime's apple-silicon edge pacman.conf and the runtime's aarch64 mirror list"),
+    }
+
+    def test_each_runtime_layout_passes_inspection(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            base = Path(scratch)
+            signer = fixtures.Signer(base / "signer")
+            try:
+                for layout, (apple_list, pacman) in self.EXPECTED.items():
+                    with self.subTest(layout=layout):
+                        work = base / layout
+                        receipt = fixtures.make_set(work / "set", signer, contents=fixtures.default_contents(layout))
+                        candidates = work / "candidates"
+                        fixtures.import_set(work / "set", candidates, signer, receipt)
+                        summary = __import__("json").loads((candidates / "import.json").read_text())
+                        root = work / "root"
+                        fixtures.make_root(root, candidates, layout)
+                        factory = work / "factory"
+                        fixtures.make_factory(factory, root, summary)
+                        SUBVOLUMES.clear()
+                        SUBVOLUMES.add(root / ".snapshots")
+                        report = inspection.inspect(root, candidates, "edge", factory, trust=signer.trust)
+                        failed = {name: check for name, check in report["checks"].items() if check["result"] != "passed"}
+                        self.assertEqual(report["result"], "passed", failed)
+                        self.assertEqual(report["apple_package_list"], apple_list)
+                        self.assertIn(pacman, report["checks"]["pacman-config"]["detail"])
+                        # The plain aarch64 template, without asahi-alarm, is not what the image installs.
+                        template = root / "usr/share/omarchy/default/pacman/aarch64/pacman-edge.conf"
+                        self.assertNotIn("[asahi-alarm]", template.read_text())
+                        (root / "etc/pacman.conf").write_bytes(
+                            fixtures.test_image_pin.render(template.read_bytes(), fixtures.test_image_pin.pinned(summary)))
+                        report = inspection.inspect(root, candidates, "edge", factory, trust=signer.trust)
+                        self.assertEqual(report["checks"]["pacman-config"]["result"], "failed")
+            finally:
+                signer.close()
+                for path in base.rglob("*"):
+                    if path.is_dir() and not path.is_symlink():
+                        path.chmod(0o700)
+
+
+class ChannelImageInspectionTest(unittest.TestCase):
+    """A public image built from an edge channel set (builder/channel_set.py)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.base = Path(cls.tmp.name)
+        cls.candidate = fixtures.Signer(cls.base / "candidate")
+        cls.channel = fixtures.Signer(cls.base / "channel", "Omarchy fixture <pkgs@example.invalid>")
+        cls.trust = fixtures.channel_trust(cls.base, cls.candidate, cls.channel)
+        database, sha256 = fixtures.make_channel(cls.base / "edge", cls.channel)
+        channel_set = fixtures.load("channel_set", "builder/channel_set.py")
+        cls.set = cls.base / "set"
+        cls.summary = channel_set.snapshot(database, sha256, "edge", cls.base / "edge/packages", cls.set, cls.trust)
+        cls.good = cls.base / "root"
+        fixtures.make_root(cls.good, cls.set, "e1b0e5e9b")
+
+    @classmethod
+    def tearDownClass(cls):
+        for signer in (cls.candidate, cls.channel):
+            signer.close()
+        for path in cls.base.rglob("*"):
+            if path.is_dir() and not path.is_symlink():
+                path.chmod(0o700)
+        cls.tmp.cleanup()
+
+    def setUp(self):
+        work = Path(tempfile.mkdtemp(dir=self.base))
+        self.root = work / "root"
+        shutil.copytree(self.good, self.root, symlinks=True)
+        self.factory = work / "factory"
+        fixtures.make_factory(self.factory, self.root, self.summary)
+        SUBVOLUMES.clear()
+        SUBVOLUMES.add(self.root / ".snapshots")
+
+    def inspect(self):
+        return inspection.inspect(self.root, self.set, "edge", self.factory, trust=self.trust)
+
+    def assertFails(self, check, pattern):
+        report = self.inspect()
+        self.assertEqual(report["checks"][check]["result"], "failed", report["checks"][check])
+        self.assertRegex(report["checks"][check]["detail"], pattern)
+
+    def test_a_channel_image_passes_as_a_public_image(self):
+        report = self.inspect()
+        failed = {name: check for name, check in report["checks"].items() if check["result"] != "passed"}
+        self.assertEqual(report["result"], "passed", failed)
+        self.assertEqual(report["set_kind"], "channel")
+        self.assertEqual(report["database_sha256"], self.summary["database_sha256"])
+        self.assertEqual(report["image_target"]["image_profile"], "release")
+        self.assertEqual(report["image_target"]["channel_db_sha256"], self.summary["database_sha256"])
+        self.assertNotIn("candidate_set", report["image_target"])
+        self.assertEqual(report["runtime_sources"], {"omarchy-mac": fixtures.SOURCE, "omarchy-mac-boot": fixtures.SOURCE})
+        self.assertNotIn("test image pin", report["checks"]["pacman-config"]["detail"])
+        self.assertEqual(report["installed_versions"]["omarchy-dev"], fixtures.CHANNEL_VERSIONS["omarchy"])
+        self.assertEqual(len(report["supported_models"]), 35)
+
+    def test_the_image_target_must_name_the_channel_set_as_a_public_image(self):
+        target = self.root / "var/lib/omarchy/image/target"
+        for text, pattern in ((fixtures.image_target(self.summary, "test"), "does not record the release profile"),
+                              (fixtures.image_target(self.summary).replace(self.summary["database_sha256"], "0" * 64),
+                               "records another channel set"),
+                              (fixtures.image_target(self.summary) + "candidate_set=apple-test-fixture\n",
+                               "names a candidate set")):
+            with self.subTest(pattern=pattern):
+                target.write_text(text)
+                self.assertFails("image-target", pattern)
+
+    def test_a_test_image_pin_fails_a_channel_image(self):
+        conf = self.root / "etc/pacman.conf"
+        conf.write_bytes(fixtures.test_image_pin.render(conf.read_bytes(), ["omarchy", "omarchy-settings"]))
+        self.assertFails("pacman-config", "configuration$")
+
+    def test_the_dev_runtime_must_provide_its_roles(self):
+        desc = next((self.root / "var/lib/pacman/local").glob("omarchy-dev-*/desc"))
+        desc.write_text(desc.read_text().replace("%PROVIDES%\nomarchy\n", ""))
+        self.assertFails("installed-system", "packages-required-present")
+
+    def test_the_factory_must_be_sealed_for_the_channel_set(self):
+        fixtures.write(self.factory, "var/lib/omarchy/factory-sealed", "format=2\ncandidate_set=x\ncandidate_source_commit=y\n")
+        self.assertFails("factory", "records another channel set")
+
+
 class TestImagePinTest(unittest.TestCase):
     TEMPLATE = b"# pacman\n\n[options]\nArchitecture = auto\n\n[core]\nInclude = /etc/pacman.d/mirrorlist\n"
 
@@ -606,7 +1102,7 @@ class TestImagePinTest(unittest.TestCase):
         return {"candidate_only": candidate_only, "packages": [
             {"name": "omarchy", "origin": "commit"}, {"name": "omarchy-settings", "origin": "commit"},
             {"name": "omarchy-mac", "origin": "commit"}, {"name": "omarchy-mac-boot", "origin": "channel " + "b" * 40},
-            {"name": "linux-aurora", "origin": "channel"}, {"name": "uboot-asahi", "origin": "pull-request"},
+            {"name": "linux-aurora", "origin": "channel"}, {"name": "uboot-aurora", "origin": "pull-request"},
             {"name": "hyprland", "origin": "channel"}]}
 
     def test_pins_only_what_the_source_commit_built(self):

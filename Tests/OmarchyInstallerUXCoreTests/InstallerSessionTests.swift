@@ -1,12 +1,94 @@
 #if os(macOS)
   import Foundation
   import OmarchyAppleInstallerTrustCore
+  import RecoveryAccountCore
   import XCTest
 
   @testable import OmarchyInstallerUXCore
 
   @MainActor
   final class InstallerSessionTests: XCTestCase {
+    func testRecoveryHandoffCanShutDownBeforeCreatingAccount() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.shutdownAccepted = true
+      environment.host = HostDisplay(
+        chipAndSpace: "Apple A18 Pro", supported: true,
+        existingInstalls: [
+          ExistingInstallDisplay(sourceIdentifier: "disk0s3", sizeDescription: "89 GB")
+        ])
+      let target = RecoveryAccountTarget(
+        volumeName: "Omarchy", systemUUID: "11111111-1111-4111-8111-111111111111",
+        dataUUID: "22222222-2222-4222-8222-222222222222",
+        groupUUID: "33333333-3333-4333-8333-333333333333",
+        prebootUUID: "44444444-4444-4444-8444-444444444444")
+      for phase in [nil, "allocating", "creating", "prepared", "awaiting-ownership", "finalized"]
+        as [String?]
+      {
+        environment.accountReply = RecoveryAccountReply(
+          ticket: "bound-ticket", target: target,
+          record: phase.map {
+            RecoveryAccountRecord(
+              target: target, username: "owner", generatedUID: UUID().uuidString, phase: $0)
+          })
+        let session = InstallerSession(environment: environment)
+        await session.inspect()
+        let before = environment.requestShutdownCount
+        let accepted = try await session.prepareRecoveryHandoffAndShutdown()
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(environment.requestShutdownCount, before + 1)
+      }
+    }
+    func testRecoveryHandoffFailureDoesNotShutDown() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.host = HostDisplay(
+        chipAndSpace: "Apple A18 Pro", supported: true,
+        existingInstalls: [
+          ExistingInstallDisplay(sourceIdentifier: "disk0s3", sizeDescription: "89 GB")
+        ])
+      let target = RecoveryAccountTarget(
+        volumeName: "Omarchy", systemUUID: "11111111-1111-4111-8111-111111111111",
+        dataUUID: "22222222-2222-4222-8222-222222222222",
+        groupUUID: "33333333-3333-4333-8333-333333333333",
+        prebootUUID: "44444444-4444-4444-8444-444444444444")
+      environment.accountReply = RecoveryAccountReply(ticket: "bound-ticket", target: target)
+      for changedTarget in [false, true] {
+        environment.handoffFails = !changedTarget
+        environment.handoffOverride = changedTarget ? RecoveryAccountReply() : nil
+        let session = InstallerSession(environment: environment)
+        await session.inspect()
+        do {
+          _ = try await session.prepareRecoveryHandoffAndShutdown()
+          XCTFail("Incomplete or changed Recovery handoff must fail")
+        } catch {}
+        XCTAssertEqual(environment.requestShutdownCount, 0)
+        XCTAssertFalse(session.isBusy)
+      }
+    }
+
+    func testCompletedInstallResumesOnlyAccountSetupWithoutExecutingAgain() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.host = HostDisplay(
+        chipAndSpace: "Apple A18 Pro", supported: true,
+        existingInstalls: [
+          ExistingInstallDisplay(sourceIdentifier: "disk0s3", sizeDescription: "89 GB")
+        ])
+      let target = RecoveryAccountTarget(
+        volumeName: "Omarchy",
+        systemUUID: "11111111-1111-4111-8111-111111111111",
+        dataUUID: "22222222-2222-4222-8222-222222222222",
+        groupUUID: "33333333-3333-4333-8333-333333333333",
+        prebootUUID: "44444444-4444-4444-8444-444444444444")
+      environment.accountReply = RecoveryAccountReply(ticket: "bound-ticket", target: target)
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      XCTAssertEqual(session.recoveryAccount?.target, target)
+      XCTAssertFalse(session.canChangeChannel)
+      try await session.prepareRecoveryAccount(username: "owner", password: Data("short".utf8))
+      XCTAssertEqual(environment.accountCalls, ["inspect", "prepare:bound-ticket:owner"])
+      XCTAssertEqual(environment.executeCount, 0)
+      XCTAssertEqual(environment.prepareCount, 0)
+      XCTAssertEqual(environment.prefetchStartCount, 0)
+    }
     func testChannelAvailabilityKeepsTheLatestCheck() async {
       let environment = MockInstallerEnvironment()
       let slow = OperationGate()
@@ -83,6 +165,20 @@
       await session.inspect()
       XCTAssertFalse(session.encryptLinuxDisk)
       XCTAssertFalse(environment.storedEncryptLinuxDisk)
+    }
+
+    func testMissingLiveInstallationCannotReachShutdownAfterCompletion() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.accountReply = nil
+      let session = await ready(environment)
+      session.presentInstallCredentials()
+      await session.submit(try authorization())
+      guard case .failed(let failure) = session.phase else {
+        return XCTFail("A historical completion must not show the Recovery handoff")
+      }
+      XCTAssertEqual(failure.headline, "Installation could not be verified")
+      XCTAssertFalse(session.shutDown())
+      XCTAssertEqual(environment.requestShutdownCount, 0)
     }
 
     func testHappyPathFollowsTheTransitionTable() async throws {
@@ -253,6 +349,32 @@
       XCTAssertNotNil(session.allocationNotice)
       session.approve()
       XCTAssertEqual(environment.approveCount, 0)
+    }
+
+    func testThePlanSaysWhatHoldsInstall() async {
+      let environment = MockInstallerEnvironment()
+      environment.payloadPrefetchRequired = true
+      let gate = OperationGate()
+      environment.prefetchGate = gate
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      XCTAssertNil(session.planInstallHold)
+      await session.continueToPlan()
+      await gate.waitUntilEntered()
+      session.continueToPlanReview()
+
+      XCTAssertEqual(session.planInstallHold, PlainLanguage.installHoldAcknowledgement)
+      session.setSizeEditing(true)
+      XCTAssertEqual(session.planInstallHold, PlainLanguage.replanning)
+      session.setSizeEditing(false)
+      session.setAcknowledged(true)
+      XCTAssertEqual(session.planInstallHold, PlainLanguage.installHoldDownload)
+
+      await gate.release()
+      await waitUntil { session.prefetchState == .verified }
+      XCTAssertNil(session.planInstallHold)
+      session.approve()
+      XCTAssertNil(session.planInstallHold)
     }
 
     func testReplanKeepsTheRunningDownload() async throws {
@@ -540,6 +662,117 @@
       XCTAssertNotNil(failure.technicalDetail)
     }
 
+    func testQuitBlockedDuringHelperSetupAndExecutionButAllowedDuringPayloadWait() async throws {
+      let environment = MockInstallerEnvironment()
+      let setupGate = OperationGate()
+      let payloadGate = OperationGate()
+      let helperGate = OperationGate()
+      environment.ensureHelperGate = setupGate
+      environment.payloadWaitGate = payloadGate
+      environment.executeGate = helperGate
+      let session = await ready(environment)
+      session.presentInstallCredentials()
+      let credentials = try authorization()
+      let task = Task { await session.submit(credentials) }
+      await setupGate.waitUntilEntered()
+      XCTAssertTrue(session.isExecutionInProgress)
+      XCTAssertEqual(environment.payloadWaitCount, 0)
+      XCTAssertEqual(environment.executeCount, 0)
+      await setupGate.release()
+      await waitUntil { environment.payloadWaitCount > 0 || environment.executeCount > 0 }
+      XCTAssertEqual(environment.payloadWaitCount, 1)
+      XCTAssertEqual(environment.executeCount, 0)
+      XCTAssertFalse(session.isExecutionInProgress)
+      await payloadGate.release()
+      await helperGate.waitUntilEntered()
+      XCTAssertTrue(session.isExecutionInProgress)
+      await helperGate.release()
+      await task.value
+      XCTAssertFalse(session.isExecutionInProgress)
+    }
+
+    func testQuitDuringPayloadWaitPreventsLateSuccessfulWaitFromSubmitting() async throws {
+      let environment = MockInstallerEnvironment()
+      let gate = OperationGate()
+      environment.payloadWaitGate = gate
+      let session = await ready(environment)
+      session.presentInstallCredentials()
+      let credentials = try authorization()
+      let task = Task { await session.submit(credentials) }
+      await gate.waitUntilEntered()
+      session.cancelPrefetchOnQuit()
+      await gate.release()
+      await task.value
+      XCTAssertEqual(environment.executeCount, 0)
+      XCTAssertFalse(session.hasExecutionStarted)
+      XCTAssertFalse(session.isExecutionInProgress)
+    }
+
+    func testPayloadWaitFailureNeverSubmitsAndAllowsFreshReview() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.payloadWaitError = PayloadPrefetchError.failed("verification failed")
+      let session = await ready(environment)
+      session.presentInstallCredentials()
+      await session.submit(try authorization())
+      XCTAssertEqual(environment.executeCount, 0)
+      XCTAssertFalse(session.hasExecutionStarted)
+      XCTAssertFalse(session.isExecutionInProgress)
+      XCTAssertFalse(environment.hasApprovedPlan)
+      XCTAssertTrue(session.canInspect)
+      guard case .failed(let failure) = session.phase else { return XCTFail("Expected failure") }
+      XCTAssertTrue(failure.plainDetail.contains("no disk changes"))
+    }
+
+    func testPreSubmissionFailureAllowsFreshReviewAndRevokesApproval() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.executeResults = [
+        .failure(InstallerPreSubmissionFailure(EngineXPCSubmissionError.connectionFailed))
+      ]
+      let session = await ready(environment)
+      session.presentInstallCredentials()
+      await session.submit(try authorization())
+      XCTAssertFalse(session.hasExecutionStarted)
+      XCTAssertFalse(session.isExecutionInProgress)
+      XCTAssertFalse(environment.hasApprovedPlan)
+      XCTAssertTrue(session.canInspect)
+      guard case .failed(let failure) = session.phase else { return XCTFail("Expected failure") }
+      XCTAssertTrue(failure.plainDetail.contains("not started"))
+      await session.inspect()
+      guard case .welcome = session.phase else { return XCTFail("Expected a fresh check") }
+    }
+
+    func testRecoveryRetryPreSubmissionFailurePreservesCheckpointAndQuitGuard() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.executeResults = [
+        .failure(EngineXPCSubmissionError.recoveryAuthorizationFailed),
+        .failure(InstallerPreSubmissionFailure(EngineXPCSubmissionError.connectionFailed)),
+      ]
+      let session = await ready(environment)
+      session.presentInstallCredentials()
+      await session.submit(try authorization())
+      XCTAssertFalse(session.isExecutionInProgress)
+      let setupGate = OperationGate()
+      let gate = OperationGate()
+      environment.ensureHelperGate = setupGate
+      environment.executeGate = gate
+      session.presentRecoveryRetryCredentials()
+      let credentials = try authorization()
+      let retry = Task { await session.submit(credentials) }
+      await setupGate.waitUntilEntered()
+      XCTAssertTrue(session.isExecutionInProgress)
+      XCTAssertEqual(environment.executeCount, 1)
+      await setupGate.release()
+      await gate.waitUntilEntered()
+      XCTAssertTrue(session.isExecutionInProgress)
+      await gate.release()
+      await retry.value
+      XCTAssertFalse(session.isExecutionInProgress)
+      XCTAssertTrue(session.hasExecutionStarted)
+      XCTAssertFalse(session.canInspect)
+      XCTAssertTrue(session.canRetryRecoveryAuthorization)
+      XCTAssertTrue(environment.hasApprovedPlan)
+    }
+
     func testRecoveryRetryIsOnlyReachableWhenEligible() async throws {
       let environment = MockInstallerEnvironment()
       environment.executeResults = [
@@ -652,6 +885,7 @@
       XCTAssertEqual(session.credentialSheet.context?.error, .credentialsRejected)
       XCTAssertEqual(session.credentialSheet.context?.mentionsBackgroundItem, true)
       XCTAssertEqual(environment.executeCount, 0)
+      XCTAssertFalse(session.isExecutionInProgress)
       XCTAssertTrue(session.canStartInstallation)
     }
 
@@ -675,6 +909,7 @@
 
         XCTAssertEqual(session.credentialSheet.context?.error, sheetError, "\(setupError)")
         XCTAssertEqual(environment.executeCount, 0, "\(setupError)")
+        XCTAssertFalse(session.isExecutionInProgress, "\(setupError)")
         // Nothing ran, so the person can simply try again.
         XCTAssertTrue(session.canStartInstallation, "\(setupError)")
         await session.submit(try authorization())
@@ -952,6 +1187,7 @@
       let authorization = try authorization()
       let operation = Task { await session.submit(authorization) }
       await gate.waitUntilEntered()
+      XCTAssertTrue(session.isExecutionInProgress)
       let phase = session.phase
       let discards = environment.discardCount
       await session.inspect()
@@ -966,6 +1202,7 @@
       await gate.release()
       await operation.value
       let terminal = session.phase
+      XCTAssertFalse(session.isExecutionInProgress)
       environment.savedJournal?(try JournalFixture.data())
       await Task.yield()
       XCTAssertEqual(session.phase, terminal)
@@ -1449,6 +1686,31 @@
   }
 
   final class MockInstallerEnvironment: InstallerEnvironment, @unchecked Sendable {
+    var accountReply: RecoveryAccountReply? = RecoveryAccountReply(
+      ticket: "completed-install",
+      target: RecoveryAccountTarget(
+        volumeName: "Omarchy", systemUUID: "11111111-1111-4111-8111-111111111111",
+        dataUUID: "22222222-2222-4222-8222-222222222222",
+        groupUUID: "33333333-3333-4333-8333-333333333333",
+        prebootUUID: "44444444-4444-4444-8444-444444444444"))
+    var accountCalls = [String]()
+    var handoffFails = false
+    var handoffOverride: RecoveryAccountReply?
+    func prepareRecoveryHandoff(ticket: String) async throws -> RecoveryAccountReply {
+      accountCalls.append("handoff:\(ticket)")
+      if handoffFails { throw AccountSetupFailure("fixture failure") }
+      return handoffOverride ?? accountReply!
+    }
+    func inspectRecoveryAccount() async throws -> RecoveryAccountReply? {
+      accountCalls.append("inspect")
+      return accountReply
+    }
+    func prepareRecoveryAccount(ticket: String, username: String, password: Data) async throws
+      -> RecoveryAccountReply
+    {
+      accountCalls.append("prepare:\(ticket):\(username)")
+      return accountReply!
+    }
     var host = MockInstallerEnvironment.supportedHost
     var plan = MockInstallerEnvironment.samplePlan
     var helper = HelperDisplay(status: .current)
@@ -1459,6 +1721,9 @@
     var inspectGate: OperationGate?
     var prepareGate: OperationGate?
     var executeGate: OperationGate?
+    var payloadWaitGate: OperationGate?
+    var payloadWaitError: (any Error)?
+    private(set) var payloadWaitCount = 0
     var savedProgress: (@Sendable (AssetProgressUpdate) -> Void)?
     var savedJournal: (@Sendable (Data) -> Void)?
     var inspectError: (any Error)?
@@ -1475,6 +1740,7 @@
     /// Each helper setup, as the order of calls relative to execute.
     private(set) var calls = [String]()
     var ensureHelperError: (any Error)?
+    var ensureHelperGate: OperationGate?
     private(set) var prepareCount = 0
     private(set) var lastOperation: InstallOperationKind?
     private(set) var lastEncryptLinuxDisk: Bool?
@@ -1567,6 +1833,7 @@
     ) async throws {
       calls.append(
         "ensureHelper:\(authorization.username)" + (reenablingSwitchedOff ? ":reenable" : ""))
+      await ensureHelperGate?.wait()
       if let ensureHelperError {
         self.ensureHelperError = nil
         throw ensureHelperError
@@ -1595,7 +1862,9 @@
     }
 
     func waitUntilPayloadVerified() async throws {
-      await prefetchGate?.wait()
+      payloadWaitCount += 1
+      await payloadWaitGate?.wait()
+      if let payloadWaitError { throw payloadWaitError }
     }
 
     func cancelPayloadPrefetch() {

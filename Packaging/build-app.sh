@@ -32,7 +32,14 @@ build_jobs="${OMARCHY_BUILD_JOBS:-10}"
 export CARGO_BUILD_JOBS="$build_jobs"
 
 marketing_version="${OMARCHY_APP_VERSION:-2.1.0}"
-build_number="${OMARCHY_APP_BUILD_NUMBER:-27}"
+# SMJobBless never replaces a helper with a lower build, so a developer build
+# defaults to its UTC build minute (YYMMDDHHMM): each one installs over the
+# helper an earlier one left, without anyone tracking numbers by hand.
+if [[ ${OMARCHY_DEVELOPER_BUILD:-0} == "1" ]]; then
+  build_number="${OMARCHY_APP_BUILD_NUMBER:-$(date -u +%y%m%d%H%M)}"
+else
+  build_number="${OMARCHY_APP_BUILD_NUMBER:-27}"
+fi
 signing_identity="${OMARCHY_APP_SIGNING_IDENTITY:--}"
 team_identifier="${OMARCHY_TEAM_ID:-}"
 
@@ -46,20 +53,33 @@ helper_identifier="$INSTALLER_HELPER_IDENTIFIER"
 app_name="$INSTALLER_APP_NAME.app"
 app_executable_name="OmarchyAppleInstallerApp"
 daemon_plist_name="$helper_identifier.plist"
-engine_file_name="installer-v0.9.2-omarchy.28.tar.gz"
-engine_digest="0cf1aa87760f90a545298b7cef737c9b497f2cad421d79ac59f557a81f2eb146"
+# The engine is pinned only in the source lock (docs/engine-versions.md).
+read -r engine_file_name engine_digest engine_size < <(
+  python3 "$script_directory/read-validation-engine.py"
+)
 
+restore_image_identifier="$INSTALLER_RESTORE_IMAGE_IDENTIFIER"
 if [[ $signing_identity == "-" ]]; then
   client_requirement="identifier \"$app_identifier\""
   helper_requirement="identifier \"$helper_identifier\""
+  restore_image_requirement="identifier \"$restore_image_identifier\""
   timestamp_arguments=(--timestamp=none)
 else
   [[ $team_identifier =~ ^[A-Z0-9]{10}$ ]] \
     || fail "OMARCHY_TEAM_ID is required for named signing identities"
   client_requirement="anchor apple generic and identifier \"$app_identifier\" and certificate leaf[subject.OU] = \"$team_identifier\""
   helper_requirement="anchor apple generic and identifier \"$helper_identifier\" and certificate leaf[subject.OU] = \"$team_identifier\""
-  if [[ $signing_identity == "Developer ID Application:"* ]]; then
+  restore_image_requirement="anchor apple generic and identifier \"$restore_image_identifier\" and certificate leaf[subject.OU] = \"$team_identifier\""
+  # A Developer ID signature must be a Developer ID Application certificate
+  # (TN3127), as the privileged helper requires of the decoder at run time.
+  developer_id_restore_image_requirement="anchor apple generic and identifier \"$restore_image_identifier\" and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"$team_identifier\""
+  if [[ $signing_identity == "none" ]]; then
+    # Assembled for a Developer ID of this team, left unsigned: the release
+    # workflow signs it in a separate job (Packaging/release/sign-app).
+    timestamp_arguments=()
+  elif [[ $signing_identity == "Developer ID Application:"* ]]; then
     timestamp_arguments=(--timestamp)
+    restore_image_requirement=$developer_id_restore_image_requirement
   elif [[ $signing_identity =~ ^[0-9A-Fa-f]{40}$ ]] \
     && security find-identity -p codesigning -v \
       | grep -i "$signing_identity" | grep -q "Developer ID Application"; then
@@ -67,6 +87,7 @@ else
     # names ambiguous): resolve the certificate kind from the keychain so
     # Developer ID builds keep the secure timestamp notarization requires.
     timestamp_arguments=(--timestamp)
+    restore_image_requirement=$developer_id_restore_image_requirement
   else
     timestamp_arguments=(--timestamp=none)
   fi
@@ -87,6 +108,9 @@ sealed_catalog_signature="$release_directory/catalog.json.sig"
 
 [[ ${OMARCHY_PRIVATE_PLAIN_TEST:-0} != "1" || ${OMARCHY_PRIVATE_LIMINE_TEST:-0} != "1" ]] \
   || fail "private plain and Limine profiles are mutually exclusive"
+[[ ${OMARCHY_DEVELOPER_BUILD:-0} != "1" \
+  || ( ${OMARCHY_PRIVATE_PLAIN_TEST:-0} != "1" && ${OMARCHY_PRIVATE_LIMINE_TEST:-0} != "1" ) ]] \
+  || fail "the developer build cannot also be a private profile"
 sealed_catalog_available=false
 if [[ -e $sealed_catalog || -L $sealed_catalog \
   || -e $sealed_catalog_signature || -L $sealed_catalog_signature ]]; then
@@ -108,6 +132,14 @@ fi
 
 if [[ ${OMARCHY_PRIVATE_LIMINE_TEST:-0} == "1" && $sealed_catalog_available != "true" ]]; then
   fail "private Limine builds require a sealed private catalog"
+fi
+# A developer catalog can admit Macs no public catalog does, so it must never
+# reach a developer build over the network.
+if [[ ${OMARCHY_DEVELOPER_BUILD:-0} == "1" && $sealed_catalog_available != "true" ]]; then
+  fail "developer builds require a sealed developer catalog"
+fi
+if [[ ${OMARCHY_OFFLINE_BUILD:-0} == "1" && $sealed_catalog_available != "true" ]]; then
+  fail "offline builds require a sealed catalog"
 fi
 
 if [[ ${OMARCHY_PRIVATE_LIMINE_TEST:-0} == "1" ]]; then
@@ -162,11 +194,39 @@ actual_engine_digest="$(/usr/bin/shasum -a 256 "$engine_source" | awk '{print $1
 if [[ $actual_engine_digest != "$engine_digest" ]]; then
   fail "the pinned validation engine digest is incorrect"
 fi
+[[ $(stat -f %z "$engine_source") == "$engine_size" ]] \
+  || fail "the pinned validation engine size is incorrect"
+# The engine archive is notarized as part of the app but never signed by it,
+# so it may carry no native code beyond its Developer ID signed runtime.
+python3 "$package_directory/Engine/verify-engine-macho.py" "$engine_source" >/dev/null \
+  || fail "the validation engine carries native code outside its pinned runtime"
+
+# The Swift restore-image decoder ships here, in Contents/Helpers, where the
+# app's signing reaches it. The tracked unsigned build must match its source
+# record; the copy is checked again before anything signs it.
+restore_image_source="$package_directory/Engine/RestoreImage/bin/omarchy-restore-image"
+python3 "$package_directory/Engine/verify-restore-image.py" >/dev/null \
+  || fail "the restore-image decoder differs from its source build record"
 
 mkdir -p "$output_directory"
 final_app="$output_directory/$app_name"
 [[ ! -e $final_app ]] \
   || fail "refusing to overwrite existing app: $final_app"
+
+recovery_template="${OMARCHY_RECOVERY_TEMPLATE:-}"
+if [[ -z $recovery_template ]]; then
+  "$package_directory/Recovery/build-recovery.sh" "$output_directory/recovery-template"
+  recovery_template="$output_directory/recovery-template/Omarchy Installer.app"
+fi
+[[ -d $recovery_template && ! -L $recovery_template ]] || fail "native Recovery template is missing"
+[[ $(/usr/bin/plutil -extract OmarchyRecoveryBuildMode raw -o - "$recovery_template/Contents/Info.plist") == recovery ]] \
+  || fail "Recovery template is not a real Recovery build"
+[[ $(/usr/bin/plutil -extract OmarchyRecoveryDataLayout raw -o - "$recovery_template/Contents/Info.plist") == external-install-data-v1 ]] \
+  || fail "Recovery template uses an unsupported installation data layout"
+[[ ! -e "$recovery_template/Contents/Resources/install-config.json" \
+  && ! -e "$recovery_template/Contents/Resources/AuraPayloads" ]] \
+  || fail "Recovery template contains another installation's data"
+codesign --verify --deep --strict "$recovery_template"
 
 swift_tool="$(xcrun --find swift)"
 (
@@ -227,6 +287,7 @@ helper_path="$assembled_app/$helper_relative_path"
 
 mkdir -p \
   "$contents/MacOS" \
+  "$contents/Helpers" \
   "$resources/Release" \
   "$resources/Engine/artifacts" \
   "$contents/Library/LaunchDaemons" \
@@ -234,8 +295,21 @@ mkdir -p \
 
 install -m 0755 "$app_binary" "$contents/MacOS/$app_executable_name"
 install -m 0755 "$helper_binary" "$helper_path"
+restore_image_path="$contents/Helpers/omarchy-restore-image"
+install -m 0755 "$restore_image_source" "$restore_image_path"
+python3 "$package_directory/Engine/verify-restore-image.py" "$restore_image_path" >/dev/null \
+  || fail "the bundled restore-image decoder differs from its source build"
+install -m 0444 "$package_directory/Engine/RestoreImage/LICENSE" "$resources/omarchy-restore-image.LICENSE"
 install -m 0444 "$release_descriptor" "$resources/Release/release.json"
 install -m 0444 "$trust_root" "$resources/Release/trust-root.ed25519.pub"
+install -m 0444 "$package_directory/Design/Assets/MacBookPowerButton.png" "$resources/MacBookPowerButton.png"
+install -m 0444 "$package_directory/Design/Assets/MacDesktopPowerButton.png" "$resources/MacDesktopPowerButton.png"
+mkdir -p "$resources/RecoveryTemplate"
+/usr/bin/ditto "$recovery_template" "$resources/RecoveryTemplate/Omarchy Installer.app"
+if [[ $signing_identity != "none" ]]; then
+  codesign --force --sign "$signing_identity" "${timestamp_arguments[@]}" --options runtime \
+    "$resources/RecoveryTemplate/Omarchy Installer.app"
+fi
 if [[ ${OMARCHY_PRIVATE_LIMINE_TEST:-0} == "1" ]]; then
   install -m 0444 "$release_directory/limine-inputs.json" "$resources/Release/limine-inputs.json"
 fi
@@ -270,8 +344,11 @@ for model in json.loads(catalog.read_text())["models"]:
     if source.stat().st_size != artifact["sizeBytes"] or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
         raise SystemExit("bundled engine differs from signed catalog")
     target = destination / name
-    if target.exists() and hashlib.sha256(target.read_bytes()).hexdigest() != expected:
-        raise SystemExit("bundled engine conflicts with inspection engine")
+    if target.exists():
+        if hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+            raise SystemExit("bundled engine conflicts with inspection engine")
+        # The inspection engine is already this exact execution engine.
+        continue
     shutil.copyfile(source, target)
     target.chmod(0o444)
 PYCODE
@@ -293,6 +370,14 @@ if [[ ${OMARCHY_PRIVATE_PLAIN_TEST:-0} == "1" ]]; then
 fi
 if [[ ${OMARCHY_PRIVATE_LIMINE_TEST:-0} == "1" ]]; then
   plutil -insert OmarchyPrivateLimineTest -bool true "$contents/Info.plist"
+fi
+if [[ ${OMARCHY_DEVELOPER_BUILD:-0} == "1" ]]; then
+  plutil -insert OmarchyDeveloperBuild -bool true "$contents/Info.plist"
+fi
+if [[ ${OMARCHY_OFFLINE_BUILD:-0} == "1" ]]; then
+  python3 "$script_directory/bundle-offline-artifacts.py" \
+    "$sealed_catalog" "$release_directory/offline-artifacts" "$resources/Artifacts"
+  plutil -insert OmarchyOfflineBundle -bool true "$contents/Info.plist"
 fi
 plutil -replace CFBundleVersion \
   -string "$build_number" "$contents/Info.plist"
@@ -316,6 +401,12 @@ if [[ $signing_identity != "-" ]]; then
     -json "{\"$helper_identifier\":$(printf '%s' "$helper_requirement" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')}" \
     "$contents/Info.plist"
 fi
+if [[ $signing_identity != "none" ]]; then
+  recovery_hash=$(codesign --display --verbose=4 "$resources/RecoveryTemplate/$INSTALLER_RECOVERY_APP_NAME.app" 2>&1 | sed -n 's/^CDHash=//p')
+  [[ $recovery_hash =~ ^[0-9a-f]{40,64}$ ]] || fail "cannot identify the signed Recovery template"
+  plutil -replace EnvironmentVariables.OMARCHY_RECOVERY_TEMPLATE_REQUIREMENT \
+    -string "cdhash H\"$recovery_hash\"" "$contents/Library/LaunchDaemons/$daemon_plist_name"
+fi
 plutil -replace \
   EnvironmentVariables.OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT \
   -string "$client_requirement" \
@@ -329,27 +420,41 @@ if grep -q REPLACED_DURING_PACKAGING \
   fail "a packaging placeholder was left in the app"
 fi
 
-codesign --force --sign "$signing_identity" \
-  "${timestamp_arguments[@]}" \
-  --options runtime \
-  --identifier "$helper_identifier" \
-  "$helper_path"
-codesign --force --sign "$signing_identity" \
-  "${timestamp_arguments[@]}" \
-  --options runtime \
-  "$assembled_app"
+if [[ $signing_identity != "none" ]]; then
+  # Nested code first, each under its own identifier and with no
+  # entitlements: the decoder needs none.
+  codesign --force --sign "$signing_identity" \
+    "${timestamp_arguments[@]}" \
+    --options runtime \
+    --identifier "$restore_image_identifier" \
+    "$restore_image_path"
+  codesign --force --sign "$signing_identity" \
+    "${timestamp_arguments[@]}" \
+    --options runtime \
+    --identifier "$helper_identifier" \
+    "$helper_path"
+  codesign --force --sign "$signing_identity" \
+    "${timestamp_arguments[@]}" \
+    --options runtime \
+    "$assembled_app"
 
-codesign --verify --deep --strict --verbose=2 "$assembled_app"
-codesign --verify --strict \
-  -R="$helper_requirement" \
-  "$helper_path"
+  codesign --verify --deep --strict --verbose=2 "$assembled_app"
+  codesign --verify --strict \
+    -R="$helper_requirement" \
+    "$helper_path"
+  codesign --verify --strict \
+    -R="$restore_image_requirement" \
+    "$restore_image_path"
+fi
 embedded_version="$(launchctl plist __TEXT,__info_plist "$helper_path" 2>/dev/null \
   | awk -F'"' '/"CFBundleVersion"/ {print $4}')"
 [[ $embedded_version == "$build_number" ]] \
   || fail "the helper does not carry its build number (got '${embedded_version:-none}')"
-codesign --verify --strict \
-  -R="$client_requirement" \
-  "$assembled_app"
+if [[ $signing_identity != "none" ]]; then
+  codesign --verify --strict \
+    -R="$client_requirement" \
+    "$assembled_app"
+fi
 
 mv "$assembled_app" "$final_app"
 echo "$final_app"

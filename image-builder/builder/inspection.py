@@ -45,6 +45,9 @@ M1N1_OPTION = re.compile(r"(chosen\.[^=]*|display|mitigations)=.*")
 # is still inspected: the identity is both keys or none.
 TARGET_FIELDS = ("format", "platform", "candidate_set", "candidate_source_commit", "builder_commit",
                  "builder_tree_clean", "image_profile", "package_set_sha256", "built")
+# A channel image names its set and the channel database it came from instead.
+CHANNEL_TARGET_FIELDS = ("format", "platform", "channel_set", "channel_db_sha256", "builder_commit",
+                         "builder_tree_clean", "image_profile", "package_set_sha256", "built")
 IDENTITY_FIELDS = ("package_set_sha256", "built")
 # The candidate set's name and the build time, as the builder writes them.
 CANDIDATE_SET_NAME = re.compile(r"[A-Za-z0-9._-]+")
@@ -85,13 +88,33 @@ def require(ok: bool, message: str) -> None:
 
 
 class Candidates:
-    """The frozen, imported candidate set: import.json and its archives."""
+    """The frozen, imported set: import.json and its archives. A candidate set
+    (candidate_set.py), or a channel set (channel_set.py, kind "channel"), whose
+    runtime packages name the role they fill (omarchy-dev fills omarchy)."""
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory
         self.summary = json.loads((directory / "import.json").read_text())
         self.packages = {p["name"]: p for p in self.summary["packages"]}
+        self.kind = self.summary.get("kind", "candidate")
+        self.boot_owners = candidate_set.REQUIRED_OWNERS
+        require("hardware_profile" not in self.summary, "the set records a retired hardware profile")
+        require(self.kind in ("candidate", "channel"), f"the set is of an unknown kind: {self.kind}")
+        self.roles = {p.get("role", p["name"]): p["name"] for p in self.summary["packages"]}
         self._listings: dict[str, list[str]] = {}
+
+    def target_fields(self) -> tuple[str, ...]:
+        return CHANNEL_TARGET_FIELDS if self.kind == "channel" else TARGET_FIELDS
+
+    def target_set(self) -> dict[str, str]:
+        """The set's lines in the image-target manifest and the factory seal."""
+        if self.kind == "channel":
+            return {"channel_set": self.summary["set"], "channel_db_sha256": self.summary["database_sha256"]}
+        return {"candidate_set": self.summary["set"], "candidate_source_commit": self.summary["source_commit"]}
+
+    def runtime_names(self) -> set[str]:
+        """Runtime packages named apart from their role: a channel's -dev desktop."""
+        return {name for role, name in self.roles.items() if role != name}
 
     def archive(self, name: str) -> Path:
         return self.directory / self.packages[name]["filename"]
@@ -139,7 +162,12 @@ def check_candidate_versions(root: Path, candidates: Candidates, report: dict) -
 def check_runtime_sources(root: Path, candidates: Candidates, report: dict) -> str:
     """The commit each runtime package was built from, as the importer verified
     it: the set's source commit, or the one the set declares for a platform
-    package. The installed package records it too."""
+    package. The installed package records it too. A channel set's runtime
+    records a commit where its package ships a source revision (the platform
+    packages); the -dev desktop ships none and is held to one version, the set's
+    archives and the channel database instead."""
+    if candidates.kind == "channel":
+        return check_channel_runtime_sources(root, candidates, report)
     sources = {}
     for name, package in sorted(candidates.packages.items()):
         if package.get("group") != "runtime":
@@ -156,20 +184,41 @@ def check_runtime_sources(root: Path, candidates: Candidates, report: dict) -> s
     return f"runtime from {candidates.summary['source_commit'][:12]}" + (f"; {', '.join(others)}" if others else "")
 
 
+def check_channel_runtime_sources(root: Path, candidates: Candidates, report: dict) -> str:
+    sources = {}
+    for name, package in sorted(candidates.packages.items()):
+        if package.get("group") != "runtime" or "source_commit" not in package:
+            continue
+        commit = package["source_commit"]
+        relative = candidate_set.REVISION_FILES[package["role"]]
+        require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None, f"the channel set records no source commit for {name}")
+        require((root / relative).is_file() and (root / relative).read_text().strip() == commit,
+                f"/{relative} does not name {commit}")
+        sources[name] = commit
+    desktop = candidates.packages[candidates.roles["omarchy"]], candidates.packages[candidates.roles["omarchy-settings"]]
+    require(desktop[0]["version"] == desktop[1]["version"], "the runtime and its settings are not one version")
+    require(sources, "the channel set records no runtime source commit")
+    report["runtime_sources"] = sources
+    return (f"runtime {desktop[0]['name']} {desktop[0]['version']} from the channel database "
+            f"{candidates.summary['database_sha256'][:12]}; " + ", ".join(f"{n} {c[:12]}" for n, c in sources.items()))
+
+
 def check_apple_packages(root: Path, report: dict) -> str:
     """Every package the image's Apple list names is installed, reading the list
-    build-mac-image took: omarchy-apple-silicon.packages, else an older
-    runtime's omarchy-apple.packages, never a link."""
+    build-mac-image took: omarchy-aarch64-apple.packages, else an older
+    runtime's omarchy-apple-silicon.packages or omarchy-apple.packages, never a
+    link."""
     path = next((root / name for name in candidate_set.APPLE_LISTS
                  if (root / name).is_file() and not (root / name).is_symlink()), None)
-    require(path is not None,
-            "the image ships no Apple package list (omarchy-apple-silicon.packages or omarchy-apple.packages)")
+    require(path is not None, "the image " + candidate_set.NO_APPLE_LIST)
     names = [fields[0] for fields in map(str.split, path.read_text().splitlines())
              if fields and not fields[0].startswith("#")]
     require(bool(names), f"{path.name} names no package")
-    versions = installed_versions(root)
+    packages = installed_system.installed_provides(root)
+    # The image installs aurora-bless where the list names asahi-bless.
+    filled = set(packages) | installed_system.aurora_replaced(packages)
     report["apple_package_list"] = path.name
-    missing = [name for name in names if name not in versions]
+    missing = [name for name in names if name not in filled]
     require(not missing, f"{path.name} names packages that are not installed: {' '.join(missing)}")
     return f"all {len(names)} packages of {path.name} installed"
 
@@ -185,6 +234,46 @@ def check_minimum_versions(root: Path, policy: dict) -> str:
     return "; ".join(details)
 
 
+# speakerguardd (omacom/omarchy-pkgs pkgbuilds/speakerguardd) protects the
+# J700's speakers, and speakersafetyd every other Mac's. One image installs
+# both, so each must stand down where the other runs.
+SPEAKER_RULES_DIRS = ("usr/lib/udev/rules.d", "etc/udev/rules.d")
+SPEAKERGUARDD_RULES = "usr/lib/udev/rules.d/95-speakerguardd.rules"
+SPEAKERGUARDD_UNIT = "speakerguardd.service"
+SPEAKERSAFETYD_GUARD = "usr/lib/systemd/system/speakersafetyd.service.d/50-j700-guard.conf"
+FEEDBACK_GUARD = "usr/lib/speakerguardd/use-feedback-guard"
+
+
+def check_speaker_routing(root: Path) -> str:
+    """speakerguardd starts only for the J700's speaker codec, from its udev
+    rule, and is never enabled on its own; speakersafetyd skips the J700."""
+    require((root / SPEAKERGUARDD_RULES).is_file(), f"/{SPEAKERGUARDD_RULES} is missing")
+    wants = []
+    for directory in SPEAKER_RULES_DIRS:
+        for rules in sorted((root / directory).glob("*.rules")) if (root / directory).is_dir() else ():
+            for number, line in enumerate(rules.read_text(errors="replace").splitlines(), 1):
+                if SPEAKERGUARDD_UNIT in line and "SYSTEMD_WANTS" in line and not line.lstrip().startswith("#"):
+                    wants.append((f"/{rules.relative_to(root)}:{number}", line))
+    require(wants, f"no udev rule starts {SPEAKERGUARDD_UNIT}")
+    for where, line in wants:
+        require('ATTRS{id}=="AppleJ700"' in line, f"{where} starts {SPEAKERGUARDD_UNIT} for more than the AppleJ700 codec")
+    # The image's links point into the image, so they may dangle here: lexists, not exists.
+    enabled = sorted(f"/{wants.relative_to(root)}/{SPEAKERGUARDD_UNIT}" for base in ("etc/systemd/system", "usr/lib/systemd/system")
+                     if (root / base).is_dir() for wants in (root / base).glob("*.wants")
+                     if os.path.lexists(wants / SPEAKERGUARDD_UNIT))
+    require(not enabled, f"{SPEAKERGUARDD_UNIT} is enabled for every Mac: " + ", ".join(enabled))
+    guard = root / SPEAKERSAFETYD_GUARD
+    require(guard.is_file(), f"/{SPEAKERSAFETYD_GUARD} is missing, so speakersafetyd also runs on the J700")
+    lines = [line.strip() for line in guard.read_text(errors="replace").splitlines()]
+    require("[Service]" in lines and f"ExecCondition=/{FEEDBACK_GUARD}" in lines[lines.index("[Service]"):],
+            f"/{SPEAKERSAFETYD_GUARD} does not hold speakersafetyd to /{FEEDBACK_GUARD}")
+    condition = root / FEEDBACK_GUARD
+    require(condition.is_file() and os.access(condition, os.X_OK), f"/{FEEDBACK_GUARD} is missing or not executable")
+    require("apple,j700" in condition.read_text(errors="replace"), f"/{FEEDBACK_GUARD} does not test for the J700")
+    return (f"{SPEAKERGUARDD_UNIT} starts only for AppleJ700 ({len(wants)} udev rule) and is not enabled; "
+            "speakersafetyd skips the J700")
+
+
 def check_refused(root: Path, policy: dict) -> str:
     present = sorted(set(policy["refused_packages"]) & set(installed_versions(root)))
     require(not present, "refused packages are installed: " + ", ".join(present))
@@ -194,8 +283,8 @@ def check_refused(root: Path, policy: dict) -> str:
 def check_installed_payloads(root: Path, candidates: Candidates) -> str:
     release = candidates.kernel_release()
     expected = {
-        "usr/lib/asahi-boot/m1n1.bin": "m1n1-aurora",
-        "usr/lib/asahi-boot/u-boot-nodtb.bin": "uboot-asahi",
+        "usr/lib/asahi-boot/m1n1.bin": candidates.boot_owners["usr/lib/asahi-boot/m1n1.bin"],
+        "usr/lib/asahi-boot/u-boot-nodtb.bin": candidates.boot_owners["usr/lib/asahi-boot/u-boot-nodtb.bin"],
         f"usr/lib/modules/{release}/vmlinuz": KERNEL,
     }
     expected.update({path: KERNEL for path in candidates.dtbs()})
@@ -203,6 +292,15 @@ def check_installed_payloads(root: Path, candidates: Candidates) -> str:
         installed = root / path
         require(installed.is_file() and not installed.is_symlink(), f"/{path} is missing")
         require(installed.read_bytes() == candidates.member(package, path), f"/{path} is not {package}'s from the set")
+    # The engine's J700 Stage 1 and Stage 2 (BOARD_STAGE1, BOARD_STAGE2).
+    stage1 = root / "boot/efi/aurora/stage1-j700.bin"
+    stage2 = root / "boot/efi/m1n1/boot-j700.bin"
+    require(stage1.is_file() and not stage1.is_symlink()
+            and stage1.read_bytes() == candidates.member("aura", "usr/share/aura/stage1/aura-raw.bin"),
+            "the J700 Stage 1 does not match the authenticated Aura package")
+    require(stage2.is_file() and not stage2.is_symlink()
+            and stage2.read_bytes() == (root / "boot/efi/m1n1/boot.bin").read_bytes(),
+            "the J700 Stage 2 does not match the inspected common bundle")
     return f"m1n1, U-Boot, the kernel and {len(candidates.dtbs())} device trees match the set's archives"
 
 
@@ -210,7 +308,7 @@ def m1n1_stage2(root: Path, candidates: Candidates, report: dict) -> str:
     """m1n1/boot.bin is the set's m1n1, then every Aurora device tree in C
     order, then the set's U-Boot gzipped, then m1n1 options only."""
     data = limine.regular(root / "boot/efi/m1n1/boot.bin")
-    m1n1 = candidates.member("m1n1-aurora", "usr/lib/asahi-boot/m1n1.bin")
+    m1n1 = candidates.member(candidates.boot_owners["usr/lib/asahi-boot/m1n1.bin"], "usr/lib/asahi-boot/m1n1.bin")
     require(data.startswith(m1n1), "m1n1/boot.bin does not start with the set's m1n1")
     offset = len(m1n1)
     names = candidates.dtbs()
@@ -221,7 +319,7 @@ def m1n1_stage2(root: Path, candidates: Candidates, report: dict) -> str:
         offset += len(dtb)
     require(data[offset:offset + 4] != b"\xd0\x0d\xfe\xed", "m1n1/boot.bin carries a device tree the set's kernel lacks")
     uboot, rest = limine.gunzip_prefix(data[offset:])
-    require(uboot == candidates.member("uboot-asahi", "usr/lib/asahi-boot/u-boot-nodtb.bin"),
+    require(uboot == candidates.member(candidates.boot_owners["usr/lib/asahi-boot/u-boot-nodtb.bin"], "usr/lib/asahi-boot/u-boot-nodtb.bin"),
             "m1n1/boot.bin's U-Boot is not the set's")
     options = m1n1_options(root)
     require(rest == options, "m1n1/boot.bin does not end with exactly the image's m1n1 options")
@@ -286,7 +384,7 @@ def check_candidate_files(root: Path, candidates: Candidates, report: dict) -> s
             subprocess.run(["rm", "-rf", str(unpacked)], check=True)
     report["candidate_files"] = counts
     require(not changed, f"{len(changed)} files differ from the set: " + ", ".join(sorted(changed)[:12]))
-    return f"all {counts} files and links of the {len(planned)} runtime and boot packages carry the set's bytes and modes"
+    return f"all {counts} files and links of the {len(planned)} required packages carry the set's bytes and modes"
 
 
 def mtree_digests(root: Path, package: str) -> dict[str, str]:
@@ -303,12 +401,31 @@ def mtree_digests(root: Path, package: str) -> dict[str, str]:
     return digests
 
 
-def check_supported_models(root: Path, candidates: Candidates, report: dict) -> str:
-    """Every Mac U-Boot supports has its Aurora device tree in stage 2."""
+def check_package_mtrees(root: Path, candidates: Candidates) -> str:
+    """The installed integrity references must come from the frozen archives."""
+    versions = installed_versions(root)
+    for name in sorted(candidates.packages):
+        require(".MTREE" in candidates.listing(name), f"{name}: source package has no .MTREE")
+        expected = candidates.member(name, ".MTREE")
+        path = root / "var/lib/pacman/local" / f"{name}-{versions.get(name, '')}" / "mtree"
+        require(path.is_file() and not path.is_symlink(), f"{name}: no installed mtree file")
+        try:
+            source, installed = gzip.decompress(expected), gzip.decompress(path.read_bytes())
+        except (OSError, EOFError, zlib.error) as error:
+            raise InspectionError(f"{name}: invalid compressed mtree") from error
+        require(source.startswith(b"#mtree\n") and b"sha256digest=" in source,
+                f"{name}: mtree has no file checksums")
+        require(source == installed, f"{name}: installed mtree differs from its source package")
+    return f"all {len(candidates.packages)} package mtree references match their frozen archives"
+
+
+def check_supported_models(root: Path, candidates: Candidates, report: dict, policy: dict | None = None) -> str:
+    """Every Mac the image admits has its Aurora device tree in stage 2. The
+    trusted policy names them; the Aurora U-Boot ships no device trees."""
+    policy = policy if policy is not None else candidate_set.load_policy()
     kernel_dtbs = {PurePosixPath(p).name for p in candidates.dtbs()}
-    models = sorted(PurePosixPath(p).name for p in candidates.listing("uboot-asahi")
-                    if PurePosixPath(p).match("usr/lib/asahi-boot/dtb/*.dtb"))
-    require(models, "the set's U-Boot names no Mac")
+    models = sorted(f"{tree}.dtb" for tree in policy["device_trees"])
+    require(models, "the trust policy names no Mac")
     missing = [name for name in models if name not in kernel_dtbs]
     require(not missing, "the Aurora kernel lacks device trees for " + ", ".join(missing))
     report["supported_models"] = [name.removesuffix(".dtb") for name in models]
@@ -426,8 +543,8 @@ def image_profile(profile: str, candidates: Candidates) -> str:
     return "test" if candidates.summary.get("candidate_only") is True else "release"
 
 
-def read_image_target(path: Path) -> dict[str, str]:
-    """TARGET_FIELDS from a manifest read as the runtime reads it: comments and
+def read_image_target(path: Path, known: tuple[str, ...] = TARGET_FIELDS) -> dict[str, str]:
+    """KNOWN fields from a manifest read as the runtime reads it: comments and
     unknown keys ignored, any other line refused. Each known key appears once."""
     fields: dict[str, str] = {}
     # Lines end at a newline only, as the runtime's read -r splits them: a carriage
@@ -439,14 +556,18 @@ def read_image_target(path: Path) -> dict[str, str]:
             continue
         require("=" in line, f"/var/lib/omarchy/image/target is malformed: {line}")
         key, value = line.split("=", 1)
-        if key in TARGET_FIELDS:
+        if key in known:
             require(key not in fields, f"/var/lib/omarchy/image/target names {key} twice")
             fields[key] = value
-    missing = [key for key in TARGET_FIELDS if key not in fields]
+    missing = [key for key in known if key not in fields]
     if all(key in missing for key in IDENTITY_FIELDS):
         missing = [key for key in missing if key not in IDENTITY_FIELDS]
     require(not missing, f"/var/lib/omarchy/image/target does not record {', '.join(missing)}")
     return fields
+
+
+def read_target_keys(path: Path) -> set[str]:
+    return {line.split("=", 1)[0] for line in path.read_text().split("\n") if "=" in line and not line.startswith("#")}
 
 
 def check_image_target(root: Path, candidates: Candidates, profile: str, report: dict) -> str:
@@ -455,23 +576,28 @@ def check_image_target(root: Path, candidates: Candidates, profile: str, report:
     path = directory / "target"
     require(path.is_file(), "/var/lib/omarchy/image/target is missing")
     root_owned(path, 0o644)
-    fields = read_image_target(path)
+    known = candidates.target_fields()
+    fields = read_image_target(path, known)
     require(fields["format"] == "1" and fields["platform"] == PLATFORM,
             f"/var/lib/omarchy/image/target does not name {PLATFORM}")
-    require(CANDIDATE_SET_NAME.fullmatch(fields["candidate_set"]) is not None
-            and fields["candidate_set"] == candidates.summary["set"]
-            and fields["candidate_source_commit"] == candidates.summary["source_commit"],
-            "/var/lib/omarchy/image/target records another candidate set")
+    if candidates.kind == "channel":
+        require(not set(TARGET_FIELDS[2:4]) & set(read_target_keys(path)),
+                "/var/lib/omarchy/image/target of a channel image names a candidate set")
+    set_fields = candidates.target_set()
+    name = next(iter(set_fields))
+    require(CANDIDATE_SET_NAME.fullmatch(fields[name]) is not None
+            and all(fields[key] == value for key, value in set_fields.items()),
+            f"/var/lib/omarchy/image/target records another {candidates.kind} set")
     require(re.fullmatch(r"[0-9a-f]{40}", fields["builder_commit"]) is not None,
             "/var/lib/omarchy/image/target names no builder commit")
     require(fields["builder_tree_clean"] in ("true", "false"),
             "/var/lib/omarchy/image/target does not say whether the builder tree was clean")
     expected = image_profile(profile, candidates)
     require(fields["image_profile"] == expected, f"/var/lib/omarchy/image/target does not record the {expected} profile")
-    report["image_target"] = {key: fields[key] for key in TARGET_FIELDS
+    report["image_target"] = {key: fields[key] for key in known
                               if key in fields and key not in ("format", "platform")}
     detail = (f"/var/lib/omarchy/image/target names {PLATFORM}, root-owned, {expected} image of "
-              f"{fields['candidate_set']} from builder {fields['builder_commit'][:12]}")
+              f"{fields[name]} from builder {fields['builder_commit'][:12]}")
     if "built" not in fields:
         return detail + ", built before images recorded their build identity"
     require(re.fullmatch(r"[0-9a-f]{64}", fields["package_set_sha256"]) is not None,
@@ -517,35 +643,40 @@ def check_first_boot(root: Path, report: dict) -> str:
 
 
 def pacman_templates(root: Path, channel: str) -> tuple[str, Path, Path]:
-    # The Apple template as build-mac-image picks it: omarchy-mac's, else an
-    # older runtime's apple-silicon one, else an even older runtime's aarch64
-    # one; and the runtime's aarch64 mirror list, per channel or single.
+    # The Apple template as build-mac-image picks it: the runtime's
+    # aarch64-apple one, else omarchy-mac's, else an older runtime's
+    # apple-silicon one, else an even older runtime's aarch64 one; and the
+    # mirror list beside the runtime's aarch64-apple template, else its aarch64
+    # one, per channel or single.
     runtime = root / "usr/share/omarchy/default/pacman"
-    choices = (("omarchy-mac's apple-silicon", root / f"usr/share/omarchy-mac/pacman/pacman-{channel}.conf"),
+    choices = (("the runtime's aarch64-apple", runtime / f"aarch64-apple/pacman-{channel}.conf"),
+               ("omarchy-mac's apple-silicon", root / f"usr/share/omarchy-mac/pacman/pacman-{channel}.conf"),
                ("the runtime's apple-silicon", runtime / f"apple-silicon/pacman-{channel}.conf"),
                ("the runtime's aarch64", runtime / f"aarch64/pacman-{channel}.conf"))
     kind, template = next((choice for choice in choices if choice[1].is_file()), choices[-1])
-    mirrorlist = runtime / f"aarch64/mirrorlist-{channel}"
-    if not mirrorlist.is_file():
-        mirrorlist = runtime / "mirrorlist-aarch64"
+    mirrorlist = next((path for path in (runtime / f"aarch64-apple/mirrorlist-{channel}",
+                                         runtime / f"aarch64/mirrorlist-{channel}") if path.is_file()),
+                      runtime / "mirrorlist-aarch64")
     return kind, template, mirrorlist
 
 
 def check_pacman_config(root: Path, channel: str, candidates: Candidates) -> str:
     kind, template, mirrorlist = pacman_templates(root, channel)
+    mirrors = "aarch64-apple" if mirrorlist.parent.name == "aarch64-apple" else "aarch64"
     require(template.is_file(), f"the image ships no Apple Silicon pacman configuration for {channel}")
     pinned = test_image_pin.pinned(candidates.summary)
     require((root / "etc/pacman.conf").read_bytes() == test_image_pin.render(limine.regular(template), pinned),
             f"/etc/pacman.conf is not {kind} {channel} configuration"
             + (" with the test image's pin" if pinned else ""))
     require((root / "etc/pacman.d/mirrorlist").read_bytes() == limine.regular(mirrorlist),
-            f"/etc/pacman.d/mirrorlist is not the runtime's aarch64 {channel} mirror list")
-    return (f"{kind} {channel} pacman.conf and the runtime's aarch64 mirror list"
+            f"/etc/pacman.d/mirrorlist is not the runtime's {mirrors} {channel} mirror list")
+    return (f"{kind} {channel} pacman.conf and the runtime's {mirrors} mirror list"
             + (f"; test image pin: IgnorePkg = {' '.join(pinned)}" if pinned else ""))
 
 
-def check_installed_system(root: Path, report: dict) -> str:
-    verification = installed_system.verify(root)
+def check_installed_system(root: Path, report: dict, candidates: Candidates) -> str:
+    # A channel set's -dev desktop is its runtime, not a stray development package.
+    verification = installed_system.verify(root, runtime_packages=candidates.runtime_names())
     report["installed_system"] = verification.checks
     require(not verification.failed, "installed-system checks failed: " + ", ".join(verification.failed))
     return f"{len(verification.checks)} installed-system checks"
@@ -555,9 +686,8 @@ def check_factory(factory: Path, root: Path, candidates: Candidates) -> str:
     sealed = factory / "var/lib/omarchy/factory-sealed"
     require(sealed.is_file() and not sealed.is_symlink(), "@factory is not sealed")
     body = sealed.read_text()
-    require(body == f"format=2\ncandidate_set={candidates.summary['set']}\n"
-                    f"candidate_source_commit={candidates.summary['source_commit']}\n",
-            "@factory records another candidate set")
+    require(body == "format=2\n" + "".join(f"{key}={value}\n" for key, value in candidates.target_set().items()),
+            f"@factory records another {candidates.kind} set")
     for rel in ("var/lib/omarchy/mac-first-boot/pending", "var/lib/omarchy/mac-first-boot/deferred-steps",
                 "var/lib/omarchy/provisioning/pending", "etc/pacman.d/gnupg", "boot/efi/omarchy/install.conf"):
         require(not (factory / rel).exists(), f"@factory carries /{rel}")
@@ -580,6 +710,8 @@ def inspect(root: Path, candidates_dir: Path, channel: str, factory: Path | None
         "set": candidates.summary["set"],
         "source_commit": candidates.summary["source_commit"],
         "signer": candidates.summary["signer"],
+        **({"set_kind": "channel", "database_sha256": candidates.summary["database_sha256"]}
+           if candidates.kind == "channel" else {}),
         "channel": channel,
         "checks": {},
     }
@@ -591,8 +723,9 @@ def inspect(root: Path, candidates_dir: Path, channel: str, factory: Path | None
         ("apple-packages", lambda: check_apple_packages(root, report)),
         ("installed-boot-payloads", lambda: check_installed_payloads(root, candidates)),
         ("candidate-files", lambda: check_candidate_files(root, candidates, report)),
+        ("package-mtrees", lambda: check_package_mtrees(root, candidates)),
         ("m1n1-stage2", lambda: m1n1_stage2(root, candidates, report)),
-        ("aurora-device-trees", lambda: check_supported_models(root, candidates, report)),
+        ("aurora-device-trees", lambda: check_supported_models(root, candidates, report, policy)),
         ("limine-uki", lambda: check_limine(root, candidates, report)),
         ("embedded-initramfs", lambda: check_embedded_initramfs(root, report)),
         ("boot-splash", lambda: check_boot_splash(root, report)),
@@ -601,7 +734,8 @@ def inspect(root: Path, candidates_dir: Path, channel: str, factory: Path | None
         ("first-boot", lambda: check_first_boot(root, report)),
         ("snapshots", lambda: check_snapshots(root)),
         ("pacman-config", lambda: check_pacman_config(root, channel, candidates)),
-        ("installed-system", lambda: check_installed_system(root, report)),
+        ("installed-system", lambda: check_installed_system(root, report, candidates)),
+        ("speaker-routing", lambda: check_speaker_routing(root)),
     ]
     if factory is not None:
         checks.append(("factory", lambda: check_factory(factory, root, candidates)))

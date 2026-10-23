@@ -34,10 +34,24 @@ let package = Package(
     ),
   ],
   targets: [
+    .target(name: "RecoveryAuthorization", path: "Recovery/Native", publicHeadersPath: "."),
+    .target(
+      name: "RecoveryAccountCore", dependencies: ["RecoveryAuthorization"],
+      path: "Recovery/Sources/Account"),
     .target(
       name: "OmarchyInstallerSystem",
       path: "Sources/OmarchyInstallerSystem",
       publicHeadersPath: "include"
+    ),
+    .executableTarget(
+      name: "RecoveryAccountQualification",
+      dependencies: ["RecoveryAccountCore"],
+      path: "Development/RecoveryAccountQualification"
+    ),
+    .executableTarget(
+      name: "InstallerReadinessCheck",
+      dependencies: ["OmarchyAppleInstallerTrustCore"],
+      path: "Development/ReadinessCheck"
     ),
     .executableTarget(
       name: "OmarchyInstallerIdentityGenerator",
@@ -48,15 +62,24 @@ let package = Package(
       capability: .buildTool(),
       dependencies: ["OmarchyInstallerIdentityGenerator"]
     ),
+    .executableTarget(
+      name: "OmarchyEnginePinGenerator",
+      path: "Sources/OmarchyEnginePinGenerator"
+    ),
+    .plugin(
+      name: "OmarchyEnginePinPlugin",
+      capability: .buildTool(),
+      dependencies: ["OmarchyEnginePinGenerator"]
+    ),
     .target(
       name: "OmarchyAppleInstallerTrustCore",
-      dependencies: ["OmarchyInstallerSystem"],
+      dependencies: ["OmarchyInstallerSystem", "RecoveryAccountCore"],
       path: "Sources/OmarchyAppleInstaller",
-      plugins: ["OmarchyInstallerIdentityPlugin"]
+      plugins: ["OmarchyInstallerIdentityPlugin", "OmarchyEnginePinPlugin"]
     ),
     .target(
       name: "OmarchyInstallerUXCore",
-      dependencies: ["OmarchyAppleInstallerTrustCore"],
+      dependencies: ["OmarchyAppleInstallerTrustCore", "RecoveryAccountCore"],
       path: "Sources/OmarchyInstallerUXCore"
     ),
     .executableTarget(
@@ -64,6 +87,7 @@ let package = Package(
       dependencies: [
         "OmarchyAppleInstallerTrustCore",
         "OmarchyInstallerUXCore",
+        "RecoveryAccountCore",
       ],
       path: "Sources/OmarchyAppleInstallerApp"
     ),
@@ -84,7 +108,7 @@ let package = Package(
     ),
     .testTarget(
       name: "OmarchyAppleInstallerTrustCoreTests",
-      dependencies: ["OmarchyAppleInstallerTrustCore"],
+      dependencies: ["OmarchyAppleInstallerTrustCore", "RecoveryAccountCore"],
       path: "Tests/OmarchyAppleInstallerTrustCoreTests",
       resources: [.copy("Fixtures")]
     ),

@@ -9,7 +9,7 @@
     case noMacRelease, modelNotOnChannel, channelUnreachable
     case allocationClamped, allocationAligned, approvalChanged, credentialsRejected, connectionLost
     case emptyReply, helperFailure, degradedProgress, recoveryRetry, manualRecovery
-    case shutdownFailure, completed, installationMedia, spaceChanged
+    case shutdownFailure, completed, installationMedia, spaceChanged, preparedResumeMismatch
 
     public var id: String { rawValue }
     public var title: String {
@@ -45,6 +45,7 @@
       case .completed: "Installation complete → first-boot check"
       case .installationMedia: "Installation media required"
       case .spaceChanged: "Space shrinks before install · engine refuses plan"
+      case .preparedResumeMismatch: "Prepared resume target changed"
       }
     }
 
@@ -60,6 +61,8 @@
         "Approve the plan. Install must remain unavailable. Use Edit disk size to return to review."
       case .credentialsRejected:
         "Submit the test account. The first attempt is rejected; the next succeeds."
+      case .preparedResumeMismatch:
+        "The saved APFS target no longer matches. Confirm the failure explains prior preparation, preserves Last verified activity, and offers no fresh installation or blind retry."
       case .connectionLost, .emptyReply, .helperFailure:
         "Check the last verified activity. Starting another installation must remain unavailable."
       case .recoveryRetry:
@@ -156,14 +159,15 @@
       return availability
     }
 
-    /// The 34 M1, M2 and M3 Macs every catalog enables (scripts/supported-models.json).
+    /// The 35 Macs every catalog enables (scripts/supported-models.json): every
+    /// M1, M2 and M3 Mac and the MacBook Neo.
     public static let simulatedCatalogDevices = [
       "apple,j274", "apple,j293", "apple,j313", "apple,j456", "apple,j457", "apple,j314s",
       "apple,j314c", "apple,j316s", "apple,j316c", "apple,j375c", "apple,j375d", "apple,j413",
       "apple,j415", "apple,j473", "apple,j493", "apple,j414s", "apple,j414c", "apple,j416s",
       "apple,j416c", "apple,j474s", "apple,j475c", "apple,j475d", "apple,j180d", "apple,j433",
       "apple,j434", "apple,j504", "apple,j613", "apple,j615", "apple,j514s", "apple,j514c",
-      "apple,j514m", "apple,j516s", "apple,j516c", "apple,j516m",
+      "apple,j514m", "apple,j516s", "apple,j516c", "apple,j516m", "apple,j700",
     ]
 
     private var refusedOnce: Bool {
@@ -287,6 +291,14 @@
       for (index, line) in Self.journalLines.enumerated() {
         try await tick()
         journal(scenario == .degradedProgress && index == 5 ? Data("broken\n".utf8) : line)
+        if index == 4 && scenario == .preparedResumeMismatch {
+          throw EngineXPCSubmissionError.engineFailed(
+            EngineFailureNotice(
+              reason: .preparedResumeMismatch, exitStatus: 1, diskUnchanged: false,
+              summary:
+                "prepared resume target does not match checkpoint")
+          )
+        }
         if index == 5 {
           if scenario == .connectionLost { throw EngineXPCSubmissionError.connectionFailed }
           if scenario == .helperFailure {

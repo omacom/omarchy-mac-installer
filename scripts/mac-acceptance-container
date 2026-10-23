@@ -1,0 +1,64 @@
+#!/bin/bash
+#
+# Runs a command (the VM harness) on an Ubuntu runner as if on the Arch Linux
+# ARM host the harness was written for: in a privileged Arch Linux ARM
+# container with the harness's tools and QEMU 11, the runner's /dev (KVM, loop
+# and mapper devices) and $ROOT bind-mounted at the same path.
+#
+#   scripts/mac-acceptance-container <command> [args...]
+#
+# Env: ROOT (the run directory, required) and the harness's OMARCHY_VM_*
+# settings, passed through. The command runs as a user with the runner's uid
+# and passwordless sudo, as the harness expects.
+#
+# Three things the runner differs in, handled here:
+# - its root filesystem is overlayfs, which overlayfs (the harness's chroot)
+#   cannot use as its upper layer, so $ROOT/state is an ext4 file system in a
+#   sparse file, $ROOT/state.ext4;
+# - it has no udev, so reloading udev rules (which only hides the run's devices
+#   from a desktop automounter) is a no-op;
+# - its kernel has no FAT driver, which the harness does not need since it
+#   reads and writes the ESP with mtools.
+set -euo pipefail
+[[ $# -ge 1 ]] || { sed -n '2,22p' "$0" >&2; exit 2; }
+: "${ROOT:?ROOT is required}"
+[[ $ROOT =~ ^/var/tmp/omarchy-mac-acceptance/ ]] || { echo "mac-acceptance-container: unexpected ROOT $ROOT" >&2; exit 2; }
+
+# The image omarchy-iso builds its aarch64 ISO in, pinned by digest.
+image=menci/archlinuxarm@sha256:3e1074c407fc1a57c2a2117af6920c96a7cc906fa6f1f2da8a4a7fd3aa2c2f4e
+docker=(docker)
+docker version >/dev/null 2>&1 || docker=(sudo -n docker)
+
+env_args=(-e ROOT -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)")
+for name in $(compgen -e | grep '^OMARCHY_VM_' || true); do env_args+=(-e "$name"); done
+
+exec "${docker[@]}" run --rm --privileged -v /dev:/dev -v "$ROOT:$ROOT" "${env_args[@]}" \
+  "$image" bash -euo pipefail -c '
+    # A kernel without Landlock: pacman cannot fence its downloads there.
+    sed -i "/^\[options\]/a DisableSandboxFilesystem" /etc/pacman.conf
+    echo "Server = https://arm-mirror.omarchy.org/\$arch/\$repo" >/etc/pacman.d/mirrorlist
+    pacman-key --init >/dev/null 2>&1 && pacman-key --populate archlinuxarm >/dev/null 2>&1
+    for attempt in 1 2 3; do
+      pacman -Syu --noconfirm --needed qemu-system-aarch64 qemu-img dtc socat gptfdisk dosfstools mtools \
+        btrfs-progs cryptsetup mkinitcpio libarchive gnupg curl python sudo util-linux git >/dev/null && break
+      [ "$attempt" -lt 3 ] || { echo "mac-acceptance-container: could not install the harness tools" >&2; exit 1; }
+      sleep 15
+    done
+    qemu-system-aarch64 --version | head -1
+    printf "%s\n" "#!/bin/sh" "# No udev here, and no desktop automounter to hide devices from." \
+      "if [ \"\$1\" = control ] && [ ! -S /run/udev/control ]; then exit 0; fi" "exec /usr/bin/udevadm \"\$@\"" \
+      >/usr/local/bin/udevadm
+    chmod 755 /usr/local/bin/udevadm
+    truncate -s 120G "$ROOT/state.ext4"
+    mkfs.ext4 -q -F "$ROOT/state.ext4"
+    mkdir -p "$ROOT/state"
+    mount -o loop "$ROOT/state.ext4" "$ROOT/state"
+    groupadd -o -g "$HOST_GID" runner 2>/dev/null || true
+    useradd -o -m -u "$HOST_UID" -g "$HOST_GID" runner
+    echo "runner ALL=(ALL) NOPASSWD: ALL" >/etc/sudoers.d/runner
+    chown "$HOST_UID:$HOST_GID" "$ROOT/state"
+    status=0
+    sudo -u runner --preserve-env=ROOT,$(compgen -e | grep "^OMARCHY_VM_" | paste -sd, -) HOME=/home/runner "$@" || status=$?
+    umount "$ROOT/state" || true
+    exit "$status"
+  ' mac-acceptance-container "$@"

@@ -6,6 +6,28 @@
 
   @testable import OmarchyAppleInstallerTrustCore
 
+  private enum RestoreImageCase {
+    case valid
+    case absent
+    case renamed
+    case changedInTransit
+  }
+
+  private final class ImportedByteObservation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func record(_ bytes: Int) {
+      lock.lock()
+      defer { lock.unlock() }
+      value = max(value, bytes)
+    }
+    var maximum: Int {
+      lock.lock()
+      defer { lock.unlock() }
+      return value
+    }
+  }
+
   final class EngineHandoffPackageImporterTests: XCTestCase {
     func testValidPackageIsRecopiedIntoPrivateHelperDirectory() throws {
       let fixture = try makeFixture()
@@ -34,6 +56,132 @@
       try FileManager.default.removeItem(at: fixture.engineURL)
       try writePrivate(Data("changed!".utf8), to: fixture.engineURL)
       XCTAssertEqual(try Data(contentsOf: imported.engineURL), fixture.engine)
+
+      // The app's decoder becomes a private, executable copy the user can't change.
+      let decoder = try XCTUnwrap(imported.restoreImageURL)
+      XCTAssertEqual(decoder.deletingLastPathComponent(), imported.packageURL)
+      XCTAssertEqual(decoder.lastPathComponent, RestoreImageHelper.fileName)
+      XCTAssertEqual(try mode(decoder), 0o500)
+      XCTAssertEqual(try Data(contentsOf: decoder), Data("signed decoder".utf8))
+    }
+
+    func testRecoveryContainerIsImportedWithItsDigestAndRejectsUnsafeSource() throws {
+      for mode in ["valid", "changed", "symlink", "fifo", "renamed", "oversize", "partial"] {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let bytes = Data("bounded recovery container".utf8)
+        let archive = fixture.source.appendingPathComponent(NativeRecoveryTemplate.archiveFileName)
+        try writePrivate(bytes, to: archive)
+        let manifestURL = fixture.source.appendingPathComponent("manifest.json")
+        var manifest = try XCTUnwrap(
+          JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any])
+        manifest["recovery_template"] = [
+          "file_name": mode == "renamed" ? "foreign.json" : NativeRecoveryTemplate.archiveFileName,
+          "digest": digest(bytes),
+          "size_bytes": mode == "oversize"
+            ? Int(NativeRecoveryTemplate.maximumArchiveBytes + 1) : bytes.count,
+        ]
+        if mode == "partial" {
+          var record = try XCTUnwrap(manifest["recovery_template"] as? [String: Any])
+          record.removeValue(forKey: "digest")
+          manifest["recovery_template"] = record
+        }
+        try JSONSerialization.data(withJSONObject: manifest).write(
+          to: manifestURL, options: .atomic)
+        switch mode {
+        case "changed": try Data("changed container".utf8).write(to: archive, options: .atomic)
+        case "symlink":
+          try FileManager.default.removeItem(at: archive)
+          try FileManager.default.createSymbolicLink(
+            at: archive, withDestinationURL: fixture.engineURL)
+        case "fifo":
+          try FileManager.default.removeItem(at: archive)
+          XCTAssertEqual(mkfifo(archive.path, 0o600), 0)
+        default: break
+        }
+        let source = try openDirectory(fixture.source)
+        defer { try? source.close() }
+        if mode == "valid" {
+          let imported = try EngineHandoffPackageImporter().prepare(
+            from: source, in: fixture.destination)
+          XCTAssertEqual(try Data(contentsOf: XCTUnwrap(imported.recoveryTemplateURL)), bytes)
+          XCTAssertEqual(try modeOfRecovery(imported.recoveryTemplateURL!), 0o400)
+        } else {
+          XCTAssertThrowsError(
+            try EngineHandoffPackageImporter().prepare(from: source, in: fixture.destination))
+          XCTAssertTrue(try importedEntries(in: fixture.destination).isEmpty)
+        }
+      }
+    }
+
+    private func modeOfRecovery(_ url: URL) throws -> Int {
+      let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+      return (attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0
+    }
+
+    func testGrowingRecoveryInputIsRejectedBeforeWritingBeyondItsDeclaredSize() throws {
+      let fixture = try makeFixture()
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let bytes = Data("bounded recovery container".utf8)
+      let archive = fixture.source.appendingPathComponent(NativeRecoveryTemplate.archiveFileName)
+      try writePrivate(bytes, to: archive)
+      let manifestURL = fixture.source.appendingPathComponent("manifest.json")
+      var manifest = try XCTUnwrap(
+        JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as? [String: Any])
+      manifest["recovery_template"] = [
+        "file_name": NativeRecoveryTemplate.archiveFileName,
+        "digest": digest(bytes), "size_bytes": bytes.count,
+      ]
+      try JSONSerialization.data(withJSONObject: manifest).write(to: manifestURL, options: .atomic)
+      let destination = fixture.destination
+      let observed = ImportedByteObservation()
+      let importer = EngineHandoffPackageImporter(readArtifactChunk: { role, source, limit in
+        if role == "recovery-template" {
+          // Observe any bytes already written before this read. An oversized
+          // first read models growth after fstat, without a scheduling race.
+          for package in try FileManager.default.contentsOfDirectory(
+            at: destination, includingPropertiesForKeys: nil)
+          {
+            let target = package.appendingPathComponent(NativeRecoveryTemplate.archiveFileName)
+            if let attributes = try? FileManager.default.attributesOfItem(atPath: target.path),
+              let size = attributes[.size] as? NSNumber
+            {
+              observed.record(size.intValue)
+            }
+          }
+          if try source.offset() == 0 {
+            return (try source.read(upToCount: limit) ?? Data()) + Data([1])
+          }
+        }
+        return try source.read(upToCount: limit)
+      })
+      let source = try openDirectory(fixture.source)
+      defer { try? source.close() }
+      XCTAssertThrowsError(try importer.prepare(from: source, in: destination)) {
+        XCTAssertEqual($0 as? EngineHandoffImportError, .sizeMismatch("recovery-template"))
+      }
+      XCTAssertEqual(observed.maximum, 0)
+      XCTAssertTrue(try importedEntries(in: destination).isEmpty)
+    }
+
+    func testAPackageWithoutTheAppsDecoderOrWithAnotherIsRejected() throws {
+      for (restoreImageCase, expected) in [
+        (RestoreImageCase.absent, EngineHandoffImportError.invalidManifest),
+        (.renamed, .invalidManifest),
+        (.changedInTransit, .digestMismatch("restore-image")),
+      ] {
+        let fixture = try makeFixture(restoreImageCase: restoreImageCase)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let source = try openDirectory(fixture.source)
+        defer { try? source.close() }
+
+        XCTAssertThrowsError(
+          try EngineHandoffPackageImporter().prepare(from: source, in: fixture.destination)
+        ) {
+          XCTAssertEqual($0 as? EngineHandoffImportError, expected, "\(restoreImageCase)")
+        }
+        XCTAssertTrue(try importedEntries(in: fixture.destination).isEmpty)
+      }
     }
 
     func testUnknownManifestFieldIsRejectedBeforeImport() throws {
@@ -237,7 +385,8 @@
       nulEngineFileName: Bool = false,
       repair: Bool = false,
       replace: Bool = false,
-      strayRepairManifest: Bool = false
+      strayRepairManifest: Bool = false,
+      restoreImageCase: RestoreImageCase = .valid
     ) throws -> ImportFixture {
       let root = FileManager.default.temporaryDirectory.appendingPathComponent(
         "omarchy-helper-import-\(UUID().uuidString.lowercased())",
@@ -315,9 +464,19 @@
         includeRepairManifest
         ? ",\"repair_manifest\":{\"file_name\":\"repair.json\",\"digest\":\"\(repairDigest)\",\"size_bytes\":\(repairManifest.count)}"
         : ""
+      let restoreImage = Data("signed decoder".utf8)
+      try writePrivate(
+        restoreImageCase == .changedInTransit ? Data("signed decodeR".utf8) : restoreImage,
+        to: source.appendingPathComponent(RestoreImageHelper.fileName))
+      let restoreImageName =
+        restoreImageCase == .renamed ? "engine.tar.gz" : RestoreImageHelper.fileName
+      let restoreImageField =
+        restoreImageCase == .absent
+        ? ""
+        : ",\"restore_image\":{\"file_name\":\"\(restoreImageName)\",\"digest\":\"\(digest(restoreImage))\",\"size_bytes\":\(restoreImage.count)}"
       let manifest = Data(
         """
-        {"format":1,"binding_digest":"\(bindingDigest)","request_file":"request.json","identity_file":"identity.json","engine":{"file_name":"\(engineFileName)","digest":"\(engineDigest)","size_bytes":\(engine.count)},"metadata":{"file_name":"installer-data.json","digest":"\(metadataDigest)","size_bytes":\(metadata.count)},"payload":{"file_name":"omarchy.img.zst","digest":"\(payloadDigest)","size_bytes":\(payload.count)}\(repairManifestField)\(extraField)}
+        {"format":1,"binding_digest":"\(bindingDigest)","request_file":"request.json","identity_file":"identity.json","engine":{"file_name":"\(engineFileName)","digest":"\(engineDigest)","size_bytes":\(engine.count)},"metadata":{"file_name":"installer-data.json","digest":"\(metadataDigest)","size_bytes":\(metadata.count)},"payload":{"file_name":"omarchy.img.zst","digest":"\(payloadDigest)","size_bytes":\(payload.count)}\(restoreImageField)\(repairManifestField)\(extraField)}
         """.utf8
       )
       let request = Data(

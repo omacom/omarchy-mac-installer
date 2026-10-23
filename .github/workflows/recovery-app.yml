@@ -1,0 +1,81 @@
+name: Native Recovery app
+
+# Builds the native Recovery app (Recovery/build-recovery.sh, which runs its
+# fixtures) on macOS and keeps it as the calling run's artifact
+# native-recovery-input: native-recovery.tar (the ad hoc signed
+# Recovery app, named in Packaging/identity.conf, and its inventory,
+# omarchy-recovery-app.json) and
+# source.txt (the source commit, the Recovery tree, the inventory's sha256 and
+# the native tools). The inventory's sha256 is also this workflow's output,
+# so the image job can hold the artifact it downloads to the app built here.
+#
+# Called by mac-image.yml, which builds every channel image with it (the app
+# finishes every public install in Recovery), and by recovery-image.yml. No
+# secrets and no signing identity.
+
+on:
+  workflow_call:
+    outputs:
+      artifact:
+        description: The artifact holding native-recovery.tar and source.txt
+        value: ${{ jobs.recovery.outputs.artifact }}
+      manifest-sha256:
+        description: The sha256 of the app's inventory, omarchy-recovery-app.json (recovery_app_manifest_sha256)
+        value: ${{ jobs.recovery.outputs.manifest-sha256 }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  recovery:
+    name: Build the native Recovery app
+    runs-on: macos-26
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+    outputs:
+      artifact: native-recovery-input
+      manifest-sha256: ${{ steps.build.outputs.manifest-sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Build and record the Recovery source and native tools
+        id: build
+        run: |
+          set -euo pipefail
+          out=$RUNNER_TEMP/native-recovery
+          mkdir -p "$out"
+          bash Recovery/build-recovery.sh "$out/template"
+          source Packaging/identity.conf
+          digest=$(shasum -a 256 "$out/template/omarchy-recovery-app.json" | cut -d' ' -f1)
+          [[ $digest =~ ^[0-9a-f]{64}$ ]]
+          {
+            echo "source_commit=$(git rev-parse HEAD)"
+            echo "recovery_tree=$(git rev-parse HEAD:Recovery)"
+            echo "recovery_app_manifest_sha256=$digest"
+            sw_vers
+            xcodebuild -version
+            xcrun swift --version
+          } > "$out/source.txt"
+          # No AppleDouble members: the image builder holds the app to its inventory, file for file.
+          COPYFILE_DISABLE=1 tar -cf "$out/native-recovery.tar" -C "$out/template" "$INSTALLER_RECOVERY_APP_NAME.app" omarchy-recovery-app.json
+          echo "manifest-sha256=$digest" >>"$GITHUB_OUTPUT"
+          {
+            echo '### Native Recovery app'
+            echo '```'
+            cat "$out/source.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-recovery-input
+          path: |
+            ${{ runner.temp }}/native-recovery/native-recovery.tar
+            ${{ runner.temp }}/native-recovery/source.txt
+          if-no-files-found: error
+          retention-days: 14

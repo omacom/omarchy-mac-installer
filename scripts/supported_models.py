@@ -2,10 +2,16 @@
 """The Macs every Omarchy Mac catalog must enable, and the ones it must refuse.
 
 `supported-models.json` is the single list: every M1, M2 and M3 Mac the
-pinned engine can inspect. A catalog that offers any Mac offers all of them,
-so a release or preview can never ship a subset by accident. A channel with no
-Mac release yet (an empty catalog) is the only exception. `refused` names each
-board that stays out and why.
+pinned engine can inspect, and the MacBook Neo, all installed from the one
+Aurora image. A catalog that offers any Mac offers all of them, so a release
+or preview can never ship a subset by accident. A channel with no Mac release
+yet (an empty catalog) is the only exception. `refused` names each board that
+stays out and why. `developer` names each board only a developer build's
+sealed catalog may add, with its own image; channel catalogs never carry one,
+so check-catalog rejects it like any unknown board. `untested` marks the
+supported Macs no image has been qualified on yet (the M3 generation and the
+Neo, which the testing team qualifies on edge), with the note a catalog shows
+for each.
 
 Usage:
   supported_models.py check-catalog FILE   exit 1 unless FILE covers every Mac
@@ -28,7 +34,29 @@ def load(path: Path = MANIFEST) -> tuple[list[str], dict[str, str]]:
         raise SystemExit(f"{path}: supported lists a Mac twice")
     if set(supported) & set(refused):
         raise SystemExit(f"{path}: a Mac is both supported and refused")
+    if set(document.get("developer", {})) & (set(supported) | set(refused)):
+        raise SystemExit(f"{path}: a developer board is also supported or refused")
     return supported, refused
+
+
+def developer_boards(path: Path = MANIFEST) -> dict[str, str]:
+    """The boards only a developer build's sealed catalog may add, with why."""
+    load(path)
+    return dict(json.loads(path.read_text()).get("developer", {}))
+
+def untested(path: Path = MANIFEST) -> dict[str, str]:
+    """Supported Macs no Omarchy image has been installed on yet, each with
+    the note a catalog shows for it."""
+    supported, _ = load(path)
+    notes = json.loads(path.read_text()).get("untested", {})
+    if not isinstance(notes, dict) or not all(
+        isinstance(note, str) and note for note in notes.values()
+    ):
+        raise SystemExit(f"{path}: untested maps each Mac to a note")
+    stray = set(notes) - set(supported)
+    if stray:
+        raise SystemExit(f"{path}: untested names unsupported Macs: {', '.join(sorted(stray))}")
+    return notes
 
 
 def coverage_errors(identifiers: list[str]) -> list[str]:
@@ -38,7 +66,7 @@ def coverage_errors(identifiers: list[str]) -> list[str]:
     missing = [identifier for identifier in supported if identifier not in identifiers]
     if missing:
         errors.append(
-            "every M1, M2 and M3 Mac must be enabled; missing "
+            "every supported Mac must be enabled; missing "
             + ", ".join(missing)
         )
     for identifier in identifiers:

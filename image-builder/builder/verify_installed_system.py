@@ -15,7 +15,7 @@ first use:
 - without vulkan-asahi the deferred Vulkan step tried to install it on a
   first boot with no package databases, often offline, and stopped every
   hardware step after it;
-- without asahi-bless the startup volume cannot be picked from Linux;
+- asahi-bless older than 0.4.4 cannot handle Neo's 29-bank NVRAM;
 - bluetooth.service left disabled leaves Bluetooth off;
 - NetworkManager without the iwd backend leaves Apple Wi-Fi unmanaged.
 
@@ -32,7 +32,9 @@ import re
 import sys
 from pathlib import Path
 
-REQUIRED_PACMAN_SECTIONS = ("asahi-alarm", "core", "extra", "alarm", "aur", "omarchy")
+# [aur] is not required: ALARM's [aur] carries none of Omarchy's packages, and
+# the runtime's templates may leave it out.
+REQUIRED_PACMAN_SECTIONS = ("asahi-alarm", "core", "extra", "alarm", "omarchy")
 # Repositories an image must never be left pointing at: the mx-mac fork's
 # channels and the builder's own candidate repository.
 FORBIDDEN_PACMAN_SECTIONS = ("omarchy-aurora", "omarchy-aarch64", "omarchy-candidates")
@@ -232,31 +234,81 @@ def check_enabled_units(verification: Verification, root: Path) -> None:
 
 
 def installed_package_names(root: Path) -> set[str]:
+    return set(installed_provides(root))
+
+
+# Exact Aurora replacements only. An arbitrary package claiming a required
+# role must not satisfy image inspection. Candidate signature/source checks
+# still happen independently before this installed-system check.
+AURORA_REPLACEMENTS = {
+    "aura": {"m1n1-aurora"}, "uboot-aurora": {"uboot-asahi"},
+    "mesa-aurora": {"mesa"}, "vulkan-aurora": {"vulkan-asahi"},
+    "aurora-bless": {"asahi-bless"},
+    "aurora-audio": {"asahi-audio"},
+    "alsa-ucm-conf-aurora": {"alsa-ucm-conf-asahi"},
+}
+
+
+def aurora_replaced(packages: dict[str, set[str]]) -> set[str]:
+    """Names an installed exact Aurora replacement fills, when it provides them."""
+    return {role for name, roles in AURORA_REPLACEMENTS.items() if name in packages
+            for role in roles & packages[name]}
+
+
+def installed_provides(root: Path) -> dict[str, set[str]]:
+    """Each installed package's name and the names it provides, without versions."""
     database = root / "var/lib/pacman/local"
-    names: set[str] = set()
+    packages: dict[str, set[str]] = {}
     if not database.is_dir():
-        return names
+        return packages
     for entry in database.iterdir():
         desc = entry / "desc"
         if desc.is_file():
             lines = desc.read_text().splitlines()
-            names.add(lines[lines.index("%NAME%") + 1])
-    return names
+            provides = set()
+            if "%PROVIDES%" in lines:
+                for line in lines[lines.index("%PROVIDES%") + 1:]:
+                    if not line:
+                        break
+                    provides.add(re.split(r"[<>=]", line, maxsplit=1)[0])
+            packages[lines[lines.index("%NAME%") + 1]] = provides
+    return packages
 
 
-def check_packages(verification: Verification, root: Path) -> None:
-    installed = installed_package_names(root)
-    missing = [name for name in REQUIRED_PACKAGES if name not in installed]
+def check_packages(verification: Verification, root: Path, runtime_packages: frozenset[str] = frozenset()) -> None:
+    """RUNTIME_PACKAGES are the image's runtime named apart from their role (a
+    channel image's omarchy-dev provides omarchy): they fill the roles they
+    provide and are not stray development packages. No other package fills a
+    required name by providing it."""
+    packages = installed_provides(root)
+    installed = set(packages)
+    filled = installed | {role for name in runtime_packages & installed for role in packages[name]}
+    filled |= aurora_replaced(packages)
+    missing = [name for name in REQUIRED_PACKAGES if name not in filled]
     verification.record(
         "packages-required-present",
         not missing,
         f"all {len(REQUIRED_PACKAGES)} required packages installed" if not missing
         else "missing packages: " + ", ".join(missing),
     )
-    legacy = sorted({"linux-asahi", "omarchy-apple-boot", "omarchy-first-boot", "omarchy-dev",
-                     "omarchy-settings-dev"} & installed)
+    legacy = sorted(({"linux-asahi", "omarchy-apple-boot", "omarchy-first-boot", "omarchy-dev",
+                      "omarchy-settings-dev"} - runtime_packages) & installed)
     verification.record("packages-no-legacy", not legacy,
                         "no legacy or development package" if not legacy else "installed: " + ", ".join(legacy))
+    versions = []
+    for desc in (root / "var/lib/pacman/local").glob("*/desc"):
+        fields = desc.read_text().splitlines()
+        if "%NAME%" in fields and fields[fields.index("%NAME%") + 1] in ("asahi-bless", "aurora-bless"):
+            if "%VERSION%" in fields:
+                versions.append(fields[fields.index("%VERSION%") + 1])
+    match = re.match(r"^(?:\d+:)?(\d+)\.(\d+)(?:\.(\d+))?", versions[0]) if len(versions) == 1 else None
+    version = tuple(int(part or "0") for part in match.groups()) if match else (0, 0, 0)
+    verification.record(
+        "asahi-bless-neo-nvram",
+        version >= (0, 4, 4),
+        "asahi-bless 0.4.4 or newer is required for Neo's 29-bank NVRAM; installed: "
+        + (", ".join(versions) or "missing"),
+    )
 
 
 def check_identity(verification: Verification, root: Path) -> None:
@@ -269,12 +321,12 @@ def check_identity(verification: Verification, root: Path) -> None:
     )
 
 
-def verify(root: Path) -> Verification:
+def verify(root: Path, runtime_packages=frozenset()) -> Verification:
     verification = Verification()
     check_pacman(verification, root)
     check_network(verification, root)
     check_enabled_units(verification, root)
-    check_packages(verification, root)
+    check_packages(verification, root, frozenset(runtime_packages))
     check_identity(verification, root)
     return verification
 
