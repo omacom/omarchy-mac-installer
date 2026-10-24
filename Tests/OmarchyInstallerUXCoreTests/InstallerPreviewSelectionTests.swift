@@ -55,7 +55,7 @@
         Set(InstallerPreviewScenario.allCases.map(\.rawValue)),
         [
           "fresh-install", "existing-install", "unsupported",
-          "credential-reject", "recovery-retry", "degraded-journal",
+          "credential-reject", "recovery-retry", "degraded-journal", "checking", "low-space",
         ]
       )
     }

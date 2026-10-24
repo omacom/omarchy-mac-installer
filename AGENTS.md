@@ -20,10 +20,9 @@ or would cross a safety boundary below.
 
 ## Completion evidence
 
-For installer changes, verify the focused Python tests, Swift tests in debug
-and release, packaging structure, code-signing requirements, and unsupported
-host rejection as applicable. A source build is not physical installation
-proof.
+For installer changes, verify the focused Python tests, Swift tests in debug and release, packaging structure, code-signing requirements, and unsupported host rejection as applicable. A source build is not physical installation proof.
+
+Every mechanism ships with its check in CI. A change that adds a build step, a pinned input, a protocol or a file format adds a CI check for it in the same pull request. CI covers everything that can be checked without a real Mac install or a booted VM, and the pull request says what it did not cover. `docs/validation.md` lists what CI runs.
 
 ## Iteration ownership and lifecycle
 

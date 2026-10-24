@@ -172,6 +172,63 @@ class ReleaseGuardTest(unittest.TestCase):
         (self.app / "Contents/Helpers/other-tool").write_bytes(b"\xcf\xfa\xed\xfe")
         self.assertRefused("Contents/Helpers/other-tool is not the restore-image decoder")
 
+    def vm_kit(self) -> Path:
+        kit = self.app / "Contents/Helpers/TryOmarchyKit.bundle"
+        (kit / "Contents/MacOS").mkdir(parents=True)
+        (kit / "Contents/Resources/guest").mkdir(parents=True)
+        self.write_plist(kit / "Contents/Info.plist",
+                         {"CFBundleExecutable": "omarchy-vm-helper", "CFBundlePackageType": "BNDL"})
+        (kit / "Contents/MacOS/omarchy-vm-helper").write_bytes(b"kit helper fixture")
+        (kit / "Contents/Resources/kit.json").write_text('{"format": 1}')
+        (kit / "Contents/Resources/guest/download.json").write_text("{}")
+        return kit
+
+    def test_the_try_omarchy_kit_is_accepted_beside_the_decoder(self) -> None:
+        self.vm_kit()
+        self.assertEqual([], [finding for finding in self.findings() if "Helpers" in finding])
+
+    def test_a_kit_with_a_daemon_or_no_download_manifest_is_refused(self) -> None:
+        kit = self.vm_kit()
+        (kit / "Contents/Library/LaunchDaemons").mkdir(parents=True)
+        self.assertRefused("the Try Omarchy kit carries a launch daemon")
+        (kit / "Contents/Resources/guest/download.json").unlink()
+        self.assertRefused("the Try Omarchy kit carries no image download manifest")
+        (kit / "Contents/Resources/kit.json").write_text('{"format": 2}')
+        self.assertRefused("the Try Omarchy kit has no format 1 kit.json")
+
+    def test_a_kit_with_a_bundle_identity_is_refused(self) -> None:
+        self.vm_kit()
+        for key in ("CFBundleIdentifier", "CFBundleName", "CFBundleDisplayName"):
+            with self.subTest(key=key):
+                self.edit_plist("Contents/Helpers/TryOmarchyKit.bundle/Contents/Info.plist",
+                                lambda value: value.update({key: "dev.tryomarchy.kit"}))
+                self.assertRefused("the Try Omarchy kit has a bundle identity of its own")
+                self.edit_plist("Contents/Helpers/TryOmarchyKit.bundle/Contents/Info.plist",
+                                lambda value: value.pop(key))
+        self.edit_plist("Contents/Helpers/TryOmarchyKit.bundle/Contents/Info.plist",
+                        lambda value: value.update(CFBundleExecutable="Try Omarchy"))
+        self.assertRefused("the Try Omarchy kit's Info.plist does not name its helper")
+
+    def test_the_kits_networking_job_must_name_the_kits_daemon(self) -> None:
+        kit = self.vm_kit()
+        job = self.app / "Contents/Library/LaunchDaemons/dev.tryomarchy.kit.network.plist"
+        program = "Contents/Helpers/TryOmarchyKit.bundle/Contents/MacOS/omarchy-network-daemon"
+        self.write_plist(job, {"Label": "dev.tryomarchy.kit.network", "BundleProgram": program})
+        self.assertRefused("the Try Omarchy kit's networking job does not name the kit's daemon")
+        (kit / "Contents/MacOS/omarchy-network-daemon").write_bytes(b"daemon fixture")
+        self.assertEqual([], [finding for finding in self.findings() if "LaunchDaemons" in finding or "job" in finding])
+        self.write_plist(job, {"Label": "dev.tryomarchy.kit.network", "BundleProgram": program, "UserName": "root"})
+        self.assertRefused("the Try Omarchy kit's networking job sets keys other than")
+        self.write_plist(job, {"Label": "dev.tryomarchy.kit.network", "BundleProgram": "Contents/MacOS/other"})
+        self.assertRefused("the Try Omarchy kit's networking job does not name the kit's daemon")
+        self.write_plist(self.app / "Contents/Library/LaunchDaemons/other.plist", {"Label": "other"})
+        self.assertRefused("Contents/Library/LaunchDaemons/other.plist is not a job this app registers")
+
+    def test_the_old_kit_app_is_not_a_kit(self) -> None:
+        kit = self.vm_kit()
+        kit.rename(self.app / "Contents/Helpers/Try Omarchy Kit.app")
+        self.assertRefused("Contents/Helpers/Try Omarchy Kit.app is not the restore-image decoder")
+
     def test_an_engine_with_its_own_native_tool_is_refused(self) -> None:
         # The 2.3.0 notarization failure: engine .50 carried the ad hoc
         # signed decoder in bin/, out of the release signing's reach.

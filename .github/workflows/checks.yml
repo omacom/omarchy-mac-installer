@@ -55,7 +55,7 @@ jobs:
   macos:
     name: macOS checks
     runs-on: macos-26
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       # Use an explicit Swift 6.2 toolchain, independent of the image default.
       DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
@@ -121,6 +121,8 @@ jobs:
         run: xcodebuildmcp swift-package test --package-path "$PWD" --configuration debug 2>&1 | tee "$RUNNER_TEMP/installer-ci/swift-debug.log"
       - name: Run release Swift tests
         run: xcodebuildmcp swift-package test --package-path "$PWD" --configuration release 2>&1 | tee "$RUNNER_TEMP/installer-ci/swift-release.log"
+      - name: Check that the Try tests ran in debug and release and skipped nothing
+        run: bash test/macos-try-tests.sh "$RUNNER_TEMP/installer-ci" 2>&1 | tee "$RUNNER_TEMP/installer-ci/try-tests.log"
       - name: Build Recovery enrollment app and run its standalone fixtures
         run: bash Recovery/build-app.sh recovery "$RUNNER_TEMP/installer-ci/recovery-enrollment" 2>&1 | tee "$RUNNER_TEMP/installer-ci/recovery-enrollment.log"
       - name: Export the immutable native Recovery input for the image contract check
@@ -140,6 +142,10 @@ jobs:
           python3 Engine/prepare-engine.py --output Engine/artifacts
           # Notarization refuses native code the app's signing cannot reach.
           python3 Engine/verify-engine-macho.py --signatures Engine/artifacts/*.tar.gz
+      - name: Check the Try Omarchy kit pin against its release, and kit unpacking
+        run: |
+          python3 scripts/try_omarchy_kit.py check --online 2>&1 | tee "$RUNNER_TEMP/installer-ci/try-kit-pin.log"
+          python3 -m unittest scripts/tests/test_try_omarchy_kit.py 2>&1 | tee "$RUNNER_TEMP/installer-ci/try-kit-unpack.log"
       - name: Assemble and inspect the app bundle
         run: |
           source Packaging/identity.conf
@@ -149,6 +155,13 @@ jobs:
           app="$RUNNER_TEMP/installer-ci/app-assembly/app/$INSTALLER_APP_NAME.app"
           cmp "$RUNNER_TEMP/installer-ci/restore-image-bin/omarchy-restore-image" "$app/Contents/Helpers/omarchy-restore-image"
           python3 Engine/verify-engine-macho.py --signatures "$app/Contents/Resources/Engine/artifacts/"*.tar.gz
+      - name: Sign the app ad hoc, package it and check its Try kit
+        run: |
+          # The release workflow's dry run, then the kit inside the signed app.
+          source Packaging/identity.conf
+          app="$RUNNER_TEMP/installer-ci/app-assembly/app/$INSTALLER_APP_NAME.app"
+          bash Packaging/release/sign-and-package --app "$app" --output "$RUNNER_TEMP/dry-run" --identity - 2>&1 | tee "$RUNNER_TEMP/installer-ci/sign-and-package.log"
+          python3 Packaging/release/check-try-kit "$app" 2>&1 | tee "$RUNNER_TEMP/installer-ci/try-kit.log"
       - name: Save macOS evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

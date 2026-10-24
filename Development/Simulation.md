@@ -16,7 +16,7 @@ Requires Xcode and XcodeBuildMCP. The launcher builds the debug app and supplies
 
 All simulation controls live in the **Simulation** menu bar item. They are absent from the release app and when simulation is not enabled. The installer content fills the resizable window; there is no simulation dashboard above it.
 
-- **Scenario** selects one of 27 outcomes and resets the simulated session. `--simulate-scenario=NAME` (the scenario's raw name, for example `noMacRelease`) opens on that scenario, and `--simulate-continue` presses Continue once, so a screen can be captured without driving the window.
+- **Scenario** selects one of 27 outcomes and resets the simulated session. `--simulate-scenario=NAME` (the scenario's raw name, for example `noMacRelease`) opens on that scenario, and `--simulate-continue` presses Install on this Mac once, so a screen can be captured without driving the window.
 - **Reset simulation** abandons only the in-memory run, including a stopped or uncertain outcome.
 - **Slow events** makes each event take two seconds; changing speed resets the session.
 - **Test channel** offers Stable, Release candidate and Edge (the default), and is local to the simulator. The line under it shows the Release channel menu as the app words it for this scenario: stable and rc have no Mac release, and the three channel scenarios change the test channel's state. It locks while preparing, authorizing, executing, and after execution has started.

@@ -299,6 +299,18 @@ restore_image_path="$contents/Helpers/omarchy-restore-image"
 install -m 0755 "$restore_image_source" "$restore_image_path"
 python3 "$package_directory/Engine/verify-restore-image.py" "$restore_image_path" >/dev/null \
   || fail "the bundled restore-image decoder differs from its source build"
+# The Try Omarchy kit the trial runs, when one is pinned
+# (Packaging/try-omarchy-kit.json). Without it the app has no trial.
+kit_archive=$(python3 "$package_directory/scripts/try_omarchy_kit.py" fetch \
+  --cache "$package_directory/.build/try-omarchy-kit") \
+  || fail "the Try Omarchy kit could not be fetched or verified"
+vm_kit="$contents/Helpers/TryOmarchyKit.bundle"
+if [[ -n $kit_archive ]]; then
+  python3 "$package_directory/scripts/try_omarchy_kit.py" embed "$kit_archive" "$assembled_app" >/dev/null \
+    || fail "the kit archive does not hold a kit"
+  OMARCHY_QEMU_GPU_INSPECT_ONLY=1 "$vm_kit/Contents/Resources/scripts/run-qemu-gpu.sh" >/dev/null 2>&1 \
+    || fail "the kit's launcher rejects its own factory"
+fi
 install -m 0444 "$package_directory/Engine/RestoreImage/LICENSE" "$resources/omarchy-restore-image.LICENSE"
 install -m 0444 "$release_descriptor" "$resources/Release/release.json"
 install -m 0444 "$trust_root" "$resources/Release/trust-root.ed25519.pub"
@@ -433,9 +445,14 @@ if [[ $signing_identity != "none" ]]; then
     --options runtime \
     --identifier "$helper_identifier" \
     "$helper_path"
+  if [[ -d $vm_kit ]]; then
+    "$script_directory/sign-vm-kit" "$assembled_app" --force --sign "$signing_identity" \
+      "${timestamp_arguments[@]}" --options runtime
+  fi
   codesign --force --sign "$signing_identity" \
     "${timestamp_arguments[@]}" \
     --options runtime \
+    --entitlements "$script_directory/entitlements/installer-app.entitlements" \
     "$assembled_app"
 
   codesign --verify --deep --strict --verbose=2 "$assembled_app"

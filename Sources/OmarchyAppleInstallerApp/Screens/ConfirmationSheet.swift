@@ -8,6 +8,8 @@ struct ConfirmationSheet: View {
   let title: String
   let message: String
   let action: String
+  /// Return cancels, for a choice the person should make deliberately.
+  var cancelIsDefault = false
   let onConfirm: () -> Void
   let onCancel: () -> Void
 
@@ -25,13 +27,14 @@ struct ConfirmationSheet: View {
       HStack(spacing: 16) {
         Spacer(minLength: 0)
         Button(PlainLanguage.cancel, action: onCancel)
-          .omarchySecondaryButton()
-          .keyboardShortcut(.cancelAction)
+          .buttonStyle(OmarchyButtonStyle(kind: cancelIsDefault ? .primary : .secondary))
+          .keyboardShortcut(cancelIsDefault ? .defaultAction : .cancelAction)
         Button(action, action: onConfirm)
-          .omarchyPrimaryButton()
-          .keyboardShortcut(.defaultAction)
+          .buttonStyle(OmarchyButtonStyle(kind: cancelIsDefault ? .secondary : .primary))
+          .keyboardShortcut(cancelIsDefault ? nil : .defaultAction)
       }
     }
+    .onExitCommand(perform: onCancel)
     .padding(32)
     .frame(width: 520)
     .omarchyTypography()

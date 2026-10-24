@@ -8,6 +8,10 @@
     case credentialReject = "credential-reject"
     case recoveryRetry = "recovery-retry"
     case degradedJournal = "degraded-journal"
+    /// The inspection never finishes, to review the checking state.
+    case checking = "checking"
+    /// The disk can't hold Omarchy.
+    case lowSpace = "low-space"
   }
 
   /// Chooses between the live installer environment and the debug-only preview

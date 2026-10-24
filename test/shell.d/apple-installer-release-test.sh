@@ -107,9 +107,25 @@ for line in "${signing[@]}"; do
   [[ " $line " == *" --options runtime "* && " $line " == *" --timestamp "* ]] ||
     fail "every Developer ID signature has the hardened runtime and a secure timestamp" "$line"
   [[ " $line " == *" --keychain $test_tmp/release.keychain-db "* ]] || fail "signing reads only the given keychain" "$line"
-  [[ " $line " != *" --deep "* && " $line " != *" --entitlements"* ]] ||
-    fail "signing never uses --deep or entitlements" "$line"
+  [[ " $line " != *" --deep "* ]] || fail "signing never uses --deep" "$line"
 done
+# Entitlements come only from the documented files in Packaging/entitlements:
+# the app's own here, and the kit's for QEMU and the helper (sign-vm-kit).
+entitlement_files=$(cd "$ROOT/Packaging/entitlements" && pwd -P)
+signed_entitlements() {
+  local line=$1 file
+  [[ $line =~ \ --entitlements\ (.+\.entitlements)\  ]] || return 0
+  file=${BASH_REMATCH[1]}
+  [[ ${file#*" --entitlements "} == "$file" ]] || fail "one entitlements file per signature" "$line"
+  [[ -f $file && ! -L $file ]] || fail "the entitlements file exists" "$line"
+  printf '%s/%s\n' "$(cd "$(dirname "$file")" && pwd -P)" "$(basename "$file")"
+}
+[[ -z $(signed_entitlements "${signing[0]}") && -z $(signed_entitlements "${signing[1]}") ]] ||
+  fail "the decoder and the helper are signed without entitlements" "${signing[*]:0:2}"
+[[ $(signed_entitlements "${signing[2]}") == "$entitlement_files/installer-app.entitlements" ]] ||
+  fail "the app is signed with Packaging/entitlements/installer-app.entitlements only" "${signing[2]}"
+[[ $(ls "$entitlement_files") == $'installer-app.entitlements\nvm-helper.entitlements\nvm-qemu.entitlements' ]] ||
+  fail "Packaging/entitlements holds the app's, the VM helper's and QEMU's entitlements only"
 grep -qF -- "-R=anchor apple generic and identifier \"$INSTALLER_HELPER_IDENTIFIER\" and certificate leaf[subject.OU] = \"$INSTALLER_TEAM_ID\" $helper" \
   "$test_tmp/codesign.log" || fail "the helper is verified against the team's designated requirement"
 grep -qF -- "-R=anchor apple generic and identifier \"$INSTALLER_APP_IDENTIFIER\" and certificate leaf[subject.OU] = \"$INSTALLER_TEAM_ID\" $app" \
@@ -118,7 +134,7 @@ grep -qF -- "-R=anchor apple generic and identifier \"$INSTALLER_RESTORE_IMAGE_I
   "$test_tmp/codesign.log" || fail "the decoder is verified against the team's Developer ID Application requirement"
 grep -qF -- "--display --entitlements - --xml $decoder" "$test_tmp/codesign.log" ||
   fail "sign-app checks that the decoder carries no entitlements"
-pass "sign-app signs the decoder, the helper and the app with runtime and timestamps, never --deep, and checks each requirement"
+pass "sign-app signs the decoder, the helper and the app with runtime and timestamps, never --deep, entitlements only for the app, and checks each requirement"
 
 : >"$test_tmp/codesign.log"
 sign env STUB_SIGNATURE=adhoc bash "$release/sign-app" "$app" - >/dev/null || fail "sign-app signs ad hoc"
@@ -312,7 +328,7 @@ STUB
     sed -E -e "s|$INSTALLER_APP_NAME.app/Contents/Library/LaunchServices/||" -e "s|$INSTALLER_APP_NAME.app/Contents/Helpers/||" -e 's|/[^ ]*/||g' -e 's/ --(key|key-id|issuer) [^ ]+//g' -e 's/^codesign --force --sign [^(]*\([^)]*\) /codesign /')
   expected="codesign --options runtime --timestamp --keychain k.keychain-db --identifier $INSTALLER_RESTORE_IMAGE_IDENTIFIER omarchy-restore-image
 codesign --options runtime --timestamp --keychain k.keychain-db --identifier $INSTALLER_HELPER_IDENTIFIER $INSTALLER_HELPER_IDENTIFIER
-codesign --options runtime --timestamp --keychain k.keychain-db $INSTALLER_APP_NAME.app
+codesign --options runtime --timestamp --keychain k.keychain-db --entitlements installer-app.entitlements $INSTALLER_APP_NAME.app
 xcrun notarytool submit app.zip --wait --timeout 1h --output-format json
 xcrun stapler staple $INSTALLER_APP_NAME.app
 spctl --assess --type execute --verbose=4 $INSTALLER_APP_NAME.app

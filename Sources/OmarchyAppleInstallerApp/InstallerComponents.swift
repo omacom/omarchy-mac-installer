@@ -279,16 +279,20 @@ struct OmarchyButtonStyle: ButtonStyle {
   enum Kind { case primary, secondary, danger }
 
   let kind: Kind
+  /// Stretches to the width it is offered, as the landing page's two do.
+  var fillsWidth = false
   @Environment(\.isEnabled) private var isEnabled
 
   func makeBody(configuration: Configuration) -> some View {
-    OmarchyButtonBody(configuration: configuration, kind: kind, isEnabled: isEnabled)
+    OmarchyButtonBody(
+      configuration: configuration, kind: kind, fillsWidth: fillsWidth, isEnabled: isEnabled)
   }
 }
 
 private struct OmarchyButtonBody: View {
   let configuration: ButtonStyleConfiguration
   let kind: OmarchyButtonStyle.Kind
+  let fillsWidth: Bool
   let isEnabled: Bool
   @State private var isHovered = false
 
@@ -300,6 +304,7 @@ private struct OmarchyButtonBody: View {
       .tracking(OmarchyTheme.buttonTracking)
       .lineLimit(1)
       .fixedSize()
+      .frame(maxWidth: fillsWidth ? .infinity : nil)
       .foregroundStyle(colors.foreground)
       .padding(.horizontal, 18)
       .frame(height: OmarchyTheme.buttonHeight)

@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+"""Check the Try Omarchy kit inside a signed installer app (docs/try.md).
+
+Usage: check-try-kit APP
+
+APP is an installer app that sign-app (or build-app.sh) has signed. Always:
+its Info.plist describes the camera and microphone use, and it is signed
+with Packaging/entitlements/installer-app.entitlements.
+
+When Packaging/try-omarchy-kit.json pins a kit, or OMARCHY_TRY_KIT_ZIP named
+a local one for the build, the app carries it in Contents/Helpers, and:
+
+- the kit is a helper bundle with no bundle identifier or name of its own,
+  signed as <app identifier>.vm-kit;
+- the kit verifies (codesign --deep --strict), and every Mach-O in it is
+  signed as <app identifier>.vm-kit, with the hardened runtime when a team
+  signs it (an ad hoc kit has none: it refuses libraries without a team);
+- QEMU starts from the signed app with its libraries (`--version`);
+- QEMU carries exactly vm-qemu.entitlements (the hypervisor and the
+  microphone), the helper exactly vm-helper.entitlements (the camera and the
+  microphone), and the rest no entitlements;
+- the bridged-networking client, server and supervisor keep the kit's own
+  signatures, which the daemon pins, the daemon accepts them
+  (`omarchy-network-daemon check` prints dev.tryomarchy.kit.network), and the
+  app's Contents/Library/LaunchDaemons/dev.tryomarchy.kit.network.plist names
+  that service and the kit's daemon;
+- its Contents/Resources/kit.json is a format 1 manifest of a release, never
+  `development`, that speaks the vendored client's run-mode protocol, and
+  for a pinned kit names the pinned release.
+
+With no kit pinned the app must carry none, and the check says so. It exits 1
+and lists every finding otherwise. It reads the app and never changes it.
+"""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import plistlib
+import re
+import subprocess
+import sys
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
+IDENTITY = ROOT / "Packaging/identity.conf"
+PIN = ROOT / "Packaging/try-omarchy-kit.json"
+ENTITLEMENTS = ROOT / "Packaging/entitlements"
+PROTOCOL_SOURCE = ROOT / "Vendor/TryOmarchyKitClient/VMRunProtocol.swift"
+KIT = "Contents/Helpers/TryOmarchyKit.bundle"
+QEMU = "Contents/Resources/runtime/bin/Try Omarchy"
+HELPER = "Contents/MacOS/omarchy-vm-helper"
+NETWORK_DAEMON = "Contents/MacOS/omarchy-network-daemon"
+NETWORK_PINNED = {f"Contents/Resources/network/{name}"
+                  for name in ("socket_vmnet", "omarchy-network-supervisor", "omarchy-network-client")}
+NETWORK_SERVICE = "dev.tryomarchy.kit.network"
+# The keys the kit's networking job may set; anything else could change what launchd runs as root.
+NETWORK_JOB_KEYS = {"Label", "MachServices", "BundleProgram", "ProcessType", "ExitTimeOut", "RunAtLoad"}
+RELEASE = re.compile(r"v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})")
+MACHO = {b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"}
+
+
+def identity() -> dict[str, str]:
+    """Packaging/identity.conf's NAME="value" lines."""
+    values = {}
+    for line in IDENTITY.read_text().splitlines():
+        match = re.fullmatch(r'(INSTALLER_[A-Z0-9_]+)="([^"]*)"', line)
+        if match:
+            values[match[1]] = match[2]
+    return values
+
+
+def protocol_version() -> int:
+    found = re.findall(r"^    public static let version = ([1-9][0-9]*)$", PROTOCOL_SOURCE.read_text(), re.M)
+    if len(found) != 1:
+        raise SystemExit(f"check-try-kit: cannot find VMRunProtocol.version in {PROTOCOL_SOURCE}")
+    return int(found[0])
+
+
+def codesign(*arguments: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["codesign", *arguments], capture_output=True)
+
+
+def network_daemon_check(daemon: Path) -> str | None:
+    """What the kit's networking daemon says of the runtime beside it: its service name, or None."""
+    try:
+        result = subprocess.run([str(daemon), "check"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def qemu_starts(qemu: Path) -> bool:
+    """Whether the signed QEMU loads its libraries and runs."""
+    try:
+        return subprocess.run([str(qemu), "--version"], capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def signed_entitlements(path: Path) -> dict | None:
+    result = codesign("-d", "--entitlements", "-", "--xml", str(path))
+    if result.returncode != 0:
+        return None
+    if not result.stdout.strip():
+        return {}
+    try:
+        return plistlib.loads(result.stdout)
+    except (ValueError, plistlib.InvalidFileException):
+        return None
+
+
+def is_macho(path: Path) -> bool:
+    with path.open("rb") as source:
+        return source.read(4) in MACHO
+
+
+class Check:
+    def __init__(self, app: Path) -> None:
+        self.app = app
+        self.values = identity()
+        self.findings: list[str] = []
+
+    def find(self, what: str) -> None:
+        self.findings.append(what)
+
+    def entitlements_file(self, name: str) -> dict:
+        return plistlib.loads((ENTITLEMENTS / name).read_bytes())
+
+    def check_app(self) -> None:
+        try:
+            info = plistlib.loads((self.app / "Contents/Info.plist").read_bytes())
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            self.find("the app's Info.plist is missing or unreadable")
+            info = {}
+        for key in ("NSCameraUsageDescription", "NSMicrophoneUsageDescription"):
+            value = info.get(key)
+            if not isinstance(value, str) or not value.strip():
+                self.find(f"the app's Info.plist has no {key}")
+        if signed_entitlements(self.app) != self.entitlements_file("installer-app.entitlements"):
+            self.find("the app is not signed with installer-app.entitlements")
+
+    def check_kit(self, kit: Path, pinned_release: dict | None) -> None:
+        identifier = self.values["INSTALLER_APP_IDENTIFIER"] + ".vm-kit"
+        if codesign("--verify", "--deep", "--strict", str(kit)).returncode != 0:
+            self.find("the kit does not verify (codesign --verify --deep --strict)")
+        self.check_identity(kit, identifier)
+        expected = {
+            kit / QEMU: self.entitlements_file("vm-qemu.entitlements"),
+            kit / HELPER: self.entitlements_file("vm-helper.entitlements"),
+            kit / NETWORK_DAEMON: {},
+        }
+        pinned = {kit / relative for relative in NETWORK_PINNED}
+        signed = 0
+        for directory, _, files in os.walk(kit, followlinks=False):
+            for name in sorted(files):
+                path = Path(directory) / name
+                if path.is_symlink() or not is_macho(path):
+                    continue
+                where = path.relative_to(kit)
+                details = codesign("-d", "--verbose=2", str(path))
+                text = details.stderr.decode(errors="replace")
+                if details.returncode != 0:
+                    self.find(f"{where} is not signed")
+                    continue
+                if path in pinned:
+                    pinned.discard(path)
+                    if f"\nIdentifier={identifier}\n" in f"\n{text}":
+                        self.find(f"{where} was re-signed, but the networking daemon pins the kit's signature")
+                    continue
+                if f"\nIdentifier={identifier}\n" not in f"\n{text}":
+                    self.find(f"{where} is not signed as {identifier}")
+                adhoc = "\nSignature=adhoc\n" in f"\n{text}"
+                if not adhoc and not re.search(r"flags=0x[0-9a-f]+\([^)]*runtime", text):
+                    self.find(f"{where} is not signed with the hardened runtime")
+                if signed_entitlements(path) != expected.pop(path, {}):
+                    self.find(f"{where} carries other entitlements than sign-vm-kit gives it")
+                signed += 1
+        for path in [*expected, *sorted(pinned)]:
+            self.find(f"the kit has no {path.relative_to(kit)}")
+        self.check_network(kit)
+        if (kit / QEMU).is_file() and not qemu_starts(kit / QEMU):
+            self.find(f"{QEMU} does not start from the signed app with its libraries")
+        manifest = self.check_manifest(kit, pinned_release)
+        if manifest and not self.findings:
+            print(f"check-try-kit: kit {manifest['version']}, run-mode protocol {manifest['runProtocolVersion']}, "
+                  f"{signed} Mach-O files signed as {identifier}")
+
+    def check_network(self, kit: Path) -> None:
+        """The daemon accepts the runtime beside it, and the app's job registers it as the app."""
+        if network_daemon_check(kit / NETWORK_DAEMON) != NETWORK_SERVICE:
+            self.find(f"the kit's networking daemon does not accept its runtime as {NETWORK_SERVICE}")
+        job_path = self.app / f"Contents/Library/LaunchDaemons/{NETWORK_SERVICE}.plist"
+        try:
+            job = plistlib.loads(job_path.read_bytes())
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            self.find(f"the app has no Contents/Library/LaunchDaemons/{NETWORK_SERVICE}.plist")
+            return
+        if isinstance(job, dict) and set(job) - NETWORK_JOB_KEYS:
+            self.find(f"the app's {NETWORK_SERVICE} job sets keys it may not: {', '.join(sorted(set(job) - NETWORK_JOB_KEYS))}")
+        if (not isinstance(job, dict) or job.get("Label") != NETWORK_SERVICE
+                or job.get("MachServices") != {NETWORK_SERVICE: True}
+                or job.get("BundleProgram") != f"{KIT}/{NETWORK_DAEMON}"):
+            self.find(f"the app's {NETWORK_SERVICE} job does not name the kit's service and daemon")
+
+    def check_identity(self, kit: Path, identifier: str) -> None:
+        """The kit runs as the app: no bundle identity, and signed under the app's kit identifier."""
+        try:
+            info = plistlib.loads((kit / "Contents/Info.plist").read_bytes())
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            self.find("the kit's Info.plist is missing or unreadable")
+            return
+        named = sorted({"CFBundleIdentifier", "CFBundleName", "CFBundleDisplayName"} & set(info))
+        if named:
+            self.find(f"the kit has a bundle identity of its own ({', '.join(named)})")
+        details = codesign("-d", "--verbose=2", str(kit)).stderr.decode(errors="replace")
+        if f"\nIdentifier={identifier}\n" not in f"\n{details}":
+            self.find(f"the kit's bundle is not signed as {identifier}")
+
+    def check_manifest(self, kit: Path, pinned: dict | None) -> dict | None:
+        path = kit / "Contents/Resources/kit.json"
+        try:
+            if path.is_symlink() or path.stat().st_size > 65536:
+                raise ValueError
+            manifest = json.loads(path.read_text())
+        except (OSError, ValueError):
+            self.find("the kit's Contents/Resources/kit.json is missing or unreadable")
+            return None
+        version = manifest.get("version") if isinstance(manifest, dict) else None
+        protocol = manifest.get("runProtocolVersion") if isinstance(manifest, dict) else None
+        if (not isinstance(manifest, dict) or manifest.get("format") != 1 or not isinstance(version, str)
+                or not isinstance(protocol, int) or isinstance(protocol, bool)
+                or not isinstance(manifest.get("buildDate"), str)):
+            self.find("the kit's kit.json is not a format 1 manifest")
+            return None
+        if not RELEASE.fullmatch(version):
+            self.find(f"the kit's version is {version!r}, not a release")
+        elif pinned is not None and version != pinned["release"]:
+            self.find(f"the kit's version is {version}, not the pinned {pinned['release']}")
+        if protocol != protocol_version():
+            self.find(f"the kit speaks run-mode protocol {protocol}, the vendored client {protocol_version()}")
+        return manifest
+
+    def run(self) -> int:
+        self.check_app()
+        pinned = json.loads(PIN.read_text())["kit"]
+        local = os.environ.get("OMARCHY_TRY_KIT_ZIP", "")
+        kit = self.app / KIT
+        if pinned is None and not local:
+            if kit.exists() or kit.is_symlink():
+                self.find(f"the app carries {KIT}, but Packaging/try-omarchy-kit.json pins no kit")
+            elif not self.findings:
+                notice = "No Try Omarchy kit is pinned in Packaging/try-omarchy-kit.json; the app has no Try mode"
+                print(f"::notice::{notice}" if os.environ.get("GITHUB_ACTIONS") == "true" else f"check-try-kit: {notice}")
+        elif kit.is_symlink() or not kit.is_dir():
+            self.find(f"the app carries no kit at {KIT}")
+        else:
+            self.check_kit(kit, pinned)
+        if self.findings:
+            for finding in self.findings:
+                print(f"check-try-kit: {finding}", file=sys.stderr)
+            print(f"check-try-kit: refused: {len(self.findings)} finding(s)", file=sys.stderr)
+            return 1
+        return 0
+
+
+def main(arguments: list[str]) -> int:
+    if len(arguments) != 1 or arguments[0].startswith("-"):
+        print("usage: check-try-kit APP", file=sys.stderr)
+        return 64
+    app = Path(arguments[0])
+    if app.is_symlink() or not app.is_dir() or app.suffix != ".app":
+        print(f"check-try-kit: not an app bundle: {app}", file=sys.stderr)
+        return 1
+    return Check(app).run()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
