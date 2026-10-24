@@ -23,6 +23,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   private var skipButton: NSButton?
   private var offerAccountButton: NSButton?
   private var detailsButton: NSButton?
+  private var creditRow: NSView?
   private var issueShowing = false
   private var issueRepair = false
   private var authorizationRepair = false
@@ -182,6 +183,8 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   private func buildStage() {
     for child in content.subviews { child.removeFromSuperview() }
     for child in footer.subviews { child.removeFromSuperview() }
+    creditRow?.removeFromSuperview()
+    creditRow = nil
     primaryButton = nil
     debugButton = nil
     proxyButton = nil
@@ -379,6 +382,16 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
       center.centerXAnchor.constraint(equalTo: footer.centerXAnchor),
       center.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
     ])
+    if model.stage == .welcome {
+      // The credit sits above the footer, so the root view owns it.
+      let credit = madeWithLove()
+      view.addSubview(credit)
+      NSLayoutConstraint.activate([
+        credit.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+        credit.bottomAnchor.constraint(equalTo: center.topAnchor, constant: -20),
+      ])
+      creditRow = credit
+    }
     let details = RecoveryTextButton(
       title: "Show details", target: self, action: #selector(detailsPressed))
     footer.addSubview(details)
@@ -387,6 +400,30 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
       details.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
     ])
     detailsButton = details
+  }
+
+  private func madeWithLove() -> NSStackView {
+    let row = NSStackView()
+    row.orientation = .horizontal
+    row.spacing = 5
+    row.translatesAutoresizingMaskIntoConstraints = false
+    row.addArrangedSubview(label("Made with", size: 11))
+    if let symbol = NSImage(systemSymbolName: "heart.fill", accessibilityDescription: nil) {
+      let heart = NSImageView(image: symbol)
+      heart.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .regular)
+      heart.contentTintColor = OmarchyTheme.danger
+      row.addArrangedSubview(heart)
+    } else {
+      let heart = label("♥", size: 11)
+      heart.textColor = OmarchyTheme.danger
+      row.addArrangedSubview(heart)
+    }
+    row.addArrangedSubview(label("By Omarchy Team M & The Community", size: 11))
+    row.setAccessibilityChildren([])
+    row.setAccessibilityElement(true)
+    row.setAccessibilityRole(.staticText)
+    row.setAccessibilityLabel("Made with love by Omarchy Team M & The Community")
+    return row
   }
 
   private func fieldRow(_ title: String, field: NSTextField) -> NSStackView {
@@ -472,6 +509,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
 
   @objc private func startPressed() {
     LaunchTrace.mark("ui.continue.pressed")
+    creditRow?.isHidden = true
     if model.recoveryInterface {
       model.restore()
     } else {
