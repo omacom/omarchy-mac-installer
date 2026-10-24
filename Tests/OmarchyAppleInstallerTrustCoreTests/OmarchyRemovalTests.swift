@@ -1250,6 +1250,7 @@
         (.installConfPlanIncomplete, 8), (.installConfTargetMismatch, 9),
         (.installConfReplay, 10), (.retiring, 11), (.beingReplaced, 12),
         (.earlierRemovalUnfinished, 13), (.earlierInstallRecordUncleared, 14),
+        (.macOSStartupNotSet, 15),
       ]
       for (error, code) in codes {
         XCTAssertEqual((error as NSError).code, code, "\(error)")

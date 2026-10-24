@@ -176,6 +176,7 @@
 
     public func preparePlan(
       omarchyBytes: UInt64?,
+      replacing: String?,
       progress: @escaping @Sendable (AssetProgressUpdate) -> Void
     ) async throws -> PlanPreparationDisplay {
       progress(AssetProgressUpdate(stage: .fetchingCatalog))
