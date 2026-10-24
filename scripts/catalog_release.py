@@ -585,9 +585,9 @@ class HttpsOnlyRedirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(request, fp, code, message, headers, new_url)
 
 
-def open_url(url: str, timeout: float = 60):
+def open_url(url: str, timeout: float = 60, headers: dict[str, str] | None = None):
     opener = urllib.request.build_opener(HttpsOnlyRedirects())
-    request = urllib.request.Request(url, headers={"User-Agent": "omarchy-mac-catalog"})
+    request = urllib.request.Request(url, headers={"User-Agent": "omarchy-mac-catalog", **(headers or {})})
     return opener.open(request, timeout=timeout)
 
 
@@ -804,7 +804,7 @@ class GitHubReleaseHost:
 
     def fetch(self, channel: str) -> bytes | None:
         try:
-            with open_url(self.describe(channel)) as response:
+            with open_url(self.describe(channel), headers=NO_CACHE) as response:
                 data = response.read(MAXIMUM_CATALOG_BYTES * 2 + 1)
         except urllib.error.HTTPError as error:
             if error.code == 404:
@@ -1091,6 +1091,26 @@ def command_check_promotion(arguments) -> None:
     print(f"promotion=checked {source_channel} to {channel}, sequence {source['sequence']} to {promoted['sequence']}")
 
 
+# GitHub can keep serving a replaced release asset's old bytes for over a
+# minute (2026-10-21: still stale 61 s after the upload).
+READBACK_DELAYS = (5, 5, 10, 10, 15, 15, 20, 30, 30, 30, 30, 30, 30, 30)
+NO_CACHE = {"Cache-Control": "no-cache", "Pragma": "no-cache"}
+
+
+def read_back(host, channel: str, data: bytes, sleep=time.sleep) -> None:
+    """Read the published catalog back as a client would, riding out
+    transient errors and a stale cache, and refuse if it never appears."""
+    for attempt, delay in enumerate((0, *READBACK_DELAYS), start=1):
+        if delay:
+            sleep(delay)
+        try:
+            if host.fetch(channel) == data:
+                return
+        except (OSError, urllib.error.URLError) as error:
+            print(f"readback attempt {attempt}: {error}", file=sys.stderr)
+    raise Refusal(f"{host.describe(channel)} does not serve the catalog just published")
+
+
 def command_publish(arguments) -> None:
     check_repository()
     channel = check_signed_channel(arguments.channel)
@@ -1108,19 +1128,7 @@ def command_publish(arguments) -> None:
     if document["sequence"] <= live:
         raise Refusal(f"sequence {document['sequence']} does not follow the published {live}")
     host.publish(channel, arguments.envelope)
-    # Read it back as a client would, riding out transient errors.
-    served = None
-    for attempt in range(12):
-        try:
-            served = host.fetch(channel)
-        except (OSError, urllib.error.URLError) as error:
-            print(f"readback attempt {attempt + 1}: {error}", file=sys.stderr)
-            served = None
-        if served == data:
-            break
-        time.sleep(5)
-    else:
-        raise Refusal(f"{host.describe(channel)} does not serve the catalog just published")
+    read_back(host, channel, data)
     print(f"published={host.describe(channel)}")
     print(f"sequence={document['sequence']} (was {live})")
 

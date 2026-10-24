@@ -471,7 +471,7 @@ else:
         host = release.GitHubReleaseHost(release.stopgap_repo())
         served = state / "assets" / "catalog-edge.signed.json"
 
-        def fake_open(url, timeout=60):
+        def fake_open(url, timeout=60, headers=None):
             self.assertEqual(url, host.describe("edge"))
             if not served.exists():
                 raise urllib.error.HTTPError(url, 404, "Not Found", {}, io.BytesIO())
@@ -714,7 +714,7 @@ class PromotionTests(ReleaseTestCase):
         served[artifact(IMAGE, "installer_data.json", METADATA)["url"]] = METADATA
         requested = []
 
-        def fake_open(url, timeout=60):
+        def fake_open(url, timeout=60, headers=None):
             requested.append(url)
             return contextlib.closing(io.BytesIO(served[url]))
 
@@ -838,6 +838,61 @@ class PromotionTests(ReleaseTestCase):
         self.assertEqual(self.publish("rc", self.directory / "newer-signed" / "catalog-rc.signed.json").returncode, 0)
         self.assert_refused(self.promote("rc", "edge", LATER, "older"), "does not follow the published rc")
 
+
+
+class ReadBackTests(unittest.TestCase):
+    """The publish readback outlasts a stale cache, but not forever."""
+
+    class Host:
+        def __init__(self, replies):
+            self.replies = list(replies)
+            self.fetches = 0
+
+        def describe(self, channel: str) -> str:
+            return f"host/catalog-{channel}.signed.json"
+
+        def fetch(self, channel: str) -> bytes | None:
+            self.fetches += 1
+            reply = self.replies.pop(0) if self.replies else b"stale"
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+    def read_back(self, host) -> list[int]:
+        slept: list[int] = []
+        with contextlib.redirect_stderr(io.StringIO()):
+            release.read_back(host, "edge", b"new", sleep=slept.append)
+        return slept
+
+    def test_a_cache_stale_for_over_a_minute_is_ridden_out(self) -> None:
+        host = self.Host([b"old"] * 8 + [b"new"])
+        slept = self.read_back(host)
+        self.assertEqual(host.fetches, 9)
+        self.assertGreater(sum(slept), 61, "2026-10-21 served the old asset 61 s after the upload")
+        self.assertLessEqual(sum(slept), sum(release.READBACK_DELAYS))
+
+    def test_the_first_read_needs_no_wait(self) -> None:
+        self.assertEqual(self.read_back(self.Host([b"new"])), [])
+
+    def test_transient_errors_are_retried(self) -> None:
+        host = self.Host([OSError("reset"), urllib.error.URLError("timeout"), None, b"new"])
+        self.assertEqual(len(self.read_back(host)), 3)
+        self.assertEqual(host.fetches, 4)
+
+    def test_a_catalog_that_never_appears_is_refused(self) -> None:
+        host = self.Host([])
+        with self.assertRaisesRegex(release.Refusal, "does not serve the catalog just published"):
+            self.read_back(host)
+        self.assertEqual(host.fetches, len(release.READBACK_DELAYS) + 1)
+
+    def test_the_window_stays_bounded(self) -> None:
+        self.assertGreaterEqual(sum(release.READBACK_DELAYS), 240)
+        self.assertLessEqual(sum(release.READBACK_DELAYS), 600)
+
+    def test_the_github_host_asks_for_an_uncached_copy(self) -> None:
+        source = SCRIPT.read_text()
+        self.assertIn("open_url(self.describe(channel), headers=NO_CACHE)", source)
+        self.assertEqual(release.NO_CACHE["Cache-Control"], "no-cache")
 
 
 if __name__ == "__main__":
