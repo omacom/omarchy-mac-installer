@@ -304,6 +304,12 @@ struct OnePageInstallerView: View {
     case .existingInstallRefused:
       if pendingRecoveryHandoff != nil {
         shutDownButton
+      } else if session.canReinstallOverExisting {
+        Button(PlainLanguage.closeInstaller) { NSApplication.shared.terminate(nil) }
+          .omarchySecondaryButton()
+        Button(PlainLanguage.reinstallOmarchy) { Task { await session.reinstallOverExisting() } }
+          .omarchyPrimaryButton()
+          .keyboardShortcut(.defaultAction)
       } else {
         Button(PlainLanguage.closeInstaller) { NSApplication.shared.terminate(nil) }
           .omarchyPrimaryButton()
@@ -447,12 +453,15 @@ struct OnePageInstallerView: View {
         .font(OmarchyTheme.heading)
         .fixedSize(horizontal: false, vertical: true)
         .padding(.vertical, 2)
-      Text(
-        "If you’d like to remove Omarchy and return its space to macOS, select Installation → Remove Omarchy from the menu bar."
-      )
-      .font(OmarchyTheme.body)
-      .foregroundStyle(OmarchyTheme.secondaryText)
-      .fixedSize(horizontal: false, vertical: true)
+      if session.canReinstallOverExisting {
+        Text(PlainLanguage.reinstallDetail)
+          .font(OmarchyTheme.body)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      Text(PlainLanguage.removeOmarchyHint)
+        .font(OmarchyTheme.body)
+        .foregroundStyle(OmarchyTheme.secondaryText)
+        .fixedSize(horizontal: false, vertical: true)
     }
   }
 

@@ -814,7 +814,8 @@
           bindingDigest: "sha256:" + String(repeating: "b", count: 64),
           planDigest: String(repeating: "a", count: 64),
           deviceIdentifier: "apple,j314s",
-          storeIdentifier: "disk0"
+          storeIdentifier: "disk0",
+          candidateKind: "free"
         ),
         transcript: transcript
       )
@@ -980,7 +981,8 @@
         bindingDigest: "sha256:" + String(repeating: "b", count: 64),
         planDigest: String(repeating: "a", count: 64),
         deviceIdentifier: "apple,j314s",
-        storeIdentifier: "disk0"
+        storeIdentifier: "disk0",
+        candidateKind: "free"
       )
     }
   }

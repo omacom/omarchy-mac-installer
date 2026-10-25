@@ -21,6 +21,8 @@
     public let planDigest: String
     public let deviceIdentifier: String
     public let storeIdentifier: String
+    /// The plan's candidate kind, bound into the plan digest the importer checked.
+    public let candidateKind: String
 
     public init(
       packageURL: URL,
@@ -36,7 +38,8 @@
       bindingDigest: String,
       planDigest: String,
       deviceIdentifier: String,
-      storeIdentifier: String
+      storeIdentifier: String,
+      candidateKind: String
     ) {
       self.packageURL = packageURL
       self.manifestURL = manifestURL
@@ -52,6 +55,7 @@
       self.planDigest = planDigest
       self.deviceIdentifier = deviceIdentifier
       self.storeIdentifier = storeIdentifier
+      self.candidateKind = candidateKind
     }
   }
 
@@ -206,7 +210,8 @@
         bindingDigest: identity.bindingDigest,
         planDigest: request.planDigest,
         deviceIdentifier: request.deviceIdentifier,
-        storeIdentifier: request.storeIdentifier
+        storeIdentifier: request.storeIdentifier,
+        candidateKind: request.candidateKind
       )
     }
 

@@ -176,6 +176,7 @@
 
     public func preparePlan(
       omarchyBytes: UInt64?,
+      replacing: String?,
       progress: @escaping @Sendable (AssetProgressUpdate) -> Void
     ) async throws -> PlanPreparationDisplay {
       progress(AssetProgressUpdate(stage: .fetchingCatalog))
@@ -239,6 +240,17 @@
       progress(AssetProgressUpdate(stage: .planning))
       try await tick()
       let initial: UInt64 = 137_438_953_472
+      if replacing != nil {
+        let total: UInt64 = 994_662_584_320
+        return .plan(
+          PlanDisplay(
+            diskTotalBytes: total, omarchyBytes: initial,
+            bindingDigest: "simulation-\(initial)", isResizable: false,
+            releaseDescription:
+              "SIMULATION · \(channel.rawValue.uppercased()) · Omarchy test release",
+            targetDescription: "Simulated internal disk · Replace the existing Omarchy",
+            fixedMacOSBytes: total - initial))
+      }
       let maximum: UInt64 =
         scenario == .allocationClamped && omarchyBytes != nil
         ? initial : (refusedOnce ? 133_000_000_000 : 700_000_000_000)
