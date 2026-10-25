@@ -44,9 +44,13 @@ recovery="$app/Contents/Resources/RecoveryTemplate/$INSTALLER_RECOVERY_APP_NAME.
 [[ -f $helper && ! -L $helper ]] || fail "the app carries no helper at ${helper#"$app"/}"
 [[ -f $restore_image && ! -L $restore_image ]] ||
   fail "the app carries no restore-image decoder at ${restore_image#"$app"/}"
-# Contents/Helpers holds the decoder and nothing else this script would not sign.
-helpers=("$app/Contents/Helpers"/*)
-(( ${#helpers[@]} == 1 )) || fail "Contents/Helpers holds more than the restore-image decoder"
+# Contents/Helpers holds the decoder, the Try Omarchy kit when one is pinned,
+# and nothing else this script would not sign.
+vm_kit="$app/Contents/Helpers/TryOmarchyKit.bundle"
+for entry in "$app/Contents/Helpers"/*; do
+  [[ $entry == "$restore_image" || $entry == "$vm_kit" ]] ||
+    fail "Contents/Helpers holds more than the restore-image decoder and the kit"
+done
 
 team_requirement() {
   printf 'anchor apple generic and identifier "%s" and certificate leaf[subject.OU] = "%s"' "$1" "$INSTALLER_TEAM_ID"
@@ -80,7 +84,8 @@ if (( ! verify_only )); then
   fi
   codesign "${sign_arguments[@]}" --identifier "$INSTALLER_RESTORE_IMAGE_IDENTIFIER" "$restore_image"
   codesign "${sign_arguments[@]}" --identifier "$INSTALLER_HELPER_IDENTIFIER" "$helper"
-  codesign "${sign_arguments[@]}" "$app"
+  [[ ! -d $vm_kit ]] || "$(dirname "$0")/../sign-vm-kit" "$app" "${sign_arguments[@]}"
+  codesign "${sign_arguments[@]}" --entitlements "$(dirname "$0")/../entitlements/installer-app.entitlements" "$app"
 fi
 
 codesign --verify --strict --deep --verbose=2 "$app"

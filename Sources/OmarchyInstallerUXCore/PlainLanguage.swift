@@ -16,7 +16,6 @@
 
     public static let checkSubheadline =
       "Omarchy installs next to macOS. You can select either one by holding the power button when the Mac starts."
-    public static let checkContinue = "Continue"
     public static let checkAgain = "Check again"
     public static let inspectingHeadline = "Checking this Mac…"
     public static let inspectingSubheadline =
@@ -955,6 +954,11 @@
     }
 
     // MARK: Formatting
+
+    /// The header's chip and the space free on macOS's disk.
+    public static func chipAndFreeSpace(chip: String, freeBytes: UInt64) -> String {
+      "\(chip) · \(bytes(freeBytes)) free"
+    }
 
     /// Whole-number sizes: "137 GB", "18 MB". Decimal places only add noise
     /// at the scale people choose disk space in.

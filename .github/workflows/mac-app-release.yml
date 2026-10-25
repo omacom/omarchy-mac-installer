@@ -152,6 +152,8 @@ jobs:
           # The notarization flow and the archived-binary guard cases run only on macOS.
           python3 -m unittest discover -s Packaging/release/tests -p 'test_*.py'
           bash test/shell.d/apple-installer-release-test.sh
+      - name: Check the Try Omarchy kit pin against its release
+        run: python3 scripts/try_omarchy_kit.py check --online
       - name: Prepare release inputs
         env:
           STAND_IN: ${{ needs.plan.outputs.stand-in-trust-root }}
@@ -244,6 +246,7 @@ jobs:
           source Packaging/identity.conf
           bash Packaging/release/sign-and-package --app "$RUNNER_TEMP/app/$INSTALLER_APP_NAME.app" \
             --output "$RUNNER_TEMP/out" --identity -
+          python3 Packaging/release/check-try-kit "$RUNNER_TEMP/app/$INSTALLER_APP_NAME.app"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dry-run-dmg
@@ -328,6 +331,7 @@ jobs:
           NOTARY_API_KEY="$RUNNER_TEMP/signing-secrets/notary-key.p8" \
             bash Packaging/release/sign-and-package --app "$RUNNER_TEMP/app/$INSTALLER_APP_NAME.app" \
             --output "$RUNNER_TEMP/out" --identity "$IDENTITY" --keychain "$KEYCHAIN" --notarize
+          python3 Packaging/release/check-try-kit "$RUNNER_TEMP/app/$INSTALLER_APP_NAME.app"
           echo "sha256=$(cut -d' ' -f1 "$RUNNER_TEMP/out/"*.dmg.sha256)" | tee -a "$GITHUB_OUTPUT"
       - name: Delete the keychain and keys
         if: always()

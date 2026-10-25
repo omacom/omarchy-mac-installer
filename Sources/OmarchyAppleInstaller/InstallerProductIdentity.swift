@@ -10,6 +10,7 @@ public enum InstallerProductIdentity {
   public static let legacyAppName = InstallerBuildConfiguration.legacyAppName
   public static let appIdentifier = InstallerBuildConfiguration.appIdentifier
   public static let helperIdentifier = InstallerBuildConfiguration.helperIdentifier
+  public static let teamIdentifier = InstallerBuildConfiguration.teamId
   public static let helperMachServiceName = helperIdentifier
   public static let helperDaemonPlistName = helperIdentifier + ".plist"
   /// Where the helper's system LaunchDaemon job file lives.

@@ -7,11 +7,17 @@ import SwiftUI
 private final class InstallerApplicationDelegate: NSObject, NSApplicationDelegate {
   static var removalInProgress = false
   static weak var session: InstallerSession?
+  static weak var trial: TrialSession?
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     if Self.removalInProgress || Self.session?.isExecutionInProgress == true {
       NSSound.beep()
       return .terminateCancel
+    }
+    // Quitting shuts Omarchy down first; the page shows it until it has.
+    if let trial = Self.trial, trial.isActive {
+      trial.shutDown { NSApp.reply(toApplicationShouldTerminate: true) }
+      return .terminateLater
     }
     return .terminateNow
   }
@@ -38,7 +44,15 @@ private final class InstallerApplicationDelegate: NSObject, NSApplicationDelegat
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-    true
+    Self.trial?.quitsWhenTheLastWindowCloses ?? true
+  }
+
+  /// Opening the app again brings back the window Try closed while Omarchy
+  /// runs.
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+    guard !hasVisibleWindows, let trial = Self.trial, !trial.showsWindow else { return true }
+    trial.reopenWindow()
+    return false
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
@@ -77,6 +91,10 @@ struct OmarchyAppleInstallerApp: App {
     @State private var simulation = SimulationControls()
   #endif
   @State private var generation = UUID()
+  @State private var trial = TrialSession(environment: LiveTrialEnvironment())
+  @State private var installReason: TrialInstallReason?
+  @State private var deletionFailure: String?
+  @State private var bridgedNetworkFailure: String?
 
   private var isSimulation: Bool {
     #if DEBUG
@@ -106,13 +124,14 @@ struct OmarchyAppleInstallerApp: App {
 
   private var liveContent: some View {
     OnePageInstallerView(
-      environment: InstallerEnvironmentFactory.make(), channel: channel,
+      environment: InstallerEnvironmentFactory.make(), channel: channel, trial: trial,
       onSessionAvailable: rememberSession)
   }
 
   private func rememberSession(_ session: InstallerSession) {
     liveSession = session
     InstallerApplicationDelegate.session = session
+    InstallerApplicationDelegate.trial = trial
   }
 
   @State private var channel = ReleaseChannelPreference().resolveFromMainBundle()
@@ -133,14 +152,31 @@ struct OmarchyAppleInstallerApp: App {
         }
       }
       .id(generation)
+      .background(
+        InstallerWindowVisibility(shows: trial.showsWindow, onShown: { trial.reopenWindow() })
+      )
       .onReceive(
         NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
       ) { _ in
         liveSession?.cancelPrefetchOnQuit()
       }
+      .onReceive(
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+      ) { _ in
+        trial.refresh()
+      }
+      .onReceive(
+        NSWorkspace.shared.notificationCenter.publisher(
+          for: NSWorkspace.didTerminateApplicationNotification)
+      ) { notification in
+        let app =
+          notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        if app?.bundleIdentifier == "com.apple.systempreferences" { trial.refresh() }
+      }
       .disabled(showsRemoval)
       .windowDismissBehavior(
-        removalInProgress || liveSession?.isExecutionInProgress == true ? .disabled : .enabled
+        removalInProgress || liveSession?.isExecutionInProgress == true || trial.isActive
+          ? .disabled : .enabled
       )
       .sheet(isPresented: $showsRemoval, onDismiss: { generation = UUID() }) {
         OmarchyRemovalSheet(
@@ -154,6 +190,34 @@ struct OmarchyAppleInstallerApp: App {
           }, onClose: { showsRemoval = false }, onRequiresReview: { removalNeedsReview = true },
           simulationScenario: previewRemovalScenario)
       }
+      .alert(
+        installReason?.headline ?? "", isPresented: presented($installReason),
+        presenting: installReason
+      ) { reason in
+        if reason.canCheckAgain {
+          Button(PlainLanguage.trialCheckAgainMenuItem) { checkAgain() }
+        }
+        Button("OK", role: .cancel) {}
+      } message: { reason in
+        Text(reason.detail)
+      }
+      .alert(
+        PlainLanguage.trialBridgedNetworkChangeFailed,
+        isPresented: presented($bridgedNetworkFailure),
+        presenting: bridgedNetworkFailure
+      ) { _ in
+        Button("OK", role: .cancel) {}
+      } message: { failure in
+        Text(failure)
+      }
+      .alert(
+        PlainLanguage.trialDeleteFailed, isPresented: presented($deletionFailure),
+        presenting: deletionFailure
+      ) { _ in
+        Button("OK", role: .cancel) {}
+      } message: { failure in
+        Text(failure)
+      }
       .preferredColorScheme(previewColorScheme)
       .frame(minWidth: 640)
       .omarchyTypography()
@@ -163,6 +227,9 @@ struct OmarchyAppleInstallerApp: App {
       .containerBackground(OmarchyTheme.window, for: .window)
     }
     .defaultSize(width: 780, height: 600)
+    // Centred at every launch, like Try Omarchy's launcher, wherever it was left.
+    .restorationBehavior(.disabled)
+    .defaultWindowPlacement { _, _ in WindowPlacement(.center) }
     .windowResizability(.contentSize)
     .windowStyle(.hiddenTitleBar)
     .commands {
@@ -200,8 +267,37 @@ struct OmarchyAppleInstallerApp: App {
         }
       #endif
       CommandMenu("Installation") {
-        Button("Remove Omarchy…") { showsRemoval = true }
-          .disabled(removalNeedsReview || showsRemoval || liveSession?.canOpenRemoval != true)
+        Button(trial.installMenuTitle) { installFromMenu() }
+          .disabled(
+            isSimulation || removalNeedsReview || showsRemoval
+              || trial.installMenuAction == .unavailable)
+        Button(PlainLanguage.trialCheckAgainMenuItem) { checkAgain() }
+          .disabled(
+            isSimulation || removalNeedsReview || showsRemoval || !installStatusIsUnsupported
+              || liveSession?.canInspect != true)
+        Divider()
+        Button("Remove Omarchy…") {
+          trial.reopenWindow()
+          showsRemoval = true
+        }
+        .disabled(removalNeedsReview || showsRemoval || liveSession?.canOpenRemoval != true)
+        if trial.isAvailable {
+          Divider()
+          Button(PlainLanguage.trialShutDown) { trial.shutDown() }
+            .disabled(!trial.canShutDown)
+          Button(PlainLanguage.trialDeleteMenuItem) {
+            Task { confirmDeletion(await trial.deletionMessage()) }
+          }
+          .disabled(isSimulation || removalNeedsReview || showsRemoval || !trial.canDeleteVM)
+          Button(PlainLanguage.trialRepairBridgedNetworkMenuItem) {
+            confirmBridgedNetworkChange(removing: false)
+          }
+          .disabled(isSimulation || !trial.canRepairBridgedNetwork)
+          Button(PlainLanguage.trialRemoveBridgedNetworkMenuItem) {
+            confirmBridgedNetworkChange(removing: true)
+          }
+          .disabled(isSimulation || !trial.canChangeBridgedNetwork)
+        }
       }
       if InstallerBuildProfile.current.showsReleaseChannels {
         CommandMenu(PlainLanguage.channelMenuTitle) {
@@ -230,6 +326,76 @@ struct OmarchyAppleInstallerApp: App {
         }
       }
     }
+  }
+
+  private var installStatusIsUnsupported: Bool {
+    if case .unsupported = trial.installStatus { return true }
+    return false
+  }
+
+  /// Install on this Mac from the menu: shuts Omarchy down and continues into
+  /// the plan, or says why this Mac can't install. Migrate to Native first
+  /// shows its notice on the page.
+  private func installFromMenu() {
+    switch trial.installMenuAction {
+    case .unavailable:
+      break
+    case .install:
+      trial.chooseInstall { Task { await liveSession?.continueToPlan() } }
+    case .explain(let reason):
+      trial.reopenWindow()
+      installReason = reason
+    }
+  }
+
+  private func checkAgain() {
+    guard let session = liveSession, session.canInspect else { return }
+    Task {
+      await session.inspect()
+      await session.refreshChannelAvailability()
+    }
+  }
+
+  /// Cancel is the default button, so Return never moves the VM to the Trash.
+  private func confirmDeletion(_ message: String) {
+    let alert = NSAlert()
+    alert.messageText = PlainLanguage.trialDeleteTitle
+    alert.informativeText = message
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: "Cancel")
+    alert.addButton(withTitle: PlainLanguage.trialDeleteAction).hasDestructiveAction = true
+    guard alert.runModal() == .alertSecondButtonReturn, trial.canDeleteVM else { return }
+    deleteVM()
+  }
+
+  /// Repair and Remove shut Omarchy down, so they ask first, with Cancel as
+  /// the default button.
+  private func confirmBridgedNetworkChange(removing: Bool) {
+    let alert = NSAlert()
+    alert.messageText = PlainLanguage.trialBridgedNetworkChangeTitle(removing: removing)
+    alert.informativeText = trial.bridgedNetworkChangeMessage(removing: removing)
+    alert.alertStyle = .warning
+    alert.addButton(withTitle: "Cancel")
+    alert.addButton(withTitle: PlainLanguage.trialBridgedNetworkChangeAction(removing: removing))
+      .hasDestructiveAction = removing
+    guard alert.runModal() == .alertSecondButtonReturn else { return }
+    guard removing ? trial.canChangeBridgedNetwork : trial.canRepairBridgedNetwork else { return }
+    Task {
+      bridgedNetworkFailure =
+        removing ? await trial.removeBridgedNetwork() : await trial.repairBridgedNetwork()
+    }
+  }
+
+  private func deleteVM() {
+    do {
+      try trial.deleteVM()
+    } catch {
+      deletionFailure = error.localizedDescription
+    }
+  }
+
+  private func presented<Value>(_ value: Binding<Value?>) -> Binding<Bool> {
+    Binding(get: { value.wrappedValue != nil }, set: { if !$0 { value.wrappedValue = nil } })
   }
 
   private var previewColorScheme: ColorScheme? {

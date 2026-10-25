@@ -34,6 +34,9 @@ let package = Package(
     ),
   ],
   targets: [
+    // Vendored from the Try Omarchy release the trial's kit comes from
+    // (Packaging/try-omarchy-kit.json, scripts/try_omarchy_kit.py).
+    .target(name: "TryOmarchyKitClient", path: "Vendor/TryOmarchyKitClient"),
     .target(name: "RecoveryAuthorization", path: "Recovery/Native", publicHeadersPath: "."),
     .target(
       name: "RecoveryAccountCore", dependencies: ["RecoveryAuthorization"],
@@ -79,7 +82,9 @@ let package = Package(
     ),
     .target(
       name: "OmarchyInstallerUXCore",
-      dependencies: ["OmarchyAppleInstallerTrustCore", "RecoveryAccountCore"],
+      dependencies: [
+        "OmarchyAppleInstallerTrustCore", "RecoveryAccountCore", "TryOmarchyKitClient",
+      ],
       path: "Sources/OmarchyInstallerUXCore"
     ),
     .executableTarget(
@@ -88,6 +93,7 @@ let package = Package(
         "OmarchyAppleInstallerTrustCore",
         "OmarchyInstallerUXCore",
         "RecoveryAccountCore",
+        "TryOmarchyKitClient",
       ],
       path: "Sources/OmarchyAppleInstallerApp"
     ),
@@ -124,7 +130,7 @@ let package = Package(
     ),
     .testTarget(
       name: "OmarchyInstallerUXCoreTests",
-      dependencies: ["OmarchyInstallerUXCore"],
+      dependencies: ["OmarchyInstallerUXCore", "TryOmarchyKitClient"],
       path: "Tests/OmarchyInstallerUXCoreTests"
     ),
   ]

@@ -611,8 +611,9 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
 
     let existing = Self.existingInstalls(in: engine)
     let space = existing.isEmpty ? Self.spaceCheck(engine: engine, host: host) : nil
-    let chipAndFreeSpace =
-      "\(host.identity.chip) · \(PlainLanguage.bytes(host.storage.containerFreeBytes)) free"
+    let chipAndFreeSpace = PlainLanguage.chipAndFreeSpace(
+      chip: host.identity.chip,
+      freeBytes: VolumeFreeSpace.macOS() ?? host.storage.containerFreeBytes)
     var chipAndSpace = chipAndFreeSpace
     if case .fits(let maximumBytes) = space {
       chipAndSpace += " · up to \(PlainLanguage.bytes(maximumBytes)) for Omarchy"

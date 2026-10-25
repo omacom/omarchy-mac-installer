@@ -44,11 +44,11 @@
     ) async throws {}
 
     func inspect() async throws -> HostDisplay {
-      try? await Task.sleep(for: .milliseconds(700))
+      try? await Task.sleep(for: scenario == .checking ? .seconds(86_400) : .milliseconds(700))
       let transcript = try loadValidatedTranscript()
       let blocked = scenario == .unsupported
       let device = blocked ? "apple,j614s" : transcript.deviceIdentifier
-      let free: UInt64 = 464_000_000_000
+      let free: UInt64 = scenario == .lowSpace ? 63_000_000_000 : 464_000_000_000
 
       return HostDisplay(
         chipAndSpace: blocked
@@ -58,6 +58,8 @@
         existingInstalls: scenario == .existingInstall
           ? [ExistingInstallDisplay(sourceIdentifier: "disk0s3", sizeDescription: "128 GB")]
           : [],
+        spaceShortfall: scenario == .lowSpace
+          ? .insufficientSpace(requiredBytes: 120_000_000_000, availableBytes: free) : nil,
         unsupportedModel: blocked
           ? UnsupportedModelDisplay(
             deviceIdentifier: device, modelIdentifier: "Mac16,8",

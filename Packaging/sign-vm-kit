@@ -1,0 +1,66 @@
+#!/bin/bash
+#
+# Signs the Try Omarchy kit inside the app as this installer, so macOS asks for
+# Accessibility, Microphone and Camera in the installer's name
+# (docs/try.md): the runtime's libraries and zstd, QEMU with the hypervisor
+# and microphone, the helper with the camera and microphone, the
+# bridged-networking daemon, then the kit's bundle, which has no bundle
+# identifier of its own. The networking client, server and supervisor keep the
+# kit's signatures: the daemon pins their bytes.
+#
+# Signed ad hoc (--sign -), the kit drops the hardened runtime: it refuses
+# libraries without a team, and ad hoc signatures have none, so QEMU would not
+# load its own.
+#
+#   Packaging/sign-vm-kit APP CODESIGN_ARGUMENTS...
+#
+# CODESIGN_ARGUMENTS are the identity and options the app's own signing uses,
+# for example --force --sign "Developer ID Application: …" --options runtime --timestamp.
+
+set -euo pipefail
+
+fail() {
+  echo "sign-vm-kit: $*" >&2
+  exit 1
+}
+
+(( $# >= 2 )) || fail "usage: sign-vm-kit APP CODESIGN_ARGUMENTS..."
+app=$1
+shift
+given=("$@")
+adhoc=0
+for ((index = 1; index < ${#given[@]}; index++)); do
+  [[ ${given[index - 1]} == --sign && ${given[index]} == - ]] && adhoc=1
+done
+arguments=()
+for ((index = 0; index < ${#given[@]}; index++)); do
+  if ((adhoc)) && [[ ${given[index]} == --options && ${given[index + 1]:-} == runtime ]]; then
+    ((index += 1))
+    continue
+  fi
+  arguments+=("${given[index]}")
+done
+set -- "${arguments[@]}"
+script_directory=$(cd "$(dirname "$0")" && pwd -P)
+# shellcheck source=identity.conf
+source "$script_directory/identity.conf"
+kit="$app/Contents/Helpers/TryOmarchyKit.bundle"
+[[ -d $kit && ! -L $kit ]] || fail "the app carries no kit"
+identifier="$INSTALLER_APP_IDENTIFIER.vm-kit"
+runtime="$kit/Contents/Resources/runtime"
+qemu="$runtime/bin/Try Omarchy"
+helper="$kit/Contents/MacOS/omarchy-vm-helper"
+network_daemon="$kit/Contents/MacOS/omarchy-network-daemon"
+network_service=dev.tryomarchy.kit.network
+entitlements="$script_directory/entitlements"
+
+while IFS= read -r -d '' code; do
+  [[ $code == "$qemu" ]] && continue
+  codesign "$@" --identifier "$identifier" "$code"
+done < <(find "$runtime/lib" "$runtime/bin" -type f \( -name '*.dylib' -o -perm -u+x \) -print0)
+codesign "$@" --identifier "$identifier" --entitlements "$entitlements/vm-qemu.entitlements" "$qemu"
+codesign "$@" --identifier "$identifier" --entitlements "$entitlements/vm-helper.entitlements" "$helper"
+codesign "$@" --identifier "$identifier" "$network_daemon"
+codesign "$@" --identifier "$identifier" --entitlements "$entitlements/vm-helper.entitlements" "$kit"
+codesign --verify --deep --strict "$kit"
+[[ $("$network_daemon" check) == "$network_service" ]] || fail "the kit's networking daemon rejects its runtime"

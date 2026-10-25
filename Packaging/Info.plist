@@ -28,8 +28,12 @@
 	<true/>
 	<key>LSMinimumSystemVersion</key>
   <string>15.0</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Omarchy, running in a window, uses the camera when an app in it asks.</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Omarchy, running in a window, records from the microphone when an app in it asks.</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
 </dict>
