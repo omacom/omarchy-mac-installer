@@ -1,0 +1,12 @@
+[Unit]
+Description=Offer the files from Try Omarchy
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/omarchy-migration-offer
+Restart=no
+
+[Install]
+WantedBy=graphical-session.target

@@ -1633,6 +1633,8 @@
   }
 
   final class MockInstallerEnvironment: InstallerEnvironment, @unchecked Sendable {
+    var exportsForInstall: [String?] = []
+    func useTryExportForInstall(_ exportID: String?) { exportsForInstall.append(exportID) }
     var accountReply: RecoveryAccountReply? = RecoveryAccountReply(
       ticket: "completed-install",
       target: RecoveryAccountTarget(

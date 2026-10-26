@@ -136,6 +136,7 @@
     private let removalDisks: any RemovalDiskOperating
     private let removalAdminValidator: @Sendable (MachineOwnerAuthorization) throws -> Void
     private let espDisks: any InstallConfESPDiskOperating
+    private let stagingDisks: any TryExportStagingDiskOperating
     private let selfUninstaller: any HelperSelfUninstalling
     /// Jobs and replacement share this state; see `HelperWorkState`.
     nonisolated let work: HelperWorkState
@@ -146,6 +147,7 @@
     public nonisolated var isRetiring: Bool { retirement.isSet }
     private var completedInstallPlan: CompletedEngineInstallPlan?
     private var installConfConsumed = false
+    private var tryExportStaged = false
     private var recoveryAccountTargets: [String: (CompletedRecoveryInstallation, Date)] = [:]
     private var removalPlan:
       (ticket: OmarchyRemovalTicket, plan: OmarchyRemovalPlan, expires: Date)?
@@ -165,6 +167,7 @@
       removalDisks = MacRemovalDiskOperator()
       removalAdminValidator = requireRemovalAdministrator
       espDisks = DiskutilInstallConfESPOperator()
+      stagingDisks = DiskutilTryExportStagingOperator()
       self.selfUninstaller = selfUninstaller
     }
 
@@ -174,6 +177,7 @@
       removalDisks: any RemovalDiskOperating,
       removalAdminValidator: @escaping @Sendable (MachineOwnerAuthorization) throws -> Void,
       espDisks: any InstallConfESPDiskOperating = DiskutilInstallConfESPOperator(),
+      stagingDisks: any TryExportStagingDiskOperating = DiskutilTryExportStagingOperator(),
       selfUninstaller: any HelperSelfUninstalling = NoHelperSelfUninstall(),
       work: HelperWorkState = HelperWorkState()
     ) {
@@ -185,6 +189,7 @@
       self.removalDisks = removalDisks
       self.removalAdminValidator = removalAdminValidator
       self.espDisks = espDisks
+      self.stagingDisks = stagingDisks
       self.selfUninstaller = selfUninstaller
     }
 
@@ -472,6 +477,7 @@
         )
         if completedInstallPlan != completed {
           installConfConsumed = false
+          tryExportStaged = false
         }
         completedInstallPlan = completed
       }
@@ -527,6 +533,52 @@
       } catch let error as InstallConfESPError where error.followedConfirmedWrite {
         installConfConsumed = true
         throw error
+      }
+    }
+  }
+
+  extension ClosedEngineHelperServer {
+    /// Stages a Try export onto the Root partition of the completed install,
+    /// once per completed plan (docs/native-import.md#staging).
+    public func stageTryExport(
+      bundle: FileHandle,
+      receipt: Data,
+      storeIdentifier: String,
+      offsetBytes: UInt64,
+      lengthBytes: UInt64,
+      authorization: MachineOwnerAuthorization
+    ) async throws -> TryExportStagingOutcome {
+      guard !isRetiring else { throw ClosedEngineHelperError.retiring }
+      try work.beginJob()
+      defer { work.endJob() }
+      do {
+        try credentialValidator.validate(authorization)
+      } catch {
+        throw ClosedEngineHelperError.invalidMachineOwnerCredentials
+      }
+      guard let completed = completedInstallPlan else {
+        throw ClosedEngineHelperError.installConfPlanIncomplete
+      }
+      guard !tryExportStaged else {
+        throw ClosedEngineHelperError.installConfReplay
+      }
+      guard completed.storeIdentifier == storeIdentifier,
+        completed.offsetBytes == offsetBytes,
+        completed.lengthBytes == lengthBytes
+      else {
+        throw ClosedEngineHelperError.installConfTargetMismatch
+      }
+      tryExportStaged = true
+      let writer = TryExportStagingWriter(disks: stagingDisks, workingDirectory: workingDirectory)
+      do {
+        let marker = try await Task.detached {
+          try writer.stage(
+            bundle: bundle, receiptDocument: receipt, storeIdentifier: completed.storeIdentifier,
+            offsetBytes: completed.offsetBytes, lengthBytes: completed.lengthBytes)
+        }.value
+        return .staged(exportID: marker.exportID)
+      } catch let error as TryExportStagingError {
+        return .notStaged(error.reason)
       }
     }
   }
@@ -755,6 +807,38 @@
             encrypt: encrypt
           )
           reply(data, nsError)
+        }
+      }
+    }
+
+    public func stageTryExport(
+      bundle: FileHandle,
+      receipt: Data,
+      storeIdentifier: String,
+      offsetBytes: UInt64,
+      lengthBytes: UInt64,
+      machineOwner: String,
+      password: Data,
+      reply: @escaping @Sendable (Data?, NSError?) -> Void
+    ) {
+      let server = server
+      Task {
+        do {
+          let authorization = try MachineOwnerAuthorization(
+            username: machineOwner,
+            password: password
+          )
+          let outcome = try await server.stageTryExport(
+            bundle: bundle,
+            receipt: receipt,
+            storeIdentifier: storeIdentifier,
+            offsetBytes: offsetBytes,
+            lengthBytes: lengthBytes,
+            authorization: authorization
+          )
+          reply(try JSONEncoder().encode(outcome), nil)
+        } catch {
+          reply(nil, EngineXPCErrorBridge.serviceError(for: error))
         }
       }
     }

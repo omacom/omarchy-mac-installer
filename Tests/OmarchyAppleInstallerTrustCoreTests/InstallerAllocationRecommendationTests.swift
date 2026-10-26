@@ -67,6 +67,21 @@ final class InstallerAllocationRecommendationTests: XCTestCase {
     }
   }
 
+  func testATryExportRaisesTheMinimumAndRefusesWhenItCannotFit() throws {
+    let resize = candidate(
+      kind: "resize", source: "disk0s2", length: 400 * gib,
+      minimumInstall: 32 * gib, minimumContainer: 200 * gib, recommendedInstall: 62 * gib)
+    let plain = try InstallerAllocationRecommendation(inventory: inventory([resize]))
+    let exporting = try InstallerAllocationRecommendation(
+      inventory: inventory([resize]), additionalMinimumBytes: 40 * gib)
+    XCTAssertEqual(plain.minimumBytes, 62 * gib)
+    XCTAssertEqual(exporting.minimumBytes, 72 * gib)
+    XCTAssertGreaterThanOrEqual(exporting.requestedLengthBytes, exporting.minimumBytes)
+    XCTAssertThrowsError(
+      try InstallerAllocationRecommendation(
+        inventory: inventory([resize]), additionalMinimumBytes: 190 * gib))
+  }
+
   func testLegacyRecommendationDoesNotShrinkCeilingOrFreezeAtFloor() throws {
     var previousMaximum: UInt64 = 0
     for available: UInt64 in 31...100 {

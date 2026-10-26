@@ -109,6 +109,16 @@
     case existingInstallChoice([ExistingInstallDisplay])
   }
 
+  public enum TryExportPlan: Equatable, Sendable {
+    case comesAlong
+    case noRoom
+    /// The release this plan installs can't import an export.
+    case releaseCannotImport
+    /// The export hasn't passed its check, or changed since, so the plan
+    /// leaves it out.
+    case notVerified
+  }
+
   public struct PlanDisplay: Equatable, Sendable {
     public let diskTotalBytes: UInt64
     public let omarchyBytes: UInt64
@@ -126,6 +136,8 @@
     /// existing install and reuses its exact extent, so there is nothing to
     /// drag; showing a divider there invites a re-plan the engine refuses.
     public let isResizable: Bool
+    /// What the install does with the chosen Try export. Nil without one.
+    public let tryExport: TryExportPlan?
 
     public init(
       diskTotalBytes: UInt64,
@@ -138,8 +150,10 @@
       targetDescription: String = "Internal storage",
       fixedMacOSBytes: UInt64? = nil,
       macOSFreeBeforeAllocationBytes: UInt64? = nil,
-      recommendedOmarchyBytes: UInt64? = nil
+      recommendedOmarchyBytes: UInt64? = nil,
+      tryExport: TryExportPlan? = nil
     ) {
+      self.tryExport = tryExport
       self.diskTotalBytes = diskTotalBytes
       self.omarchyBytes = omarchyBytes
       self.bindingDigest = bindingDigest
@@ -368,11 +382,16 @@
     public let headline: String
     public let steps: [RecoveryStep]
     public let warning: String?
+    /// What happened to the chosen Try export, when there was one.
+    public let tryExport: String?
 
-    public init(headline: String, steps: [RecoveryStep], warning: String? = nil) {
+    public init(
+      headline: String, steps: [RecoveryStep], warning: String? = nil, tryExport: String? = nil
+    ) {
       self.headline = headline
       self.steps = steps
       self.warning = warning
+      self.tryExport = tryExport
     }
   }
 
@@ -382,14 +401,18 @@
     public let subheadline: String
     public let verified: [PlanFactRow]
     public let handoff: HandoffDisplay?
+    /// What happened to the chosen Try export, when there was one.
+    public let tryExport: String?
 
     public init(
       nextAction: InstallerNextAction,
       headline: String,
       subheadline: String,
       verified: [PlanFactRow],
-      handoff: HandoffDisplay?
+      handoff: HandoffDisplay?,
+      tryExport: String? = nil
     ) {
+      self.tryExport = tryExport
       self.nextAction = nextAction
       self.headline = headline
       self.subheadline = subheadline
@@ -573,6 +596,8 @@
       encryptLinuxDisk: Bool,
       journal: @escaping @Sendable (Data) -> Void
     ) async throws -> CompletionDisplay
+    /// The verified Try export the next plan and install bring along, or nil.
+    func useTryExportForInstall(_ exportID: String?)
 
     /// Fail-closed gates preserved verbatim from the previous view model.
     var installationBlocked: Bool { get }
@@ -623,6 +648,7 @@
       throw AccountSetupFailure("Recovery account setup is unavailable in this environment.")
     }
     public func openStartupDisk() -> Bool { false }
+    public func useTryExportForInstall(_ exportID: String?) {}
     public var isSimulation: Bool { false }
     public func requestShutdown() -> Bool { false }
     public var payloadPrefetchRequired: Bool { false }

@@ -1,0 +1,6 @@
+#!/bin/bash
+# Notify this user when an export from Try Omarchy waits to be imported.
+set -euo pipefail
+
+here="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
+exec "$here/omarchy-migration" offer "$@"

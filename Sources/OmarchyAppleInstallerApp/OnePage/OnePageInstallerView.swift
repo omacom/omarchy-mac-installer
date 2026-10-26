@@ -299,12 +299,14 @@ struct OnePageInstallerView: View {
           .foregroundStyle(OmarchyTheme.secondaryText)
           .fixedSize(horizontal: false, vertical: true)
       }
-      if let export = session.chosenTryExport {
+      if let tryExport = plan.tryExport,
+        let export = session.tryExports.exports.first(where: { $0.id == session.chosenTryExportID })
+      {
         VStack(alignment: .leading, spacing: 4) {
           Text(PlainLanguage.tryExportPlanLine(export))
             .font(OmarchyTheme.body)
             .foregroundStyle(OmarchyTheme.secondaryText)
-          Text(PlainLanguage.tryExportNotYet).omarchyHelpText()
+          Text(PlainLanguage.tryExportPlan(tryExport)).omarchyHelpText()
         }
         .fixedSize(horizontal: false, vertical: true)
       }
@@ -608,6 +610,12 @@ struct OnePageInstallerView: View {
           .foregroundStyle(OmarchyTheme.caution)
           .fixedSize(horizontal: false, vertical: true)
       }
+      if let tryExport = handoff.tryExport {
+        Text(tryExport)
+          .font(OmarchyTheme.body)
+          .foregroundStyle(OmarchyTheme.secondaryText)
+          .fixedSize(horizontal: false, vertical: true)
+      }
       ForEach(handoff.steps) { step in
         RecoveryStepRow(step: step)
       }
@@ -686,6 +694,12 @@ struct OnePageInstallerView: View {
           .font(OmarchyTheme.body)
           .foregroundStyle(OmarchyTheme.secondaryText)
           .fixedSize(horizontal: false, vertical: true)
+        if let tryExport = completion.tryExport {
+          Text(tryExport)
+            .font(OmarchyTheme.body)
+            .foregroundStyle(OmarchyTheme.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+        }
         FactGrid(rows: completion.verified, labelWidth: 118)
           .padding(.top, 6)
       }
@@ -892,7 +906,7 @@ private struct TryExportPanel: View {
             }
             if chosenID != nil {
               status
-              Text(PlainLanguage.tryExportNotYet).omarchyHelpText()
+              Text(PlainLanguage.tryExportComesAlong).omarchyHelpText()
             }
             if let note = PlainLanguage.tryExportUnusable(unusable) {
               Text(note).omarchyHelpText()

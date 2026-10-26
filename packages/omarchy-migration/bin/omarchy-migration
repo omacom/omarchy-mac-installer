@@ -1,0 +1,20 @@
+#!/bin/bash
+# Run omarchy-migration from its package directory or an installed root.
+set -euo pipefail
+
+here="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
+lib=""
+# Source tree first, then <root>/usr/bin/../lib/omarchy-migration when installed.
+for candidate in "$here/../lib" "$here/../lib/omarchy-migration"; do
+  if [[ -f "$candidate/omarchy_migration/__main__.py" ]]; then
+    lib="$(cd -- "$candidate" && pwd)"
+    break
+  fi
+done
+if [[ -z $lib ]]; then
+  echo "omarchy-migration: cannot find its library next to $here" >&2
+  exit 1
+fi
+
+# Isolated mode ignores PYTHONPATH and user site packages.
+exec python3 -I -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from omarchy_migration.__main__ import main; sys.exit(main())' "$lib" "$@"

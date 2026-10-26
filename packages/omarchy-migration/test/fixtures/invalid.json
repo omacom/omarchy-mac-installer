@@ -1,0 +1,623 @@
+{
+  "cases": [
+    {
+      "name": "unknown schema",
+      "base": "receipt",
+      "op": "set",
+      "path": [
+        "schema"
+      ],
+      "expect": "unsupported_schema",
+      "value": "omarchy-migration/receipt/2"
+    },
+    {
+      "name": "probe schema is not a contract schema",
+      "base": "receipt",
+      "op": "set",
+      "path": [
+        "schema"
+      ],
+      "expect": "unsupported_schema",
+      "value": "omarchy-migration-fixture/1"
+    },
+    {
+      "name": "unknown top-level field",
+      "base": "receipt",
+      "op": "set",
+      "path": [
+        "filename"
+      ],
+      "expect": "unknown_field",
+      "value": "bundle.age"
+    },
+    {
+      "name": "missing export identity",
+      "base": "receipt",
+      "op": "delete",
+      "path": [
+        "export_id"
+      ],
+      "expect": "missing_field"
+    },
+    {
+      "name": "non-canonical uuid",
+      "base": "receipt",
+      "op": "set",
+      "path": [
+        "export_id"
+      ],
+      "expect": "invalid_uuid",
+      "value": "C4E6A8B0-2D4F-4A6C-9E8F-0A1B2C3D4E03"
+    },
+    {
+      "name": "uppercase digest",
+      "base": "receipt",
+      "op": "set",
+      "path": [
+        "bundle",
+        "sha256"
+      ],
+      "expect": "invalid_string",
+      "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    {
+      "name": "empty ciphertext",
+      "base": "receipt",
+      "op": "set",
+      "path": [
+        "bundle",
+        "bytes"
+      ],
+      "expect": "out_of_range",
+      "value": 0
+    },
+    {
+      "name": "oversized ciphertext",
+      "base": "receipt",
+      "op": "set",
+      "path": [
+        "bundle",
+        "bytes"
+      ],
+      "expect": "out_of_range",
+      "value": 276018757633
+    },
+    {
+      "name": "boolean is not an integer",
+      "base": "receipt",
+      "op": "set",
+      "path": [
+        "estimates",
+        "entries"
+      ],
+      "expect": "not_an_integer",
+      "value": true
+    },
+    {
+      "name": "unsupported bundle format",
+      "base": "receipt",
+      "op": "set",
+      "path": [
+        "bundle",
+        "format"
+      ],
+      "expect": "unsupported_value",
+      "value": "age-v1-x25519"
+    },
+    {
+      "name": "progress without request identity",
+      "base": "progress-capturing",
+      "op": "set",
+      "path": [
+        "request_id"
+      ],
+      "expect": "missing_value",
+      "value": null
+    },
+    {
+      "name": "complete without receipt",
+      "base": "progress-complete",
+      "op": "delete",
+      "path": [
+        "receipt"
+      ],
+      "expect": "missing_field"
+    },
+    {
+      "name": "receipt for another request",
+      "base": "progress-complete",
+      "op": "set",
+      "path": [
+        "receipt",
+        "request_id"
+      ],
+      "expect": "identity_mismatch",
+      "value": "00000000-0000-4000-8000-000000000000"
+    },
+    {
+      "name": "nested receipt error is located",
+      "base": "progress-complete",
+      "op": "set",
+      "path": [
+        "receipt",
+        "bundle",
+        "sha256"
+      ],
+      "expect": "invalid_string",
+      "value": "x"
+    },
+    {
+      "name": "error code on a non-failed phase",
+      "base": "progress-capturing",
+      "op": "set",
+      "path": [
+        "error"
+      ],
+      "expect": "unknown_field",
+      "value": "boom"
+    },
+    {
+      "name": "unknown phase",
+      "base": "progress-capturing",
+      "op": "set",
+      "path": [
+        "phase"
+      ],
+      "expect": "unsupported_value",
+      "value": "uploading"
+    },
+    {
+      "name": "sequence starts at one",
+      "base": "progress-capturing",
+      "op": "set",
+      "path": [
+        "sequence"
+      ],
+      "expect": "out_of_range",
+      "value": 0
+    },
+    {
+      "name": "request needs a category",
+      "base": "export-request",
+      "op": "set",
+      "path": [
+        "selection",
+        "categories"
+      ],
+      "expect": "out_of_range",
+      "value": []
+    },
+    {
+      "name": "duplicate selected store",
+      "base": "export-request",
+      "op": "set",
+      "path": [
+        "selection",
+        "credential_stores"
+      ],
+      "expect": "duplicate_item",
+      "value": [
+        "ssh",
+        "ssh"
+      ]
+    },
+    {
+      "name": "passphrase is never a request field",
+      "base": "export-request",
+      "op": "set",
+      "path": [
+        "passphrase"
+      ],
+      "expect": "unknown_field",
+      "value": "hunter2"
+    },
+    {
+      "name": "system account source",
+      "base": "inventory",
+      "op": "set",
+      "path": [
+        "source",
+        "account_uid"
+      ],
+      "expect": "out_of_range",
+      "value": 0
+    },
+    {
+      "name": "unsupported architecture",
+      "base": "inventory",
+      "op": "set",
+      "path": [
+        "source",
+        "architecture"
+      ],
+      "expect": "unsupported_value",
+      "value": "x86_64"
+    },
+    {
+      "name": "duplicate category",
+      "base": "inventory",
+      "op": "set",
+      "path": [
+        "categories",
+        1,
+        "id"
+      ],
+      "expect": "duplicate_item",
+      "value": "configuration"
+    },
+    {
+      "name": "private path in inventory",
+      "base": "inventory",
+      "op": "set",
+      "path": [
+        "categories",
+        0,
+        "path"
+      ],
+      "expect": "unknown_field",
+      "value": "/home/scott/.ssh"
+    },
+    {
+      "name": "available adapter with reason",
+      "base": "capabilities",
+      "op": "set",
+      "path": [
+        "adapters",
+        0,
+        "reason"
+      ],
+      "expect": "inconsistent_fields",
+      "value": "x"
+    },
+    {
+      "name": "unavailable adapter without reason",
+      "base": "capabilities",
+      "op": "delete",
+      "path": [
+        "adapters",
+        1,
+        "reason"
+      ],
+      "expect": "inconsistent_fields"
+    },
+    {
+      "name": "capabilities must list itself",
+      "base": "capabilities",
+      "op": "set",
+      "path": [
+        "documents"
+      ],
+      "expect": "missing_value",
+      "value": [
+        "omarchy-migration/receipt/1"
+      ]
+    },
+    {
+      "name": "unknown operation",
+      "base": "capabilities",
+      "op": "set",
+      "path": [
+        "operations",
+        0
+      ],
+      "expect": "unsupported_value",
+      "value": "upload"
+    },
+    {
+      "name": "plan destination home is not serialized",
+      "base": "plan",
+      "op": "set",
+      "path": [
+        "destination",
+        "home"
+      ],
+      "expect": "unknown_field",
+      "value": "/home/scott"
+    },
+    {
+      "name": "plan destination is a person",
+      "base": "plan",
+      "op": "set",
+      "path": [
+        "destination",
+        "account_uid"
+      ],
+      "expect": "out_of_range",
+      "value": 999
+    },
+    {
+      "name": "report outcome vocabulary",
+      "base": "report",
+      "op": "set",
+      "path": [
+        "categories",
+        0,
+        "outcome"
+      ],
+      "expect": "unsupported_value",
+      "value": "ok"
+    },
+    {
+      "name": "report reasons are codes",
+      "base": "report",
+      "op": "set",
+      "path": [
+        "categories",
+        0,
+        "reasons"
+      ],
+      "expect": "invalid_string",
+      "value": [
+        "Destination changed!"
+      ]
+    },
+    {
+      "name": "policy parent traversal",
+      "base": "policy",
+      "op": "set",
+      "path": [
+        "rules",
+        0,
+        "path"
+      ],
+      "expect": "unsafe_path",
+      "value": "../.ssh"
+    },
+    {
+      "name": "policy absolute rule path",
+      "base": "policy",
+      "op": "set",
+      "path": [
+        "rules",
+        0,
+        "path"
+      ],
+      "expect": "unsafe_path",
+      "value": "/etc/passwd"
+    },
+    {
+      "name": "policy rule inside a credential store",
+      "base": "policy",
+      "op": "set",
+      "path": [
+        "rules",
+        0,
+        "path"
+      ],
+      "expect": "overlapping_paths",
+      "value": ".ssh/config"
+    },
+    {
+      "name": "policy overlapping store roots",
+      "base": "policy",
+      "op": "set",
+      "path": [
+        "credential_stores",
+        1,
+        "roots"
+      ],
+      "expect": "overlapping_paths",
+      "value": [
+        ".ssh/keys"
+      ]
+    },
+    {
+      "name": "transform on a tree",
+      "base": "policy",
+      "op": "set",
+      "path": [
+        "rules",
+        1,
+        "match"
+      ],
+      "expect": "inconsistent_fields",
+      "value": "tree"
+    },
+    {
+      "name": "transform without parameters",
+      "base": "policy",
+      "op": "delete",
+      "path": [
+        "rules",
+        1,
+        "transform"
+      ],
+      "expect": "missing_field"
+    },
+    {
+      "name": "transform field on a non-transform rule",
+      "base": "policy",
+      "op": "set",
+      "path": [
+        "rules",
+        0,
+        "transform"
+      ],
+      "expect": "unknown_field",
+      "value": {
+        "type": "remove-json-keys",
+        "format": "json",
+        "keys": [
+          "a"
+        ]
+      }
+    },
+    {
+      "name": "unknown transform",
+      "base": "policy",
+      "op": "set",
+      "path": [
+        "rules",
+        1,
+        "transform",
+        "type"
+      ],
+      "expect": "unsupported_value",
+      "value": "run-script"
+    },
+    {
+      "name": "relative mount",
+      "base": "policy",
+      "op": "set",
+      "path": [
+        "mounts",
+        0,
+        "path"
+      ],
+      "expect": "unsafe_path",
+      "value": "mnt/mac"
+    },
+    {
+      "name": "evidence escapes the checkout",
+      "base": "policy",
+      "op": "set",
+      "path": [
+        "rules",
+        0,
+        "evidence",
+        "path"
+      ],
+      "expect": "unsafe_path",
+      "value": "guest/../../etc/passwd"
+    },
+    {
+      "name": "short commit",
+      "base": "policy",
+      "op": "set",
+      "path": [
+        "source",
+        "commit"
+      ],
+      "expect": "invalid_string",
+      "value": "e1a0dbe"
+    },
+    {
+      "name": "nested rules depend on order",
+      "base": "policy",
+      "op": "set",
+      "path": [
+        "rules",
+        1,
+        "path"
+      ],
+      "expect": "overlapping_paths",
+      "value": ".config/hypr/monitors.lua/inner"
+    },
+    {
+      "name": "share store file pattern with a slash",
+      "base": "policy",
+      "op": "set",
+      "path": [
+        "share_stores",
+        3,
+        "files",
+        0
+      ],
+      "expect": "invalid_string",
+      "value": "keys/id_rsa"
+    },
+    {
+      "name": "share store with no patterns",
+      "base": "policy",
+      "op": "set",
+      "path": [
+        "share_stores",
+        0,
+        "directories"
+      ],
+      "expect": "missing_value",
+      "value": []
+    },
+    {
+      "name": "share store id reused from a home store",
+      "base": "policy",
+      "op": "set",
+      "path": [
+        "share_stores",
+        0,
+        "id"
+      ],
+      "expect": "duplicate_item",
+      "value": "ssh"
+    },
+    {
+      "name": "share store directory escaping",
+      "base": "policy",
+      "op": "set",
+      "path": [
+        "share_stores",
+        0,
+        "directories",
+        0
+      ],
+      "expect": "unsafe_path",
+      "value": "../.ssh"
+    },
+    {
+      "name": "share stores without their share",
+      "base": "export-request",
+      "op": "set",
+      "path": [
+        "selection",
+        "mounts"
+      ],
+      "expect": "inconsistent_fields",
+      "value": []
+    },
+    {
+      "name": "measured share without counts",
+      "base": "inventory",
+      "op": "delete",
+      "path": [
+        "mounts",
+        0,
+        "files"
+      ],
+      "expect": "missing_field"
+    },
+    {
+      "name": "unmeasured share with counts",
+      "base": "inventory",
+      "op": "set",
+      "path": [
+        "mounts",
+        0,
+        "measured"
+      ],
+      "expect": "unknown_field",
+      "value": false
+    },
+    {
+      "name": "request without share fields",
+      "base": "export-request",
+      "op": "delete",
+      "path": [
+        "selection",
+        "share_stores"
+      ],
+      "expect": "missing_field"
+    }
+  ],
+  "raw": [
+    {
+      "name": "duplicate key",
+      "raw": "{\"schema\": \"omarchy-migration/plan/1\", \"schema\": \"omarchy-migration/plan/1\"}",
+      "expect": "duplicate_key"
+    },
+    {
+      "name": "NaN constant",
+      "raw": "{\"schema\": \"omarchy-migration/plan/1\", \"required_bytes\": NaN}",
+      "expect": "invalid_json"
+    },
+    {
+      "name": "not JSON",
+      "raw": "schema: plan",
+      "expect": "invalid_json"
+    },
+    {
+      "name": "top-level array",
+      "raw": "[]",
+      "expect": "not_an_object"
+    }
+  ]
+}

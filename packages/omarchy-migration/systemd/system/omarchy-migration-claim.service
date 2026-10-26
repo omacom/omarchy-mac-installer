@@ -1,0 +1,17 @@
+# Takes the export the installer staged in Root's free space, before owner
+# setup, so the owner's first login can offer it. It never blocks the boot.
+[Unit]
+Description=Claim the Try Omarchy export the installer staged
+ConditionPathExists=/boot/efi/omarchy/migration.json
+After=local-fs.target boot-efi.mount
+Before=omarchy-mac-first-boot.service omarchy-provision-owner.service display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/omarchy-migration claim
+TimeoutStartSec=30min
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

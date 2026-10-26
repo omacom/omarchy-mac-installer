@@ -1,0 +1,26 @@
+{
+  "categories": [
+    {
+      "conflicts": 1,
+      "id": "configuration",
+      "omitted": 0,
+      "outcome": "partial",
+      "reasons": [
+        "destination_changed"
+      ],
+      "restored": 3
+    },
+    {
+      "conflicts": 0,
+      "id": "files-and-projects",
+      "omitted": 0,
+      "outcome": "restored",
+      "reasons": [],
+      "restored": 2
+    }
+  ],
+  "export_id": "c4e6a8b0-2d4f-4a6c-9e8f-0a1b2c3d4e03",
+  "job_id": "a7c9e1b3-5d7f-4a9b-8c1d-3e5f7a9b1c05",
+  "plan_id": "e1f3a5c7-4b6d-4e8f-a0b2-c4d6e8f0a104",
+  "schema": "omarchy-migration/report/1"
+}

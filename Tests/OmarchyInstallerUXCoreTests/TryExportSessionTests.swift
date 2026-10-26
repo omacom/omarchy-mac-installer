@@ -32,6 +32,37 @@
       return session
     }
 
+    func testThePlanAndTheInstallBringTheCheckedExport() async throws {
+      let environment = MockInstallerEnvironment()
+      environment.tryExportAnswers = [.found([Self.newer], unusable: 0)]
+      let session = await welcomed(environment)
+      await session.refreshTryExports()
+      await session.chooseTryExport(Self.newer.id)
+      await session.continueToPlan()
+      session.continueToPlanReview()
+      session.setAcknowledged(true)
+      session.approve()
+      session.presentInstallCredentials()
+      await session.submit(
+        try MachineOwnerAuthorization(username: "owner", password: Data("pw".utf8)))
+      XCTAssertEqual(environment.executeCount, 1)
+      XCTAssertEqual(environment.exportsForInstall.first, Self.newer.id)
+      XCTAssertEqual(environment.exportsForInstall.last, Self.newer.id)
+
+      let plain = MockInstallerEnvironment()
+      let other = await welcomed(plain)
+      await other.continueToPlan()
+      XCTAssertEqual(plain.exportsForInstall, [nil])
+    }
+
+    func testStagingOutcomesAreWorded() {
+      XCTAssertTrue(
+        PlainLanguage.tryExportStaging(.staged(exportID: Self.newer.id)).contains("first login"))
+      XCTAssertTrue(PlainLanguage.tryExportStaging(.notStaged(.noRoom)).contains("room"))
+      XCTAssertTrue(
+        PlainLanguage.tryExportStaging(.notStaged(.helperFailed)).contains("Exports folder"))
+    }
+
     func testFindsExportsWithoutChoosingOne() async {
       let environment = MockInstallerEnvironment()
       environment.tryExportAnswers = [.found([Self.newer, Self.older], unusable: 1)]
@@ -74,6 +105,36 @@
       await session.chooseTryExport(Self.older.id)
       XCTAssertNil(session.chosenTryExportID)
       XCTAssertEqual(environment.checkedTryExports, [])
+    }
+
+    func testTheEnvironmentHearsOfAnExportThatFailedItsCheck() async {
+      let environment = MockInstallerEnvironment()
+      environment.tryExportAnswers = [.found([Self.newer], unusable: 0)]
+      environment.tryExportChecks = [Self.newer.id: .failed("tampered")]
+      let session = await welcomed(environment)
+      await session.refreshTryExports()
+      await session.chooseTryExport(Self.newer.id)
+      await session.continueToPlan()
+      XCTAssertNil(session.chosenTryExport)
+      XCTAssertEqual(environment.exportsForInstall, [Self.newer.id])
+    }
+
+    func testAPlanStartedDuringTheCheckWaitsForIt() async {
+      let environment = MockInstallerEnvironment()
+      let slow = OperationGate()
+      environment.tryExportAnswers = [.found([Self.newer], unusable: 0)]
+      environment.tryExportCheckGates = [slow]
+      let session = await welcomed(environment)
+      await session.refreshTryExports()
+      let choice = Task { await session.chooseTryExport(Self.newer.id) }
+      await slow.waitUntilEntered()
+      let plan = Task { await session.continueToPlan() }
+      for _ in 0..<20 { await Task.yield() }
+      XCTAssertEqual(environment.exportsForInstall, [])
+      await slow.release()
+      await choice.value
+      await plan.value
+      XCTAssertEqual(environment.exportsForInstall, [Self.newer.id])
     }
 
     func testOnlyTheLatestChoicesCheckIsKept() async {

@@ -245,6 +245,60 @@ struct TryOmarchyExportDiscoveryTests {
     }
   }
 
+  @Test func anotherLookKeepsTheCheckOnlyForUnchangedFiles() throws {
+    let folder = try Folder()
+    let directory = try folder.publish()
+    let verified = try folder.discovery.verify(try #require(try folder.found().exports.first))
+    let again = try #require(try folder.found().exports.first)
+    #expect(!again.verified)
+    #expect(again.keepingVerification(of: verified).verified)
+    #expect(!again.keepingVerification(of: nil).verified)
+
+    let bundle = directory.appendingPathComponent("bundle.age")
+    var bytes = try Data(contentsOf: bundle)
+    bytes[bytes.count - 1] ^= 0xFF
+    try bytes.write(to: bundle)
+    chmod(bundle.path, 0o600)
+    let changed = try #require(try folder.found().exports.first)
+    #expect(!changed.keepingVerification(of: verified).verified)
+  }
+
+  @Test func stagingOpensOnlyTheExportThatWasChecked() throws {
+    let folder = try Folder()
+    let directory = try folder.publish()
+    let export = try #require(try folder.found().exports.first)
+    #expect(throws: TryOmarchyExportProblem.changedDuringVerification) {
+      try folder.discovery.openForStaging(export)
+    }
+    let verified = try folder.discovery.verify(export)
+    let (bundle, receipt) = try folder.discovery.openForStaging(verified)
+    #expect(receipt == (try Data(contentsOf: directory.appendingPathComponent("receipt.json"))))
+    #expect(
+      try bundle.readToEnd()
+        == (try Data(contentsOf: directory.appendingPathComponent("bundle.age"))))
+
+    // Another valid export put in place of the checked one.
+    let other = try folder.publish(payload: Data(repeating: 7, count: 80_000))
+    for name in ["bundle.age", "receipt.json"] {
+      let target = directory.appendingPathComponent(name)
+      try FileManager.default.removeItem(at: target)
+      try FileManager.default.copyItem(at: other.appendingPathComponent(name), to: target)
+    }
+    #expect(throws: TryOmarchyExportProblem.changedDuringVerification) {
+      try folder.discovery.openForStaging(verified)
+    }
+
+    let piped = try Folder()
+    let pipedDirectory = try piped.publish()
+    let checked = try piped.discovery.verify(try #require(try piped.found().exports.first))
+    let receiptURL = pipedDirectory.appendingPathComponent("receipt.json")
+    try FileManager.default.removeItem(at: receiptURL)
+    #expect(mkfifo(receiptURL.path, 0o600) == 0)
+    #expect(throws: TryOmarchyExportProblem.unsafeOwnership) {
+      try piped.discovery.openForStaging(checked)
+    }
+  }
+
   @Test func verificationStopsWhenCancelled() throws {
     let folder = try Folder()
     try folder.publish()

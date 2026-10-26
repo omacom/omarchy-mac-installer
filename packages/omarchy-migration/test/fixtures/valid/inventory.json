@@ -1,0 +1,58 @@
+{
+  "categories": [
+    {
+      "bytes": 1048000,
+      "default_selected": true,
+      "files": 4,
+      "id": "configuration"
+    },
+    {
+      "bytes": 576,
+      "default_selected": true,
+      "files": 2,
+      "id": "files-and-projects"
+    }
+  ],
+  "credential_stores": [
+    {
+      "adapter_available": true,
+      "category": "credentials",
+      "id": "ssh",
+      "present": true
+    },
+    {
+      "adapter_available": false,
+      "category": "browser-profile",
+      "id": "chromium",
+      "present": true
+    }
+  ],
+  "inventory_id": "5b0c7a52-3f1e-4c4e-9a1d-2f6e8b0c1d01",
+  "mounts": [
+    {
+      "bytes": 52428800,
+      "files": 214,
+      "id": "mac-share",
+      "linked": true,
+      "measured": true,
+      "share_stores": [
+        {
+          "category": "credentials",
+          "id": "share-ssh"
+        },
+        {
+          "category": "credentials",
+          "id": "share-macos-keychains"
+        }
+      ]
+    }
+  ],
+  "policy_revision": "try-omarchy/90c8210/1",
+  "schema": "omarchy-migration/inventory/2",
+  "source": {
+    "account_uid": 1000,
+    "architecture": "aarch64",
+    "omarchy_version": "4.0.4",
+    "provider": "try-omarchy"
+  }
+}

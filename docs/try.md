@@ -40,7 +40,7 @@ Omarchy exports the home folder from inside the virtual machine with **Setup →
 - **A finished export in the running virtual machine's outbox:** **Shut Down Omarchy** shuts it down, the launcher publishes the export, and the sheet then offers it as above. Only the outbox's folder names are read; exports come from Exports alone.
 - **No export:** the sheet says how to make one, with **Cancel** as the default button.
 
-**Install Without Migrating** is in every case, and drops any chosen export. Staging the chosen export onto the native disk, and importing it on the native system, are not built yet, and the sheet and the plan review say so. The sheet's words live in `PlainLanguage+Trial`, its cases in `TrialMigrationOffer`, and `TrialSession.chooseInstall` opens it.
+**Install Without Migrating** is in every case, and drops any chosen export. With an export chosen, the plan needs room to stage it, claim it and import it (`TryExportStagingRegion.additionalInstallBytes`), and the smallest Omarchy the plan offers grows to match. When even the largest doesn't fit, the plan review says so and the install goes ahead without it. After the install, the helper stages the export onto the new Root partition, and the Recovery page says whether it did ([native import](native-import.md)). The sheet's words live in `PlainLanguage+Trial`, its cases in `TrialMigrationOffer`, and `TrialSession.chooseInstall` opens it.
 
 ## How it is built
 

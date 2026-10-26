@@ -1,0 +1,6 @@
+#!/bin/bash
+# Review and import the export Try Omarchy left on this Mac's native install.
+set -euo pipefail
+
+here="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
+exec "$here/omarchy-migration" import "$@"

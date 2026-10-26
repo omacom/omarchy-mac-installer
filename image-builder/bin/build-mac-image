@@ -303,7 +303,7 @@ host_main() {
   commit=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null) || commit=${GITHUB_SHA:-}
   [[ $commit =~ ^[0-9a-f]{40}$ ]] || fail "cannot tell which commit is building"
   # A tree git cannot read is not known to be clean.
-  status=$(git -C "$ROOT" status --porcelain -- . 2>/dev/null) || clean=false
+  status=$(git -C "$ROOT" status --porcelain -- . ../packages/omarchy-migration 2>/dev/null) || clean=false
   [[ -z $status ]] || clean=false
 
   local rootfs_args=("$inputs" "$host_work/rootfs.tar.gz") db_args=("$inputs" "$host_work/dbs")
@@ -331,7 +331,8 @@ host_main() {
   # them, and --rm removes it with the container. In the background, so an
   # interruption reaches the traps above at once.
   docker run --rm --cidfile "$host_work/cid" --privileged --platform linux/arm64 \
-    -v "$ROOT:/src:ro" -v "$inputs:/inputs:ro" -v "$host_work/candidates:/candidates:ro" \
+    -v "$ROOT:/src:ro" -v "$ROOT/../packages/omarchy-migration:/migration:ro" \
+    -v "$inputs:/inputs:ro" -v "$host_work/candidates:/candidates:ro" \
     -v "$host_work/dbs:/dbs:ro" -v "$out:/out" -v /work "${cache_mounts[@]}" "${lab_mounts[@]}" "${recovery_mounts[@]}" \
     -e MAC_IMAGE_BUILDER_COMMIT="$commit" \
     -e MAC_IMAGE_BUILDER_CLEAN="$clean" \
@@ -1166,6 +1167,45 @@ stage_owner_provisioning() {
     "$target/etc/systemd/system/multi-user.target.wants/omarchy-provision-owner.service"
 }
 
+# The native import of a Try export (docs/native-import.md): omarchy-migration
+# from this repository, with the pinned age it decrypts with, so the claim at
+# first boot and the import offer work offline. Its units come enabled.
+stage_migration() {
+  local version url size sha256 binary_sha256 key value cached archive
+  while IFS='=' read -r key value; do
+    case $key in
+      version) version=$value ;;
+      url) url=$value ;;
+      size) size=$value ;;
+      sha256) sha256=$value ;;
+      binary_sha256) binary_sha256=$value ;;
+    esac
+  done < <(grep -v '^#' "$ROOT/builder/age.pin")
+  [[ $url == "https://github.com/FiloSottile/age/releases/download/v$version/age-v$version-linux-arm64.tar.gz" ]] ||
+    fail "the age pin names another download"
+  cached=/cache/age-v$version-linux-arm64.tar.gz
+  if [[ ! -f $cached || $(sha256_of "$cached") != "$sha256" ]]; then
+    curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --retry 3 \
+      --output "$cached.partial" "$url" || fail "could not download age"
+    mv -f "$cached.partial" "$cached"
+  fi
+  [[ $(stat -c %s "$cached") == "$size" && $(sha256_of "$cached") == "$sha256" ]] || {
+    rm -f "$cached"
+    fail "the age download does not match its pinned checksum"
+  }
+  archive=$work/age
+  rm -rf "$archive"
+  mkdir -p "$archive"
+  tar -xzf "$cached" -C "$archive" age/age age/LICENSE || fail "could not unpack age"
+  [[ $(sha256_of "$archive/age/age") == "$binary_sha256" ]] || fail "the age binary does not match its pin"
+  [[ -x /migration/install ]] || fail "omarchy-migration is not mounted at /migration"
+  /migration/install "$target" || fail "could not stage omarchy-migration"
+  install -D -m 0755 "$archive/age/age" "$target/usr/lib/omarchy-migration/age"
+  printf '%s\n' "$binary_sha256" >"$target/usr/lib/omarchy-migration/age.sha256"
+  chmod 0644 "$target/usr/lib/omarchy-migration/age.sha256"
+  install -D -m 0644 "$archive/age/LICENSE" "$target/usr/share/licenses/omarchy-migration/age-LICENSE"
+}
+
 # First boot, armed by the boot package's own command. A boot package whose
 # first boot runs the Limine leaf from the fresh-image contract gets that
 # contract's deferred-steps; it and pending together authorise the fresh
@@ -1253,6 +1293,7 @@ configure_image() {
   apply_presets
   write_installed_config
   stage_owner_provisioning
+  stage_migration
   forget_private_pacman
   apply_lab_access
 
@@ -1587,6 +1628,7 @@ write_installer_data() {
     --args '{os_list: [{
       name: "Omarchy MX Mac", default_os_name: "Omarchy", omarchy_target: "apple-silicon-full-os",
       boot_object: "m1n1.bin", next_object: "m1n1/boot.bin", package: $package, icon: "omarchy-volume.icns",
+      native_import: "omarchy-migration/staging/1",
       supported_fw: $ARGS.positional,
       partitions: [
         {name: "EFI", type: "EFI", size: "\($esp)B", format: "fat", volume_id: $volume_id,

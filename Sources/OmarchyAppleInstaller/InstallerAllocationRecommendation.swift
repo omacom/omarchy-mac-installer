@@ -36,12 +36,13 @@ public struct InstallerAllocationRecommendation:
     inventory: ValidatedEngineInventory,
     targetBytes: UInt64 = Self.balancedTargetBytes,
     reservedBytes: UInt64 = 0,
+    additionalMinimumBytes: UInt64 = 0,
     snapshotConstraint: () -> APFSSnapshotConstraint? = { nil }
   ) throws {
     let unit = PinnedAsahiPlanRequest.allocationUnitBytes
     let ranked = inventory.candidates.compactMap { candidate -> Ranked? in
       var minimum = Self.alignUp(
-        candidate.minimumInstallBytes,
+        Self.saturatingAdd(candidate.minimumInstallBytes, additionalMinimumBytes),
         unit: unit
       )
       let maximum: UInt64
@@ -69,7 +70,7 @@ public struct InstallerAllocationRecommendation:
         if let recommended = candidate.recommendedInstallBytes {
           let alignedRecommended = Self.alignUp(recommended, unit: unit)
           if alignedRecommended < marginCeiling - (marginCeiling % unit) {
-            minimum = alignedRecommended
+            minimum = max(minimum, alignedRecommended)
           }
         }
         // The margin is best effort: on a tight disk keep what fits above the

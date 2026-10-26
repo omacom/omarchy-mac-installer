@@ -21,6 +21,11 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
   private var planApproval: CandidateBoundPlanApproval?
   private var reusableAssets: PreparedInstallerAssets?
   private var releaseConfiguration: InstallerReleaseConfiguration?
+  private var tryExportForInstall: String?
+  /// The export the prepared plan has room for.
+  private var plannedTryExport: TryOmarchyExport?
+  /// Set once the helper staged it for the prepared plan.
+  private var stagedTryExport: TryExportStagingOutcome?
   private let buildProfile = InstallerBuildProfile.current
   private var encryptLinuxDisk = true
   private var selectedLane = ReleaseChannel.stable.rawValue
@@ -182,6 +187,10 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
 
   func cancelTryOmarchyExportCheck() { tryExportShelf.cancelVerification() }
 
+  func useTryExportForInstall(_ exportID: String?) {
+    lock.withLock { tryExportForInstall = exportID }
+  }
+
   /// Every channel's catalog, checked side by side for this Mac. A channel
   /// whose rollback state cannot be read counts as unverifiable rather than
   /// skipping the rollback check.
@@ -255,6 +264,8 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       preparedPlan = nil
       planApproval = nil
       releaseConfiguration = nil
+      plannedTryExport = nil
+      stagedTryExport = nil
       return retained
     }
 
@@ -342,14 +353,43 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     if !existing.isEmpty {
       return .existingInstallChoice(existing)
     }
-    let recommendation = try InstallerAllocationRecommendation(
-      inventory: inventory,
-      targetBytes: omarchyBytes ?? InstallerAllocationRecommendation.balancedTargetBytes,
-      reservedBytes: planningReserve,
-      snapshotConstraint: {
-        APFSSnapshotInspector().constraint(in: host.storage)
+    let chosenID = lock.withLock { tryExportForInstall }
+    let chosenExport = chosenID.flatMap { tryExportShelf.verifiedExport(id: $0) }
+    func recommend(additionalMinimumBytes: UInt64) throws -> InstallerAllocationRecommendation {
+      try InstallerAllocationRecommendation(
+        inventory: inventory,
+        targetBytes: omarchyBytes ?? InstallerAllocationRecommendation.balancedTargetBytes,
+        reservedBytes: planningReserve,
+        additionalMinimumBytes: additionalMinimumBytes,
+        snapshotConstraint: {
+          APFSSnapshotInspector().constraint(in: host.storage)
+        }
+      )
+    }
+    var tryExportPlan: TryExportPlan? = nil
+    let recommendation: InstallerAllocationRecommendation
+    if chosenID != nil, chosenExport == nil {
+      recommendation = try recommend(additionalMinimumBytes: 0)
+      tryExportPlan = .notVerified
+    } else if chosenExport != nil,
+      !TryExportImageSupport.claimsExports(metadataURL: release.assets.metadata.fileURL)
+    {
+      recommendation = try recommend(additionalMinimumBytes: 0)
+      tryExportPlan = .releaseCannotImport
+    } else if let chosenExport {
+      do {
+        recommendation = try recommend(
+          additionalMinimumBytes: TryExportStagingRegion.additionalInstallBytes(
+            bundleBytes: UInt64(chosenExport.receipt.bundleBytes),
+            expandedBytes: UInt64(chosenExport.receipt.expandedBytes)))
+        tryExportPlan = .comesAlong
+      } catch {
+        recommendation = try recommend(additionalMinimumBytes: 0)
+        tryExportPlan = .noRoom
       }
-    )
+    } else {
+      recommendation = try recommend(additionalMinimumBytes: 0)
+    }
     let candidate = recommendation.candidate
     let requestedLengthBytes = recommendation.requestedLengthBytes
 
@@ -372,12 +412,13 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       preparedPlan = prepared
       planReview = prepared.review
       releaseConfiguration = configuration
+      plannedTryExport = tryExportPlan == .comesAlong ? chosenExport : nil
     }
 
     return .plan(
       Self.planDisplay(
         review: prepared.review, host: freshHost, recommendation: recommendation,
-        reservedBytes: planningReserve,
+        reservedBytes: planningReserve, tryExport: tryExportPlan,
         release:
           "\(channel.rawValue.capitalized) · \(release.assets.payload.fileURL.lastPathComponent)"
       ))
@@ -586,6 +627,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       throw EngineXPCSubmissionError.engineFailed(notice)
     }
     var installConf: InstallConfHandoff = .recorded
+    var tryExport: TryExportStagingOutcome?
     let handoffOperation: EngineHandoffOperation =
       operation == .retryRecoveryAuthorization ? .retryRecoveryAuthorization : .install
     if InstallConfRecordPolicy.shouldRecord(
@@ -597,12 +639,49 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
         authorization: authorization,
         encrypt: encryptLinuxDisk
       )
+      // A Recovery retry stages too: an install that failed at Recovery
+      // authorization stopped before staging.
+      if let export = lock.withLock({ plannedTryExport }) {
+        if let staged = lock.withLock({ stagedTryExport }) {
+          tryExport = staged
+        } else {
+          let outcome = await stageTryExport(
+            export, configuration: configuration, plan: prepared.review.plan,
+            authorization: authorization)
+          if case .staged = outcome { lock.withLock { stagedTryExport = outcome } }
+          tryExport = outcome
+        }
+      }
       if operation == .install {
         InstallationTimingHistory.recordCompleted(
           seconds: ProcessInfo.processInfo.systemUptime - executionStarted)
       }
     }
-    return Self.completionDisplay(progress, installConf: installConf)
+    return Self.completionDisplay(progress, installConf: installConf, tryExport: tryExport)
+  }
+
+  /// Any failure leaves the export in Exports and the install as it is.
+  private func stageTryExport(
+    _ export: TryOmarchyExport,
+    configuration: InstallerReleaseConfiguration,
+    plan: ValidatedEnginePlan,
+    authorization: MachineOwnerAuthorization
+  ) async -> TryExportStagingOutcome {
+    guard let (bundle, receipt) = try? tryExportShelf.openForStaging(export) else {
+      return .notStaged(.bundleChanged)
+    }
+    do {
+      let submitter = try AuthenticatedEngineXPCSubmitter(
+        machServiceName: configuration.helperMachServiceName,
+        helperCodeSigningRequirement: configuration.helperCodeSigningRequirement
+      )
+      return try await submitter.stageTryExport(
+        bundle: bundle, receipt: receipt, storeIdentifier: plan.storeIdentifier,
+        offsetBytes: plan.offsetBytes, lengthBytes: plan.lengthBytes,
+        authorization: authorization)
+    } catch {
+      return .notStaged(.helperFailed)
+    }
   }
 
   // MARK: Display mapping
@@ -710,6 +789,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     host: AppleSiliconHostInspection,
     recommendation: InstallerAllocationRecommendation,
     reservedBytes: UInt64 = 0,
+    tryExport: TryExportPlan? = nil,
     release: String
   ) -> PlanDisplay {
     let length = review.plan.lengthBytes
@@ -734,28 +814,33 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
         && recommendation.candidate.sourceIdentifier == host.storage.physicalStoreIdentifier
         ? host.storage.containerFreeBytes - min(host.storage.containerFreeBytes, reservedBytes)
         : nil,
-      recommendedOmarchyBytes: recommendation.candidate.recommendedInstallBytes
+      recommendedOmarchyBytes: recommendation.candidate.recommendedInstallBytes,
+      tryExport: tryExport
     )
   }
 
   static func completionDisplay(
     _ progress: InstallerExecutionProgress,
-    installConf: InstallConfHandoff = .recorded
+    installConf: InstallConfHandoff = .recorded,
+    tryExport: TryExportStagingOutcome? = nil
   ) -> CompletionDisplay {
     let handoff: HandoffDisplay?
     let warning = PlainLanguage.installConfWarning(installConf)
+    let tryExportLine = tryExport.map(PlainLanguage.tryExportStaging)
     switch progress.nextAction {
     case .enterRecovery:
       handoff = HandoffDisplay(
         headline: PlainLanguage.recoveryHeadline,
         steps: PlainLanguage.recoverySteps(for: progress.requiredHumanSteps),
-        warning: warning
+        warning: warning,
+        tryExport: tryExportLine
       )
     case .attachInstallationMedia:
       handoff = HandoffDisplay(
         headline: PlainLanguage.mediaHeadline,
         steps: PlainLanguage.recoverySteps(for: progress.requiredHumanSteps),
-        warning: warning
+        warning: warning,
+        tryExport: tryExportLine
       )
     default:
       handoff = nil
@@ -768,7 +853,8 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       subheadline: PlainLanguage.nextActionMessage(
         progress.nextAction, installConf: installConf),
       verified: PlainLanguage.doneVerifiedRows,
-      handoff: handoff
+      handoff: handoff,
+      tryExport: tryExportLine
     )
   }
 

@@ -1,0 +1,2 @@
+# Lets an administrator take a claimed Try Omarchy export into their own home.
+%wheel ALL=(root) NOPASSWD: /usr/lib/omarchy-migration/handoff ""

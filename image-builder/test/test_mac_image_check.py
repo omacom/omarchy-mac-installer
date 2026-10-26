@@ -281,9 +281,11 @@ class ChannelBuildDirectoryTest(unittest.TestCase):
         self.build()
         metadata = json.loads((self.out / "installer_data.json").read_text())
         engine = json.loads((ROOT.parent / "Engine/installer_data.json").read_text())
-        # A public image adds only the native Recovery declaration to the engine's template.
+        # A public image adds only the native Recovery and native import
+        # declarations to the engine's template.
         engine["os_list"][0].update(package=NAME, supported_fw=["13.5", "14.8.3", "26.6.2"],
-                                    recovery_gui="omarchy-native-v1")
+                                    recovery_gui="omarchy-native-v1",
+                                    native_import="omarchy-migration/staging/1")
         self.assertEqual(metadata, engine)
 
     def test_a_public_image_is_named_for_its_lane_date_package_set_and_bytes(self):
@@ -569,6 +571,74 @@ class BuildDirectoryTest(unittest.TestCase):
                         "omarchy-volume.icns"], cwd=payload, check=True)
         with self.assertRaisesRegex(check.CheckError, "not Limine"):
             check.check_payload("edge", self.out / NAME, self.out / "installer_data.json")
+
+
+class MigrationTest(unittest.TestCase):
+    """The native import of a Try export: the staged package, its enabled
+    units and the pinned age."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "root"
+        age = self.root / "usr/lib/omarchy-migration/age"
+        age.parent.mkdir(parents=True)
+        age.write_bytes(b"age binary")
+        age.chmod(0o755)
+        digest = hashlib.sha256(b"age binary").hexdigest()
+        (age.parent / "age.sha256").write_text(digest + "\n")
+        pin = Path(self.tmp.name) / "age.pin"
+        pin.write_text(f"# test\nversion=1.3.2\nbinary_sha256={digest}\n")
+        self.saved_pin, check.AGE_PIN = check.AGE_PIN, pin
+        command = self.root / "usr/bin/omarchy-migration"
+        command.parent.mkdir(parents=True)
+        command.write_text("#!/bin/bash\n")
+        command.chmod(0o755)
+        for tool in ("python3", "sudo"):
+            (self.root / "usr/bin" / tool).write_text("")
+        (self.root / "usr/lib/omarchy-migration/version").write_text("0.2.0\n")
+        for unit, wants in (("system/omarchy-migration-claim.service", "system/multi-user.target.wants"),
+                            ("user/omarchy-migration-offer.service", "user/graphical-session.target.wants")):
+            path = self.root / "usr/lib/systemd" / unit
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("[Unit]\n")
+            link = self.root / "usr/lib/systemd" / wants / path.name
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(f"../{path.name}")
+
+    def tearDown(self):
+        check.AGE_PIN = self.saved_pin
+        self.tmp.cleanup()
+
+    def test_a_staged_import_passes(self):
+        check.check_migration(self.root)
+
+    def test_a_missing_or_different_piece_is_refused(self):
+        cases = (
+            (lambda: (self.root / "usr/lib/omarchy-migration/age").write_bytes(b"other"), "age does not match"),
+            (lambda: (self.root / "usr/lib/systemd/system/multi-user.target.wants/omarchy-migration-claim.service").unlink(),
+             "claim is not enabled"),
+            (lambda: (self.root / "usr/lib/systemd/user/omarchy-migration-offer.service").unlink(), "is not staged"),
+            (lambda: (self.root / "usr/bin/omarchy-migration").unlink(), "omarchy-migration is not staged"),
+        )
+        for change, message in cases:
+            with self.subTest(message):
+                self.tearDown()
+                self.setUp()
+                change()
+                with self.assertRaisesRegex(check.CheckError, message):
+                    check.check_migration(self.root)
+
+    def test_an_image_never_carries_an_export(self):
+        marker = self.root / "boot/efi/omarchy/migration.json"
+        marker.parent.mkdir(parents=True)
+        marker.write_text("{}")
+        with self.assertRaisesRegex(check.CheckError, "staged export"):
+            check.check_migration(self.root)
+        marker.unlink()
+        claimed = self.root / "var/lib/omarchy-migration/incoming/x"
+        claimed.mkdir(parents=True)
+        with self.assertRaisesRegex(check.CheckError, "claimed export"):
+            check.check_migration(self.root)
 
 
 class SubvolumeTest(unittest.TestCase):

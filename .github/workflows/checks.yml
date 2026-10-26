@@ -23,7 +23,7 @@ jobs:
   portable:
     name: Portable checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -42,6 +42,14 @@ jobs:
             git --version
             id
           } | tee "$RUNNER_TEMP/installer-ci/toolchain.txt"
+      - name: Stage the pinned age for omarchy-migration's encryption tests
+        run: |
+          archive="$RUNNER_TEMP/age.tar.gz"
+          curl -fsSL -o "$archive" https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
+          echo "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          echo "OMARCHY_TEST_AGE=$RUNNER_TEMP/age/age" >>"$GITHUB_ENV"
+          echo "OMARCHY_TEST_AGE_SHA256=eb7dd1b518f0a307c99cd97782623c5321da049154b04acd2d98d21aa7bc9b2c" >>"$GITHUB_ENV"
       - name: Run portable suite
         run: bash test/all 2>&1 | tee "$RUNNER_TEMP/installer-ci/portable.log"
       - name: Save portable evidence
@@ -51,6 +59,32 @@ jobs:
           name: portable-evidence
           path: ${{ runner.temp }}/installer-ci/
           retention-days: 14
+
+  native-import:
+    name: Native import claim (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Stage the pinned age
+        run: |
+          archive="$RUNNER_TEMP/age.tar.gz"
+          curl -fsSL -o "$archive" https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
+          echo "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+      # Arch Linux, as the native system: Ubuntu's cryptsetup 2.7 can't combine
+      # --reduce-device-size with the --device-size the first boot passes.
+      - name: Claim and import a staged export through LUKS2 and Btrfs on a loop disk
+        run: |
+          docker run --rm --privileged -v "$PWD/packages/omarchy-migration:/src:ro" \
+            -v "$RUNNER_TEMP/age/age:/age:ro" archlinux:latest bash -c '
+              set -euo pipefail
+              pacman -Syu --noconfirm --needed --disable-sandbox btrfs-progs cryptsetup python sudo util-linux >/dev/null
+              cp -r /src /pkg
+              OMARCHY_TEST_AGE=/age OMARCHY_TEST_AGE_SHA256=eb7dd1b518f0a307c99cd97782623c5321da049154b04acd2d98d21aa7bc9b2c \
+                bash /pkg/test/claim-integration.sh'
 
   macos:
     name: macOS checks

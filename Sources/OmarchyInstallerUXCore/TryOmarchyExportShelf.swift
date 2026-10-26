@@ -33,7 +33,9 @@
       case .success(let found):
         lock.withLock {
           exports = Dictionary(
-            uniqueKeysWithValues: found.exports.map { ($0.receipt.exportID, $0) }
+            uniqueKeysWithValues: found.exports.map {
+              ($0.receipt.exportID, $0.keepingVerification(of: exports[$0.receipt.exportID]))
+            }
           )
         }
         return .found(
@@ -72,6 +74,18 @@
       case .failure:
         return .failed(PlainLanguage.tryExportMissing)
       }
+    }
+
+    /// The checked export's receipt and open bundle, unless either changed.
+    public func openForStaging(_ export: TryOmarchyExport) throws -> (
+      bundle: FileHandle, receipt: Data
+    ) {
+      try discovery.openForStaging(export)
+    }
+
+    /// The export with this id, once a check passed.
+    public func verifiedExport(id: String) -> TryOmarchyExport? {
+      lock.withLock { exports[id].flatMap { $0.verified ? $0 : nil } }
     }
 
     /// Stops the check under way, if any; its answer is no longer wanted.

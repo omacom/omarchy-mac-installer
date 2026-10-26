@@ -59,6 +59,20 @@
       password: Data,
       reply: @escaping @Sendable (Data?, NSError?) -> Void
     )
+
+    /// Stages a Try export onto the completed install's Root partition and
+    /// replies with a `TryExportStagingOutcome`. Helpers older than this
+    /// call never answer it.
+    func stageTryExport(
+      bundle: FileHandle,
+      receipt: Data,
+      storeIdentifier: String,
+      offsetBytes: UInt64,
+      lengthBytes: UInt64,
+      machineOwner: String,
+      password: Data,
+      reply: @escaping @Sendable (Data?, NSError?) -> Void
+    )
   }
 
   public enum EngineXPCSubmissionError: Error, Equatable, Sendable {
@@ -604,6 +618,58 @@
         }
       }
       return try InstallConfXPCCodec.decode(data)
+    }
+
+    public func stageTryExport(
+      bundle: FileHandle,
+      receipt: Data,
+      storeIdentifier: String,
+      offsetBytes: UInt64,
+      lengthBytes: UInt64,
+      authorization: MachineOwnerAuthorization
+    ) async throws -> TryExportStagingOutcome {
+      try await ping()
+      let connection = makeConnection()
+      let handle = SendableXPCConnection(connection)
+      let data: Data = try await withCheckedThrowingContinuation { continuation in
+        let gate = EngineXPCReplyGate(continuation: continuation)
+        connection.interruptionHandler = {
+          gate.resume(throwing: EngineXPCSubmissionError.connectionFailed)
+        }
+        connection.invalidationHandler = {
+          gate.resume(throwing: EngineXPCSubmissionError.connectionFailed)
+        }
+        connection.activate()
+        guard
+          let proxy = connection.remoteObjectProxyWithErrorHandler({ _ in
+            gate.resume(throwing: EngineXPCSubmissionError.connectionFailed)
+            handle.invalidate()
+          }) as? ClosedEngineXPCService
+        else {
+          gate.resume(throwing: EngineXPCSubmissionError.connectionFailed)
+          handle.invalidate()
+          return
+        }
+        proxy.stageTryExport(
+          bundle: bundle,
+          receipt: receipt,
+          storeIdentifier: storeIdentifier,
+          offsetBytes: offsetBytes,
+          lengthBytes: lengthBytes,
+          machineOwner: authorization.username,
+          password: authorization.password
+        ) { response, error in
+          defer { handle.invalidate() }
+          if let error {
+            gate.resume(throwing: EngineXPCErrorBridge.submissionError(error))
+          } else if let response {
+            gate.resume(returning: response)
+          } else {
+            gate.resume(throwing: EngineXPCSubmissionError.emptyResponse)
+          }
+        }
+      }
+      return try JSONDecoder().decode(TryExportStagingOutcome.self, from: data)
     }
 
     static func isMachServiceName(_ value: String) -> Bool {

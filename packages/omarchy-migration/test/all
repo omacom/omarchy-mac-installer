@@ -1,0 +1,44 @@
+#!/bin/bash
+# Run omarchy-migration's tests from a copy of this directory alone.
+# Collection, survey and restore cases need Linux; encryption cases need
+# OMARCHY_TEST_AGE and OMARCHY_TEST_AGE_SHA256 (see docs/PROBE.md).
+set -euo pipefail
+
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+export PYTHONPATH="$here/lib" PYTHONDONTWRITEBYTECODE=1
+
+python3 - "$here" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+for path in sorted([*root.glob("lib/omarchy_migration/*.py"), *root.glob("test/*.py"), root / "libexec/handoff"]):
+    compile(path.read_text(), str(path), "exec")
+print("omarchy-migration: compilation passed")
+PY
+for script in "$here/install" "$here"/bin/* "$here/test/all" "$here/test/claim-integration.sh" "$here/PKGBUILD"; do
+  bash -n "$script"
+done
+
+# The unit cases restore as an unprivileged owner. As root, only the first
+# boot's claim runs, against a real loop disk, LUKS2 and Btrfs.
+if [[ $(id -u) == 0 ]]; then
+  if [[ -e /dev/loop-control ]] && command -v cryptsetup mkfs.btrfs sfdisk partx >/dev/null; then
+    bash "$here/test/claim-integration.sh"
+  else
+    echo "omarchy-migration: claim integration needs loop devices, cryptsetup, btrfs-progs and util-linux; skipped"
+  fi
+  echo "omarchy-migration: unit cases need an unprivileged user; skipped as root"
+  exit 0
+fi
+
+python3 -W error::ResourceWarning -m unittest discover -s "$here/test" -t "$here/test" -p 'test_*.py'
+
+# The staged command must run from the staged root alone.
+staging="$(mktemp -d)"
+trap 'rm -rf "$staging"' EXIT
+"$here/install" "$staging/root"
+env -u PYTHONPATH "$staging/root/usr/bin/omarchy-migration" validate \
+  "$staging/root/usr/lib/omarchy-migration/omarchy_migration/policies/"*.json >/dev/null
+echo "omarchy-migration: staged command passed"
+echo "omarchy-migration: claim integration needs root and loop devices; skipped"

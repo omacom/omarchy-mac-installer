@@ -43,5 +43,10 @@ for test_file in test/shell.d/apple-installer-*-test.sh; do
   bash "$test_file"
 done
 bash test/shell.d/update-m1n1-selector-test.sh
+if [[ $(uname -s) == Linux ]]; then
+  bash packages/omarchy-migration/test/all
+else
+  echo "omarchy-migration: its tests need Linux; skipped"
+fi
 
 echo "Portable installer checks passed; macOS validation is separate."

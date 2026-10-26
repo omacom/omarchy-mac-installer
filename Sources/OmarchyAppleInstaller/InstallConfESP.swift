@@ -241,7 +241,8 @@
   }
 
   /// Privileged writer used by the helper: mount the identified ESP read-write
-  /// at a private mount point, write atomically, read back, unmount.
+  /// at a private mount point, write a document under `omarchy/` atomically,
+  /// read it back, unmount.
   struct InstallConfESPMountWriter: @unchecked Sendable {
     private let disks: any InstallConfESPDiskOperating
     private let workingDirectory: URL
@@ -262,6 +263,22 @@
 
     func write(
       _ conf: InstallConf,
+      storeIdentifier: String,
+      offsetBytes: UInt64,
+      lengthBytes: UInt64
+    ) throws {
+      try write(
+        conf.serializedData,
+        named: InstallConf.fileName,
+        storeIdentifier: storeIdentifier,
+        offsetBytes: offsetBytes,
+        lengthBytes: lengthBytes
+      )
+    }
+
+    func write(
+      _ document: Data,
+      named fileName: String,
       storeIdentifier: String,
       offsetBytes: UInt64,
       lengthBytes: UInt64
@@ -296,20 +313,18 @@
           try? disks.unmount(identity.partitionIdentifier)
         }
       }
-      try writeAtomically(conf, on: mountPoint)
+      try writeAtomically(document, named: fileName, on: mountPoint)
       let readback =
         mountPoint
         .appendingPathComponent(InstallConf.directoryName, isDirectory: true)
-        .appendingPathComponent(InstallConf.fileName)
+        .appendingPathComponent(fileName)
       let observed: Data
       do {
         observed = try contentsOf(readback)
       } catch {
         throw InstallConfESPError.readbackMismatch
       }
-      guard let parsed = try? InstallConf.parse(observed), parsed == conf,
-        observed == conf.serializedData
-      else {
+      guard observed == document else {
         throw InstallConfESPError.readbackMismatch
       }
       do {
@@ -321,7 +336,9 @@
       try? fileManager.removeItem(at: mountPoint)
     }
 
-    private func writeAtomically(_ conf: InstallConf, on mountPoint: URL) throws {
+    private func writeAtomically(_ document: Data, named fileName: String, on mountPoint: URL)
+      throws
+    {
       let directory = mountPoint.appendingPathComponent(
         InstallConf.directoryName,
         isDirectory: true
@@ -332,14 +349,12 @@
           withIntermediateDirectories: true,
           attributes: [.posixPermissions: 0o755]
         )
-        let destination = directory.appendingPathComponent(InstallConf.fileName)
-        let temporary = directory.appendingPathComponent(
-          ".\(InstallConf.fileName).tmp"
-        )
+        let destination = directory.appendingPathComponent(fileName)
+        let temporary = directory.appendingPathComponent(".\(fileName).tmp")
         if fileManager.fileExists(atPath: temporary.path) {
           try fileManager.removeItem(at: temporary)
         }
-        try conf.serializedData.write(to: temporary, options: .withoutOverwriting)
+        try document.write(to: temporary, options: .withoutOverwriting)
         try fileManager.setAttributes(
           [.posixPermissions: 0o644],
           ofItemAtPath: temporary.path

@@ -1,0 +1,75 @@
+{
+  "schema": "omarchy-migration/staging-regions/1",
+  "cases": [
+    {
+      "partition_bytes": 107374182400,
+      "bundle_bytes": 5368709120,
+      "offset": 101938364416
+    },
+    {
+      "partition_bytes": 107374182400,
+      "bundle_bytes": 32212254720,
+      "offset": 75094818816
+    },
+    {
+      "partition_bytes": 107374182400,
+      "bundle_bytes": 33285996544,
+      "offset": 74021076992
+    },
+    {
+      "partition_bytes": 64424509440,
+      "bundle_bytes": 10737418240,
+      "offset": 53619982336
+    },
+    {
+      "partition_bytes": 322122547200,
+      "bundle_bytes": 21474836480,
+      "offset": 300580601856
+    },
+    {
+      "partition_bytes": 277025390592,
+      "bundle_bytes": 10737418240,
+      "offset": 264139440128
+    },
+    {
+      "partition_bytes": 536870912000,
+      "bundle_bytes": 107374182400,
+      "offset": 429429620736
+    },
+    {
+      "partition_bytes": 107374182400,
+      "bundle_bytes": 1,
+      "offset": 107306024960
+    },
+    {
+      "partition_bytes": 107374182400,
+      "bundle_bytes": 4097,
+      "offset": 107306024960
+    },
+    {
+      "partition_bytes": 42949672960,
+      "bundle_bytes": 1073741824,
+      "offset": 41808822272
+    },
+    {
+      "partition_bytes": 85899345920,
+      "bundle_bytes": 22548578427,
+      "offset": 63282610176
+    },
+    {
+      "partition_bytes": 64424509440,
+      "bundle_bytes": 21474836480,
+      "offset": null
+    },
+    {
+      "partition_bytes": 322122547200,
+      "bundle_bytes": 53687091200,
+      "offset": 221189767168
+    },
+    {
+      "partition_bytes": 289910292480,
+      "bundle_bytes": 246960619520,
+      "offset": null
+    }
+  ]
+}

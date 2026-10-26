@@ -453,6 +453,52 @@
       XCTAssertEqual(disks.mountCalls, 1)
     }
 
+    func testStageTryExportUsesTheCompletedPlanOnceAndReportsWhyNothingWasStaged() async throws {
+      let fixture = try makeFixture()
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let source = try openDirectory(fixture.source)
+      defer { try? source.close() }
+      let bundleURL = fixture.root.appendingPathComponent("bundle.age")
+      try Data("age!".utf8).write(to: bundleURL)
+      let receipt = try TryOmarchyExportReceiptTests.document(
+        TryOmarchyExportReceiptTests.bundle { $0["bytes"] = 4 })
+      let disks = EmptyStagingDisks()
+      let server = ClosedEngineHelperServer(
+        workingDirectory: fixture.destination,
+        executor: RecordingHandoffExecutor(result: fixture.transcript),
+        credentialValidator: AcceptingMachineOwnerCredentialValidator(),
+        removalDisks: UnusedRemovalDisks(),
+        removalAdminValidator: { _ in },
+        stagingDisks: disks
+      )
+      func stage(store: String = "disk0") async throws -> TryExportStagingOutcome {
+        let bundle = try FileHandle(forReadingFrom: bundleURL)
+        defer { try? bundle.close() }
+        return try await server.stageTryExport(
+          bundle: bundle, receipt: receipt, storeIdentifier: store,
+          offsetBytes: 447_750_000_000, lengthBytes: 107_374_182_400,
+          authorization: try machineOwnerAuthorization())
+      }
+      await assertThrowsErrorAsync(try await stage()) {
+        XCTAssertEqual($0 as? ClosedEngineHelperError, .installConfPlanIncomplete)
+      }
+      _ = try await server.submit(
+        packageDirectory: source,
+        authorization: try machineOwnerAuthorization()
+      )
+      await assertThrowsErrorAsync(try await stage(store: "disk1")) {
+        XCTAssertEqual($0 as? ClosedEngineHelperError, .installConfTargetMismatch)
+      }
+      XCTAssertEqual(disks.listings, 0)
+      let outcome = try await stage()
+      XCTAssertEqual(outcome, .notStaged(.rootNotFound))
+      XCTAssertEqual(disks.listings, 1)
+      await assertThrowsErrorAsync(try await stage()) {
+        XCTAssertEqual($0 as? ClosedEngineHelperError, .installConfReplay)
+      }
+      XCTAssertEqual(disks.listings, 1)
+    }
+
     func testWriteInstallConfMarksConsumedWhenUnmountFailsAfterAConfirmedWrite() async throws {
       let fixture = try makeFixture()
       defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -771,6 +817,23 @@
     func deleteContainer(_ stub: RemovalPartition, disk: String) throws {}
     func erasePartition(_ partition: RemovalPartition, disk: String) throws {}
     func growContainer(_ macOS: RemovalPartition, disk: String) throws {}
+  }
+
+  private final class EmptyStagingDisks: TryExportStagingDiskOperating, @unchecked Sendable {
+    private(set) var listings = 0
+
+    func partitions(on storeIdentifier: String) throws -> [InstallConfESPPartition] { [] }
+    func mount(_ identifier: String, at mountPoint: URL) throws { XCTFail("mounted \(identifier)") }
+    func unmount(_ identifier: String) throws {}
+    func stagingPartitions(on storeIdentifier: String) throws -> [TryExportStagingPartition] {
+      listings += 1
+      return []
+    }
+    func openRaw(_ identifier: String) throws -> Int32 {
+      XCTFail("opened \(identifier)")
+      return -1
+    }
+    func synchronize(_ descriptor: Int32) throws {}
   }
 
   private final class RecordingESPDisks: InstallConfESPDiskOperating, @unchecked Sendable {

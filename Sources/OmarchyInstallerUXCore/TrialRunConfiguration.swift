@@ -7,7 +7,7 @@
   public enum TrialRunConfiguration {
     /// Whether Omarchy offers Move to Native Install. Only an installer that
     /// stages the export onto the native disk asks for it.
-    public static let offersNativeExports = false
+    public static let offersNativeExports = true
 
     public static func make(
       productName: String, defaultRoot: URL? = TryOmarchyStorage.defaultRoot(),

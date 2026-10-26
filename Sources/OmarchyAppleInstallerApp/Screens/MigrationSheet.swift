@@ -34,7 +34,7 @@ struct MigrationSheet: View {
       }
       .padding(.bottom, 8)
       if case .export = offer {
-        Text(PlainLanguage.tryExportNotYet)
+        Text(PlainLanguage.tryExportComesAlong)
           .omarchyHelpText()
           .fixedSize(horizontal: false, vertical: true)
       }

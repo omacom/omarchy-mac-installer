@@ -1,0 +1,17 @@
+#!/usr/bin/python3 -I
+"""Hand a claimed Try export to the user who runs this through sudo."""
+
+import os
+import sys
+
+here = os.path.dirname(os.path.realpath(__file__))
+for candidate in (here, os.path.join(here, "..", "lib")):
+    if os.path.isfile(os.path.join(candidate, "omarchy_migration", "handoff.py")):
+        sys.path.insert(0, candidate)
+        break
+else:
+    sys.exit("handoff: cannot find its library next to " + here)
+
+from omarchy_migration.handoff import main
+
+sys.exit(main())

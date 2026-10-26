@@ -1,0 +1,42 @@
+{
+  "adapters": [
+    {
+      "available": true,
+      "category": "credentials",
+      "id": "ssh-bytes/1"
+    },
+    {
+      "available": false,
+      "category": "browser-profile",
+      "id": "chromium-profile/1",
+      "reason": "adapter_not_implemented"
+    }
+  ],
+  "bundle_formats": [
+    "age-v1-scrypt"
+  ],
+  "documents": [
+    "omarchy-migration/capabilities/1",
+    "omarchy-migration/inventory/2",
+    "omarchy-migration/export-request/2",
+    "omarchy-migration/progress/1",
+    "omarchy-migration/receipt/1",
+    "omarchy-migration/plan/1",
+    "omarchy-migration/report/1"
+  ],
+  "module": {
+    "name": "omarchy-migration",
+    "version": "0.1.0"
+  },
+  "operations": [
+    "inventory",
+    "export",
+    "plan",
+    "apply",
+    "report"
+  ],
+  "policy_revisions": [
+    "try-omarchy/90c8210/1"
+  ],
+  "schema": "omarchy-migration/capabilities/1"
+}

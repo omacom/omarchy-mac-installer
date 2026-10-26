@@ -95,8 +95,10 @@ def engine_metadata(package: str) -> dict:
     templates = [t for t in metadata["os_list"] if t.get("omarchy_target") == omarchy_asahi.TARGET]
     assert len(templates) == 1, "Engine/installer_data.json has exactly one full-OS target"
     # The image adds the MacBook Neo's 26.6.2, which the engine's per-device
-    # table gives only to the M3 Airs and the Neo (UnifiedFirmwareTest).
-    templates[0].update(package=package, supported_fw=["13.5", "14.8.3", "26.6.2"])
+    # table gives only to the M3 Airs and the Neo (UnifiedFirmwareTest), and
+    # declares that it claims a staged Try export, which the engine ignores.
+    templates[0].update(package=package, supported_fw=["13.5", "14.8.3", "26.6.2"],
+                        native_import="omarchy-migration/staging/1")
     return metadata
 
 

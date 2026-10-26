@@ -1,0 +1,7 @@
+{
+  "error": "invalid_request",
+  "phase": "failed",
+  "request_id": null,
+  "schema": "omarchy-migration/progress/1",
+  "sequence": 1
+}
