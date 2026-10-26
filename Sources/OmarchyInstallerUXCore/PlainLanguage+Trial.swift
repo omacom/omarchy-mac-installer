@@ -50,10 +50,24 @@
     // MARK: Try — Migrate to Native
 
     public static let trialMigrate = "Migrate to Native"
-    public static let trialMigrationNoticeTitle = "Moving your files to a native install is coming"
-    public static let trialMigrationNoticeMessage =
-      "A later version will move the home folder from Omarchy’s virtual machine onto this Mac before installing. Installing now leaves the virtual machine in place, and you can keep opening it from Try."
+    public static let trialMigrationTitle = "Bring your files to Omarchy on this Mac"
+    public static let trialMigrationLooking = "Looking for your files from Omarchy…"
+    public static func trialMigrationExport(_ export: TryOmarchyExportDisplay) -> String {
+      "Your files were exported from Omarchy \(export.publishedAt.formatted(date: .abbreviated, time: .shortened)) · \(export.summary). The virtual machine stays as it is."
+    }
+    public static let trialMigrationWaiting =
+      "Your files are exported in Omarchy. Shut Omarchy down to save the export on this Mac, then install with it."
+    public static let trialMigrationPublishing = "Shutting down Omarchy and saving your export…"
+    public static let trialMigrationNone =
+      "Export your files first. Start Omarchy, choose Setup → Move to Native Install in the Omarchy menu and pick a transfer passphrase. Then shut Omarchy down and choose Migrate to Native again."
+    public static let trialMigrationNoneRunning =
+      "Export your files first. In Omarchy, choose Setup → Move to Native Install in the Omarchy menu and pick a transfer passphrase. When it says the export is ready, choose Migrate to Native again."
+    public static let trialInstallWithExport = "Install with These Files"
+    public static let trialShutDownToPublish = "Shut Down Omarchy"
     public static let trialInstallWithoutMigrating = "Install Without Migrating"
+    public static func tryExportPlanLine(_ export: TryOmarchyExportDisplay) -> String {
+      "Your files from Omarchy: exported \(export.publishedAt.formatted(date: .abbreviated, time: .shortened)) · \(export.summary)."
+    }
 
     // MARK: Try — the Installation menu
 

@@ -144,6 +144,13 @@
       let line = try XCTUnwrap(
         JSONSerialization.jsonObject(with: configuration.encodedLine()) as? [String: Any])
       XCTAssertEqual(line["storageRoot"] as? String, root.path)
+      XCTAssertEqual(configuration.nativeExports, TrialRunConfiguration.offersNativeExports)
+
+      let exporting = try TrialRunConfiguration.make(
+        productName: "Trial Test", defaultRoot: root, nativeExports: true)
+      let exportingLine = try XCTUnwrap(
+        JSONSerialization.jsonObject(with: exporting.encodedLine()) as? [String: Any])
+      XCTAssertEqual(exportingLine["nativeExports"] as? Bool, true)
 
       let live = try TrialRunConfiguration.make(productName: "Trial Test")
       XCTAssertEqual(live.storageRoot, try XCTUnwrap(TryOmarchyStorage.defaultRoot()).path)

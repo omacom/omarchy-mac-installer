@@ -76,6 +76,90 @@
       channelAvailability = availability
     }
 
+    // MARK: Try Omarchy export
+
+    /// Exports found in Try Omarchy's folder. Checked apart from `inspect()`
+    /// so a slow disk never holds up the page.
+    public private(set) var tryExports: TryOmarchyExportsDisplay = .notChecked
+    /// The export the person chose to bring across, by its export id.
+    public private(set) var chosenTryExportID: String?
+    public private(set) var tryExportCheck: TryOmarchyExportCheck = .idle
+    private var tryExportDiscoveryRequest = 0
+    private var tryExportCheckRequest = 0
+    private var tryExportOfferRequest = 0
+
+    /// An export is chosen on the first page, before any plan exists.
+    public var canChooseTryExport: Bool {
+      guard canInspect, case .welcome = phase else { return false }
+      return true
+    }
+
+    /// Looks again. A chosen export that is gone is dropped; one still there
+    /// keeps its check, since the environment re-reads it before any use.
+    public func refreshTryExports() async {
+      tryExportDiscoveryRequest += 1
+      let request = tryExportDiscoveryRequest
+      let found = await environment.tryOmarchyExports()
+      guard request == tryExportDiscoveryRequest else { return }
+      let before = tryExports.exports.first { $0.id == chosenTryExportID }
+      tryExports = found
+      guard let chosen = chosenTryExportID else { return }
+      guard let after = found.exports.first(where: { $0.id == chosen }) else {
+        tryExportCheckRequest += 1
+        environment.cancelTryOmarchyExportCheck()
+        chosenTryExportID = nil
+        tryExportCheck = .idle
+        return
+      }
+      if after != before, tryExportCheck == .verified {
+        tryExportCheck = .idle
+      }
+    }
+
+    /// The chosen export once its check passed, for the plan review.
+    public var chosenTryExport: TryOmarchyExportDisplay? {
+      guard tryExportCheck == .verified, let id = chosenTryExportID else { return nil }
+      return tryExports.exports.first { $0.id == id }
+    }
+
+    /// Migrate to Native: looks again, then chooses the newest export and
+    /// checks it, every time, since its files may have changed since.
+    public func offerNewestTryExport() async {
+      tryExportOfferRequest += 1
+      let request = tryExportOfferRequest
+      await refreshTryExports()
+      guard request == tryExportOfferRequest, let newest = tryExports.exports.first else { return }
+      await chooseTryExport(newest.id)
+    }
+
+    /// Install Without Migrating: drops the chosen export, and an offer still
+    /// looking can't choose one again.
+    public func declineTryExport() async {
+      tryExportOfferRequest += 1
+      await chooseTryExport(nil)
+    }
+
+    /// Chooses an export (or none) and checks its ciphertext against the
+    /// receipt. Only the latest choice's answer is kept.
+    public func chooseTryExport(_ id: String?) async {
+      guard canChooseTryExport,
+        id.map({ id in tryExports.exports.contains(where: { $0.id == id }) }) ?? true
+      else { return }
+      tryExportCheckRequest += 1
+      let request = tryExportCheckRequest
+      guard let id else {
+        environment.cancelTryOmarchyExportCheck()
+        chosenTryExportID = nil
+        tryExportCheck = .idle
+        return
+      }
+      chosenTryExportID = id
+      tryExportCheck = .checking
+      let check = await environment.verifyTryOmarchyExport(id: id)
+      guard request == tryExportCheckRequest, chosenTryExportID == id else { return }
+      tryExportCheck = check
+    }
+
     public var isSimulation: Bool { environment.isSimulation }
     /// Covers helper credential verification, execution, and final app handoff.
     /// Waiting for the payload never prevents closing or quitting the app.

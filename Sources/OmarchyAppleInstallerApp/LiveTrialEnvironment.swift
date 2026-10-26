@@ -50,6 +50,8 @@ final class LiveTrialEnvironment: TrialEnvironment {
 
   func space() -> TrialSpace { TrialSpace.of(vmRoot()) }
 
+  func hasExportInOutbox() -> Bool { vmRoot().map(TrialExportOutbox.hasExport(in:)) ?? false }
+
   func vmBytes() async -> Int64 {
     guard let root = vmRoot() else { return 0 }
     return await Task.detached(priority: .utility) {

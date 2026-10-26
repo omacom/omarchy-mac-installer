@@ -154,14 +154,19 @@ struct OnePageInstallerView: View {
     }
     .sheet(isPresented: migrationNoticeBinding) {
       if let trial {
-        ConfirmationSheet(
-          title: PlainLanguage.trialMigrationNoticeTitle,
-          message: PlainLanguage.trialMigrationNoticeMessage,
-          action: PlainLanguage.trialInstallWithoutMigrating,
-          cancelIsDefault: true,
-          onConfirm: { trial.installWithoutMigrating() },
+        let offer = migrationOffer(trial)
+        MigrationSheet(
+          offer: offer,
+          onPrimary: { migrate(offer, trial) },
+          onInstallWithoutMigrating: {
+            Task {
+              await session.declineTryExport()
+              trial.continueToInstall()
+            }
+          },
           onCancel: { trial.dismissMigrationNotice() }
         )
+        .task { await session.offerNewestTryExport() }
       }
     }
     .sheet(isPresented: $showsRecoveryRetryConfirmation) {
@@ -183,6 +188,7 @@ struct OnePageInstallerView: View {
   /// Inspects the Mac, then re-reads what each channel offers it.
   private func recheck() async {
     await session.inspect()
+    await session.refreshTryExports()
     await session.refreshChannelAvailability()
   }
 
@@ -237,6 +243,13 @@ struct OnePageInstallerView: View {
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
         .padding(.top, 6)
+      TryExportPanel(
+        exports: session.tryExports,
+        chosenID: session.chosenTryExportID,
+        check: session.tryExportCheck,
+        enabled: session.canChooseTryExport,
+        onChoose: { id in Task { await session.chooseTryExport(id) } }
+      )
 
     case .existingInstallRefused:
       if let handoff = pendingRecoveryHandoff {
@@ -285,6 +298,15 @@ struct OnePageInstallerView: View {
           .font(OmarchyTheme.body)
           .foregroundStyle(OmarchyTheme.secondaryText)
           .fixedSize(horizontal: false, vertical: true)
+      }
+      if let export = session.chosenTryExport {
+        VStack(alignment: .leading, spacing: 4) {
+          Text(PlainLanguage.tryExportPlanLine(export))
+            .font(OmarchyTheme.body)
+            .foregroundStyle(OmarchyTheme.secondaryText)
+          Text(PlainLanguage.tryExportNotYet).omarchyHelpText()
+        }
+        .fixedSize(horizontal: false, vertical: true)
       }
       acknowledgement(acknowledged, resizesMacOS: plan.fixedMacOSBytes == nil)
 
@@ -425,6 +447,26 @@ struct OnePageInstallerView: View {
   /// the running page: Omarchy shuts down first, then the plan follows.
   private func continueToPlan() {
     Task { await session.continueToPlan() }
+  }
+
+  private func migrationOffer(_ trial: TrialSession) -> TrialMigrationOffer {
+    TrialMigrationOffer(
+      exports: session.tryExports, chosenID: session.chosenTryExportID,
+      check: session.tryExportCheck, exportWaitsInOutbox: trial.exportWaitsInOutbox,
+      phase: trial.phase)
+  }
+
+  /// Install with These Files keeps the chosen export for the install; Shut
+  /// Down Omarchy publishes the export it holds, then offers it.
+  private func migrate(_ offer: TrialMigrationOffer, _ trial: TrialSession) {
+    switch offer.primary {
+    case .installWithExport(enabled: true):
+      trial.continueToInstall()
+    case .shutDownToPublish(enabled: true):
+      trial.shutDownToPublishExport { Task { await session.offerNewestTryExport() } }
+    case .installWithExport, .shutDownToPublish, nil:
+      break
+    }
   }
 
   private var migrationNoticeBinding: Binding<Bool> {
@@ -792,6 +834,96 @@ private struct EncryptDiskToggle: View {
     }
     .padding(.horizontal, 4)
     .padding(.top, 4)
+  }
+}
+
+// MARK: - Try Omarchy export
+
+/// Offers the newest Try Omarchy export (or any other one found) and shows
+/// its check. Nothing here ever asks for the transfer passphrase.
+private struct TryExportPanel: View {
+  let exports: TryOmarchyExportsDisplay
+  let chosenID: String?
+  let check: TryOmarchyExportCheck
+  let enabled: Bool
+  let onChoose: (String?) -> Void
+
+  var body: some View {
+    switch exports {
+    case .notChecked:
+      EmptyView()
+    case .unavailable:
+      Text(PlainLanguage.tryExportUnavailable).omarchyHelpText()
+    case .found(let found, let unusable):
+      if let newest = found.first {
+        Panel {
+          VStack(alignment: .leading, spacing: 8) {
+            Text(PlainLanguage.tryExportHeading)
+              .font(OmarchyTheme.eyebrow)
+              .textCase(.uppercase)
+              .foregroundStyle(OmarchyTheme.accent)
+            Toggle(
+              PlainLanguage.tryExportChoice,
+              isOn: Binding(
+                get: { chosenID != nil },
+                set: { onChoose($0 ? (chosenID ?? newest.id) : nil) }
+              )
+            )
+            .toggleStyle(.checkbox)
+            .controlSize(.large)
+            .tint(OmarchyTheme.accent)
+            .disabled(!enabled)
+            if found.count > 1 {
+              Picker(
+                "Export",
+                selection: Binding(
+                  get: { chosenID ?? newest.id },
+                  set: { onChoose($0) }
+                )
+              ) {
+                ForEach(found) { export in
+                  Text(PlainLanguage.tryExportSummary(export)).tag(export.id)
+                }
+              }
+              .labelsHidden()
+              .disabled(!enabled || chosenID == nil)
+            } else {
+              Text(PlainLanguage.tryExportSummary(newest)).omarchyHelpText()
+            }
+            if chosenID != nil {
+              status
+              Text(PlainLanguage.tryExportNotYet).omarchyHelpText()
+            }
+            if let note = PlainLanguage.tryExportUnusable(unusable) {
+              Text(note).omarchyHelpText()
+            }
+          }
+        }
+      } else if let note = PlainLanguage.tryExportUnusable(unusable) {
+        Text(note).omarchyHelpText()
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var status: some View {
+    switch check {
+    case .idle:
+      EmptyView()
+    case .checking:
+      HStack(spacing: 8) {
+        ProgressView().controlSize(.small)
+        Text(PlainLanguage.tryExportChecking).omarchyHelpText()
+      }
+    case .verified:
+      Text(PlainLanguage.tryExportVerified)
+        .font(OmarchyTheme.body)
+        .foregroundStyle(OmarchyTheme.secondaryText)
+    case .failed(let message):
+      Text(message)
+        .font(OmarchyTheme.body)
+        .foregroundStyle(OmarchyTheme.caution)
+    }
   }
 }
 

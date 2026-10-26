@@ -21,6 +21,7 @@
     var registerError: Error?
     var unregisterError: Error?
     var runsFetchedKit = false
+    var exportInOutbox = false
 
     func space() -> TrialSpace { currentSpace }
     func vmBytes() async -> Int64 { 9_400_000_000 }
@@ -40,6 +41,7 @@
         requiredBytes: 15_000_000_000, freeBytes: currentSpace.freeBytes, hasVM: false)
     }
 
+    func hasExportInOutbox() -> Bool { exportInOutbox }
     func bridgedNetwork() -> TrialBridgedNetwork { network }
     func registerBridgedNetwork() throws {
       networkChanges.append("register")
@@ -359,15 +361,14 @@
       trial.chooseInstall { installs += 1 }
       XCTAssertTrue(trial.showsMigrationNotice)
       XCTAssertEqual(installs, 0)
-      XCTAssertEqual(
-        PlainLanguage.trialMigrationNoticeTitle, "Moving your files to a native install is coming")
+      XCTAssertFalse(trial.exportWaitsInOutbox, "Omarchy isn't running, so nothing waits in it")
       XCTAssertEqual(PlainLanguage.trialInstallWithoutMigrating, "Install Without Migrating")
       trial.dismissMigrationNotice()
-      trial.installWithoutMigrating()
+      trial.continueToInstall()
       XCTAssertEqual(installs, 0, "Cancel leaves the page as it was")
 
       trial.chooseInstall { installs += 1 }
-      trial.installWithoutMigrating()
+      trial.continueToInstall()
       XCTAssertFalse(trial.showsMigrationNotice)
       XCTAssertEqual(installs, 1)
       XCTAssertEqual(trial.phase, .hidden)
@@ -415,13 +416,72 @@
       trial.chooseInstall { installs += 1 }
       XCTAssertEqual(trial.phase, .running(environment.permissionState))
       XCTAssertEqual(environment.shutdowns, 0)
-      trial.installWithoutMigrating()
+      trial.continueToInstall()
       XCTAssertEqual(trial.phase, .stopping)
       XCTAssertEqual(environment.shutdowns, 1)
       XCTAssertEqual(installs, 0)
       send(.exited(status: 0))
       XCTAssertEqual(trial.phase, .hidden)
       XCTAssertEqual(installs, 1)
+    }
+
+    func testAnExportInTheRunningVMIsPublishedByShuttingDown() throws {
+      let environment = FakeTrialEnvironment()
+      environment.makeVM()
+      environment.exportInOutbox = true
+      let trial = TrialSession(environment: environment)
+      trial.openAtLaunch()
+      trial.start()
+      let send = try XCTUnwrap(environment.onEvent)
+      send(.ready)
+      trial.follow(.supported)
+
+      var installs = 0
+      trial.chooseInstall { installs += 1 }
+      XCTAssertTrue(trial.exportWaitsInOutbox)
+      XCTAssertEqual(
+        TrialMigrationOffer(
+          exports: .none, chosenID: nil, check: .idle,
+          exportWaitsInOutbox: trial.exportWaitsInOutbox, phase: trial.phase),
+        .waiting(stopping: false))
+
+      var published = 0
+      trial.shutDownToPublishExport { published += 1 }
+      XCTAssertEqual(environment.shutdowns, 1)
+      XCTAssertEqual(trial.phase, .stopping)
+      XCTAssertEqual(
+        TrialMigrationOffer(
+          exports: .none, chosenID: nil, check: .idle,
+          exportWaitsInOutbox: trial.exportWaitsInOutbox, phase: trial.phase),
+        .waiting(stopping: true))
+      environment.exportInOutbox = false
+      send(.exited(status: 0))
+      XCTAssertEqual(published, 1)
+      XCTAssertFalse(trial.exportWaitsInOutbox)
+      XCTAssertTrue(trial.showsMigrationNotice, "The sheet stays to offer the published export")
+      XCTAssertEqual(installs, 0)
+
+      trial.continueToInstall()
+      XCTAssertEqual(installs, 1)
+      XCTAssertEqual(environment.shutdowns, 1, "Omarchy is already down")
+    }
+
+    func testShutDownToPublishNeedsAWaitingExport() throws {
+      let environment = FakeTrialEnvironment()
+      environment.makeVM()
+      let trial = TrialSession(environment: environment)
+      trial.openAtLaunch()
+      trial.start()
+      try XCTUnwrap(environment.onEvent)(.ready)
+      trial.follow(.supported)
+      trial.chooseInstall {}
+      XCTAssertFalse(trial.exportWaitsInOutbox)
+      trial.shutDownToPublishExport {}
+      XCTAssertEqual(environment.shutdowns, 0)
+      trial.dismissMigrationNotice()
+      environment.exportInOutbox = true
+      trial.shutDownToPublishExport {}
+      XCTAssertEqual(environment.shutdowns, 0, "Only from the sheet")
     }
 
     func testTheFirstStartTurnsInstallIntoMigrate() throws {

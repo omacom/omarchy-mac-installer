@@ -124,6 +124,64 @@
       XCTAssertEqual(transcript.completion, .awaitingRecovery)
     }
 
+    func testTryExportScenarioOffersOneIntactAndOneTamperedExport() async {
+      let environment = InstallerSimulationEnvironment(scenario: .tryExport, delay: .zero)
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      await session.refreshTryExports()
+      let exports = InstallerSimulationEnvironment.simulatedTryExports
+      XCTAssertEqual(session.tryExports, .found(exports, unusable: 1))
+      await session.chooseTryExport(exports[0].id)
+      XCTAssertEqual(session.tryExportCheck, .verified)
+      await session.chooseTryExport(exports[1].id)
+      XCTAssertEqual(
+        session.tryExportCheck, .failed(PlainLanguage.tryExportFailure(.digestMismatch)))
+
+      let other = InstallerSimulationEnvironment(scenario: .success, delay: .zero)
+      let plain = InstallerSession(environment: other)
+      await plain.inspect()
+      await plain.refreshTryExports()
+      XCTAssertEqual(plain.tryExports, .none)
+    }
+
+    func testOnlyTheThisMacScenarioReadsAnExportsFolder() async {
+      let missing = FileManager.default.temporaryDirectory
+        .appendingPathComponent("try-export-sim-\(UUID().uuidString)", isDirectory: true)
+      let shelf = TryOmarchyExportShelf(discovery: TryOmarchyExportDiscovery(directory: missing))
+      let environment = InstallerSimulationEnvironment(
+        scenario: .tryExportOnThisMac, delay: .zero, tryExportShelf: shelf)
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      await session.refreshTryExports()
+      XCTAssertEqual(session.tryExports, .none)
+      let check = await environment.verifyTryOmarchyExport(
+        id: InstallerSimulationEnvironment.simulatedTryExports[0].id)
+      XCTAssertEqual(check, .failed(PlainLanguage.tryExportMissing))
+
+      let ignored = InstallerSimulationEnvironment(
+        scenario: .tryExport, delay: .zero, tryExportShelf: shelf)
+      let exports = await ignored.tryOmarchyExports()
+      XCTAssertEqual(exports.exports, InstallerSimulationEnvironment.simulatedTryExports)
+    }
+
+    /// Runs the window's real-folder scenario against a named Exports folder,
+    /// for example `TRY_OMARCHY_EXPORTS="$HOME/Library/Application Support/Try Omarchy/Exports"`.
+    func testThisMacScenarioChecksARealExportsFolder() async throws {
+      guard let path = ProcessInfo.processInfo.environment["TRY_OMARCHY_EXPORTS"] else {
+        throw XCTSkip("TRY_OMARCHY_EXPORTS is not set")
+      }
+      let directory = URL(fileURLWithPath: path, isDirectory: true)
+      let shelf = TryOmarchyExportShelf(discovery: TryOmarchyExportDiscovery(directory: directory))
+      let environment = InstallerSimulationEnvironment(
+        scenario: .tryExportOnThisMac, delay: .zero, tryExportShelf: shelf)
+      let session = InstallerSession(environment: environment)
+      await session.inspect()
+      await session.refreshTryExports()
+      let newest = try XCTUnwrap(session.tryExports.exports.first)
+      await session.chooseTryExport(newest.id)
+      XCTAssertEqual(session.tryExportCheck, .verified)
+    }
+
     func testEveryScenarioReachesItsExpectedOutcome() async throws {
       for scenario in InstallerSimulationScenario.allCases {
         let environment = InstallerSimulationEnvironment(scenario: scenario, delay: .zero)

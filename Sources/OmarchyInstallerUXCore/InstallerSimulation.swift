@@ -10,6 +10,7 @@
     case allocationClamped, allocationAligned, approvalChanged, credentialsRejected, connectionLost
     case emptyReply, helperFailure, degradedProgress, recoveryRetry, manualRecovery
     case shutdownFailure, completed, installationMedia, spaceChanged, preparedResumeMismatch
+    case tryExport, tryExportOnThisMac
 
     public var id: String { rawValue }
     public var title: String {
@@ -46,6 +47,8 @@
       case .installationMedia: "Installation media required"
       case .spaceChanged: "Space shrinks before install · engine refuses plan"
       case .preparedResumeMismatch: "Prepared resume target changed"
+      case .tryExport: "Try Omarchy exports found · one intact, one tampered"
+      case .tryExportOnThisMac: "Try Omarchy exports on this Mac · real check, read-only"
       }
     }
 
@@ -77,6 +80,10 @@
         "The test channel's signed catalog lists no Mac. Its channel label says No Mac release yet, and Continue explains the channel has nothing to install, not a network or verification problem."
       case .modelNotOnChannel:
         "The test channel's signed catalog lists other Macs only. Its channel label says Not available for this Mac, and Continue names this Mac and the models the channel supports."
+      case .tryExport:
+        "Two test exports and one incomplete folder. Tick Bring it to this Omarchy install: the newest export checks out. Choose the older one: it doesn't match its receipt. The card stays on the first page only."
+      case .tryExportOnThisMac:
+        "Reads this Mac's real Try Omarchy Exports folder, read-only, and checks each export you choose against its receipt. Nothing is copied or decrypted, and the rest of the installer stays simulated."
       case .channelUnreachable:
         "The test channel's catalog address returns 404. Its channel label says Couldn’t load, and Continue reports a server problem, never a missing Mac release."
       default:
@@ -87,6 +94,8 @@
 
   /// An in-memory environment. It never constructs a live adapter, reads the
   /// host, opens a socket, invokes XPC, downloads files, or requests OS shutdown.
+  /// The one exception is `tryExportOnThisMac`, which reads Try Omarchy's
+  /// Exports folder through the real, read-only discovery.
   /// Synthetic transcripts still pass through the real journal decoder.
   public final class InstallerSimulationEnvironment: InstallerEnvironment, @unchecked Sendable {
     public let scenario: InstallerSimulationScenario
@@ -96,14 +105,19 @@
     private var attempts = 0
     private var cancelled = false
     public let channel: ReleaseChannel
+    private let tryExportShelf: TryOmarchyExportShelf?
 
+    /// `tryExportShelf` replaces the home Exports folder for
+    /// `tryExportOnThisMac`; other scenarios never read one.
     public init(
       scenario: InstallerSimulationScenario, channel: ReleaseChannel = .edge,
-      delay: Duration = .milliseconds(600)
+      delay: Duration = .milliseconds(600), tryExportShelf: TryOmarchyExportShelf? = nil
     ) {
       self.scenario = scenario
       self.channel = channel
       self.delay = delay
+      self.tryExportShelf =
+        scenario == .tryExportOnThisMac ? tryExportShelf ?? .home() : nil
     }
 
     public var isSimulation: Bool { true }
@@ -169,6 +183,40 @@
       "apple,j434", "apple,j504", "apple,j613", "apple,j615", "apple,j514s", "apple,j514c",
       "apple,j514m", "apple,j516s", "apple,j516c", "apple,j516m", "apple,j700",
     ]
+
+    /// Two exports for the Try Omarchy card: the newer one checks out and
+    /// the older one fails its receipt, beside one incomplete folder.
+    public static let simulatedTryExports = [
+      TryOmarchyExportDisplay(
+        id: "6022f2ec-746c-4636-b786-2240103a7efb",
+        publishedAt: Date(timeIntervalSince1970: 1_791_590_400),
+        entries: 862, expandedBytes: 28_680_598, bundleBytes: 29_365_414),
+      TryOmarchyExportDisplay(
+        id: "c4e6a8b0-2d4f-4a6c-9e8f-0a1b2c3d4e03",
+        publishedAt: Date(timeIntervalSince1970: 1_790_380_800),
+        entries: 640, expandedBytes: 21_004_288, bundleBytes: 21_530_112),
+    ]
+
+    public func tryOmarchyExports() async -> TryOmarchyExportsDisplay {
+      if let tryExportShelf { return await tryExportShelf.look() }
+      guard scenario == .tryExport else { return .none }
+      return .found(Self.simulatedTryExports, unusable: 1)
+    }
+
+    public func cancelTryOmarchyExportCheck() { tryExportShelf?.cancelVerification() }
+
+    public func verifyTryOmarchyExport(id: String) async -> TryOmarchyExportCheck {
+      if let tryExportShelf { return await tryExportShelf.verify(id: id) }
+      guard scenario == .tryExport, (try? await tick()) != nil else {
+        return .failed(PlainLanguage.tryExportMissing)
+      }
+      switch id {
+      case Self.simulatedTryExports[0].id: return .verified
+      case Self.simulatedTryExports[1].id:
+        return .failed(PlainLanguage.tryExportFailure(.digestMismatch))
+      default: return .failed(PlainLanguage.tryExportMissing)
+      }
+    }
 
     private var refusedOnce: Bool {
       scenario == .spaceChanged && lock.withLock { attempts > 0 }
