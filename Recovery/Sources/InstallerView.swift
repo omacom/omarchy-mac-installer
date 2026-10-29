@@ -251,7 +251,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate, NSMenuItemVali
       return model.accountAlreadyStarted ? "Resume recovery setup" : "Create a recovery account"
     case .complete:
       if model.accountNeedsAuthorization { return "Authorize recovery account" }
-      return model.recoveryInterface ? "Recovery complete" : "Installation complete"
+      return model.recoveryInterface ? "Recovery complete" : "Installation complete!"
     }
   }
 
