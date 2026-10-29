@@ -17,6 +17,10 @@ final class InstallerModel {
   var password = "" { didSet { changed() } }
   var authorizationOwner: RecoveryOwner? { didSet { changed() } }
   var authorizationUsesSourceOwner = false { didSet { changed() } }
+  /// The first screen asks for the password to install, or to repair the
+  /// startup disk after a wrong-Recovery issue.
+  var authorizationPurpose = AuthorizationPrompt.Purpose.install { didSet { changed() } }
+  var authorizationRejection: String? { didSet { changed() } }
   var progress = 0.0 { didSet { changed() } }
   var currentOperation = "Preparing installation" { didSet { changed() } }
   var operations: [String] = [] { didSet { changed() } }
@@ -232,6 +236,57 @@ final class InstallerModel {
         }
       }
     }
+  }
+
+  var authorizationPrompt: AuthorizationPrompt {
+    AuthorizationPrompt(
+      purpose: authorizationPurpose,
+      owner: RecoveryActions.inRecovery
+        ? (authorizationOwner?.username ?? "the volume owner") : NSUserName(),
+      // Outside Recovery the preview asks for the current macOS user, like the
+      // original-owner bootstrap does.
+      macOSOwner: !RecoveryActions.inRecovery || authorizationUsesSourceOwner,
+      rejection: authorizationRejection)
+  }
+
+  /// The first screen asks for a password, except Repair startup's Restore screen.
+  var asksForAuthorization: Bool { !recoveryInterface || authorizationPurpose == .repair }
+
+  var canAuthorize: Bool { stage == .welcome && asksForAuthorization && !checkingEnvironment }
+
+  /// Submits the password typed on the first screen. Installing rechecks the
+  /// Recovery environment first, as the old Continue button did.
+  func authorize(with credential: String) {
+    guard canAuthorize, !credential.isEmpty else { return }
+    authorizationRejection = nil
+    if authorizationPurpose == .repair {
+      repairRecoveryBoot(password: credential) { [weak self] rejection in
+        self?.requestRepairPassword(rejection)
+      }
+      return
+    }
+    checkEnrollmentEnvironment { [weak self] in
+      guard let self else { return }
+      self.password = credential
+      self.startDemo { [weak self] rejection in self?.authorizationRejection = rejection }
+    }
+  }
+
+  /// Set Startup Disk and Shut Down; the first screen asks for the owner's
+  /// password only if selecting the startup disk needs it.
+  func repairStartupDisk() {
+    repairRecoveryBoot { [weak self] rejection in self?.requestRepairPassword(rejection) }
+  }
+
+  private func requestRepairPassword(_ rejection: String?) {
+    authorizationPurpose = .repair
+    authorizationRejection = rejection
+  }
+
+  func cancelStartupDiskRepair() {
+    guard authorizationPurpose == .repair, !checkingEnvironment else { return }
+    authorizationPurpose = .install
+    authorizationRejection = nil
   }
 
   /// `needsPassword` receives the reason when a password was refused.

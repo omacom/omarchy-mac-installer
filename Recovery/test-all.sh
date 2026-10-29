@@ -29,3 +29,4 @@ compile_run account-restart Sources/RecoveryAccountRestart.swift Tests/RecoveryA
 compile_run directory-swap Sources/Account/RecoveryDigest.swift Sources/Account/RecoveryFileTransaction.swift Sources/RecoveryDirectorySwap.swift Tests/RecoveryDirectorySwapCheck.swift
 compile_run baseline Sources/Account/RecoveryDigest.swift Sources/RecoveryBaseline.swift Tests/RecoveryBaselineCheck.swift
 compile_run completion-action Sources/CompletionAction.swift Tests/CompletionActionCheck.swift
+compile_run authorization-prompt Sources/AuthorizationPrompt.swift Sources/RecoveryPasswordRejected.swift Tests/AuthorizationPromptCheck.swift
