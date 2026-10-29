@@ -92,7 +92,7 @@
     public static let downloadingPackagesTitle = "Downloading Omarchy"
     /// One help line under the disk card; there is no encryption choice.
     public static let encryptionNote =
-      "Omarchy is encrypted with your first-boot password. Keep it safe: there’s no recovery key."
+      "Your first-boot password encrypts Omarchy. Keep it safe: there’s no recovery key."
     public static let encryptionChoiceNotRecorded =
       "The encryption choice wasn’t saved, so Omarchy will encrypt its disk at first boot."
     public static let encryptionOptOutRecorded =
