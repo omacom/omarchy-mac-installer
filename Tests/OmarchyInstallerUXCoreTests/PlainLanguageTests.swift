@@ -559,6 +559,16 @@
       XCTAssertTrue(PlainLanguage.planAcknowledgement(resizesMacOS: false).contains("backup"))
     }
 
+    func testEncryptionNoteIsOneLineWithThePasswordWarning() {
+      let note = PlainLanguage.encryptionNote
+      XCTAssertTrue(note.contains("encrypted"), note)
+      XCTAssertTrue(note.contains("first-boot password"), note)
+      XCTAssertTrue(note.contains("no recovery key"), note)
+      XCTAssertFalse(note.contains("\n"))
+      // One 10-point monospaced line in the 560-point page column.
+      XCTAssertLessThanOrEqual(note.count, 90, note)
+    }
+
     func testEncryptionHandoffCopyDefaultsToEncryptingOnFailure() {
       XCTAssertEqual(
         PlainLanguage.encryptionChoiceNotRecorded,

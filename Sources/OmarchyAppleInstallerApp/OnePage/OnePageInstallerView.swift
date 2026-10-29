@@ -221,7 +221,9 @@ struct OnePageInstallerView: View {
         state: session.prefetchState,
         onRetry: session.canRetryPrefetch ? { session.retryPrefetch() } : nil
       )
-      if !session.allowsEncryption {
+      if session.allowsEncryption {
+        encryptionNote
+      } else {
         plainInstallCaution
       }
       if let notice = session.allocationNotice {
@@ -235,7 +237,9 @@ struct OnePageInstallerView: View {
         state: session.prefetchState,
         onRetry: session.canRetryPrefetch ? { session.retryPrefetch() } : nil
       )
-      if !session.allowsEncryption {
+      if session.allowsEncryption {
+        encryptionNote
+      } else {
         plainInstallCaution
       }
       if !helper.isReady {
@@ -479,6 +483,14 @@ struct OnePageInstallerView: View {
     .disabled(session.isBusy || session.isEditingSize)
     .padding(.horizontal, 4)
     .padding(.top, 4)
+  }
+
+  /// Every build but the private plain-install test encrypts the Omarchy
+  /// disk. There is nothing to choose, only the password to keep safe.
+  private var encryptionNote: some View {
+    Text(PlainLanguage.encryptionNote)
+      .omarchyHelpText()
+      .padding(.horizontal, 4)
   }
 
   /// The private plain-install test build never encrypts; every other build
