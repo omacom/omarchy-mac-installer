@@ -38,10 +38,10 @@ with tempfile.TemporaryDirectory() as work:
         result = subprocess.run(['bash', str(script), 'fixture.pkg', '/', volume], env=dict(os.environ, TEST_BOARD=board, TEST_MACOS=macos, TEST_LOADED=loaded), capture_output=True, text=True)
         assert (result.returncode == 0) == accepted, (board, volume, result.stderr)
 
-    for board in ('j433', 'j434', 'j504', 'j613', 'j615', 'j514s', 'j514c', 'j514m', 'j516s', 'j516c', 'j516m'):
+    for board in ('j433', 'j434', 'j504', 'j613', 'j615', 'j514s', 'j514c', 'j514m', 'j516s', 'j516c', 'j516m', 'j575d'):
         check(board, True)
         check(board.upper() + 'AP', True)
-    for board in ('j614s', 'j616s', 'j604', 'j773g', 'j313', 'j575d', 'unknown', ''):
+    for board in ('j614s', 'j616s', 'j604', 'j773g', 'j313', 'unknown', ''):
         check(board, False)
         check(board + 'AP', False)
     check('j516s', False, '/Volumes/Other')

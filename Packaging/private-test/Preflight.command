@@ -11,7 +11,7 @@ major=${version%%.*}
 target=$(/usr/sbin/sysctl -n hw.targettype | /usr/bin/tr '[:upper:]' '[:lower:]')
 target=${target%ap}
 case "$target" in
-  j433|j434|j504|j613|j615|j514s|j514c|j514m|j516s|j516c|j516m) ;;
+  j433|j434|j504|j613|j615|j514s|j514c|j514m|j516s|j516c|j516m|j575d) ;;
   *) echo "Unsupported private-test hardware: $target. Stop here." >&2; exit 1 ;;
 esac
 for path in "/Applications/@APP_NAME@.app" "/Applications/@LEGACY_APP_NAME@.app" "/Library/LaunchDaemons/@HELPER_IDENTIFIER@.plist" "/Library/PrivilegedHelperTools/@HELPER_IDENTIFIER@" "/var/db/@APP_IDENTIFIER@"; do

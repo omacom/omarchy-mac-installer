@@ -1995,6 +1995,7 @@ class BoardStage1Tests(unittest.TestCase):
             ("j613ap", "26.6"),
             ("j615ap", "26.6.2"),
             ("j413ap", "26.6.2"),
+            ("j575dap", "27.0.1"),
         ):
             with self.subTest(device_class=device_class, firmware=firmware), \
                     tempfile.TemporaryDirectory() as root:
@@ -2035,6 +2036,7 @@ class BoardStage1Tests(unittest.TestCase):
             ("j613ap", "14.8.3", b"asahi stage 1"),
             ("j314sap", "26.6.2", b"asahi stage 1"),
             ("j413ap", "26.6.2", b"asahi stage 1"),
+            ("j575dap", "27.0.1", b"asahi stage 1"),
         ):
             with self.subTest(board=board, firmware=firmware), tempfile.TemporaryDirectory() as root:
                 target = self.write_generic(root)
@@ -2072,7 +2074,7 @@ class EspBoardLayoutTests(unittest.TestCase):
     def test_common_image_uses_identical_layout_on_all_boards(self):
         members = ["esp/aurora/stage1.bin", "esp/m1n1/boot.bin", "esp/EFI/BOOT/BOOTAA64.EFI"]
         expected = {name: name[4:] for name in members}
-        for board in ("j700ap", "j613ap", "j314sap", "j274ap"):
+        for board in ("j700ap", "j613ap", "j314sap", "j274ap", "j575dap"):
             with self.subTest(board=board):
                 self.assertEqual(esp_board_layout(board, members, common_allowed=True), expected)
                 # Leftovers from older image recipes must not override the
@@ -2091,7 +2093,7 @@ class EspBoardLayoutTests(unittest.TestCase):
         })
 
     def test_other_macs_drop_the_neo_stage2(self):
-        for device_class in ("j613ap", "j314s"):
+        for device_class in ("j613ap", "j314s", "j575dap"):
             with self.subTest(device_class=device_class):
                 self.assertEqual(esp_board_layout(device_class, self.MEMBERS), {
                     "esp/EFI/BOOT/BOOTAA64.EFI": "EFI/BOOT/BOOTAA64.EFI",

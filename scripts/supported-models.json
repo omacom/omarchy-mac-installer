@@ -38,10 +38,11 @@
     "apple,j700"
   ],
   "refused": {
-    "apple,j575d": "Mac Studio (M3 Ultra, 2025): the pinned v0.9.2 engine has no j575dap device or T6032 chip entry, so it cannot inspect or plan this Mac",
     "apple,j614s": "MacBook Pro 14-inch (M4 Pro, 2024): M4 and later Macs are not supported"
   },
-  "developer": {},
+  "developer": {
+    "apple,j575d": "Developer bring-up only: the engine can inspect and plan the M3 Ultra Mac Studio, but no Omarchy image supports it yet"
+  },
   "untested": {
     "apple,j433": "Untested: Omarchy Mac previews are not yet qualified on M3 Macs",
     "apple,j434": "Untested: Omarchy Mac previews are not yet qualified on M3 Macs",
