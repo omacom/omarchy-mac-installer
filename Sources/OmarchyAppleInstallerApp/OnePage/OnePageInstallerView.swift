@@ -532,12 +532,12 @@ struct OnePageInstallerView: View {
   }
 
   /// Shuts down straight away: the steps above already say to save work
-  /// first, and macOS still asks about unsaved documents.
+  /// first, and macOS still asks about unsaved documents. With no
+  /// confirmation left, Return doesn't press it; only a click does.
   private var shutDownButton: some View {
     Button(PlainLanguage.recoveryShutDown) { shutDown() }
       .omarchyPrimaryButton()
       .disabled(preparingShutdown)
-      .keyboardShortcut(.defaultAction)
   }
 
   /// The Recovery steps for an installation that finished but has not been
