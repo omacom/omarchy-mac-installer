@@ -564,7 +564,10 @@ struct OnePageInstallerView: View {
       steps: [
         RecoveryStep(number: 1, title: "Shut down completely."),
         RecoveryStep(number: 2, title: guide.holdInstruction),
-        RecoveryStep(number: 3, title: "Choose “\(target.volumeName)” → Finish Installation."),
+        RecoveryStep(
+          number: 3,
+          title:
+            "Choose “\(target.volumeName)”, click Continue, then sign in with your macOS account."),
       ],
       warning: "Don’t restart normally yet: unfinished setup can cause a boot loop.")
   }

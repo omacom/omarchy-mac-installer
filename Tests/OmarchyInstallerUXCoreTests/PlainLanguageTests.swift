@@ -365,6 +365,8 @@
       XCTAssertTrue(steps.allSatisfy { !($0.detail ?? "").isEmpty })
       XCTAssertEqual(steps[1].title, "Hold the power button")
       XCTAssertEqual(steps[1].detail, "Hold until “Loading startup options” appears.")
+      XCTAssertEqual(
+        steps[2].detail, "Choose Omarchy, click Continue, then sign in with your macOS account.")
 
       let unknown = PlainLanguage.recoverySteps(for: ["somethingNew"])
       XCTAssertEqual(unknown.count, 1)

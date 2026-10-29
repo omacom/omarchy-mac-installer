@@ -203,6 +203,8 @@
       let create = PlainLanguage.recoveryAccountSteps(
         volumeName: "Omarchy", holdInstruction: "Hold it.", resuming: false)
       XCTAssertEqual(create.map(\.number), [1, 2, 3, 4])
+      XCTAssertEqual(
+        create[2].title, "Choose “Omarchy”, click Continue, then sign in with your macOS account.")
       XCTAssertTrue(
         create[3].title.contains("Utilities → Create Recovery Account…"), create[3].title)
       let resume = PlainLanguage.recoveryAccountSteps(

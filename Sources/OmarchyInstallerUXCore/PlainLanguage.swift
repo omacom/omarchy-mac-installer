@@ -43,7 +43,9 @@
       var steps = [
         RecoveryStep(number: 1, title: "Shut down completely."),
         RecoveryStep(number: 2, title: holdInstruction),
-        RecoveryStep(number: 3, title: "Choose “\(volumeName)” → Finish Installation."),
+        RecoveryStep(
+          number: 3,
+          title: "Choose “\(volumeName)”, click Continue, then sign in with your macOS account."),
       ]
       if resuming {
         steps.append(
@@ -275,7 +277,7 @@
       func authenticate() {
         append(
           "Finish installation",
-          "Choose Omarchy → Finish Installation, then sign in with your macOS account.")
+          "Choose Omarchy, click Continue, then sign in with your macOS account.")
       }
       for token in requiredHumanSteps {
         switch token {
