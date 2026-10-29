@@ -508,7 +508,7 @@ final class InstallerModel {
 final class InstallerWindow: NSWindow {
   init() {
     super.init(
-      contentRect: NSRect(x: 0, y: 0, width: 780, height: 660),
+      contentRect: RecoveryWindowLayout.initialFrame,
       styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
     titleVisibility = .hidden
     titlebarAppearsTransparent = true
@@ -521,7 +521,7 @@ final class InstallerWindow: NSWindow {
     isMovableByWindowBackground = true
     // Full-size content occupies the titlebar too. Preserve the original outer
     // dimensions instead of adding AppKit's titlebar height to the layout.
-    setFrame(NSRect(x: 0, y: 0, width: 780, height: 660), display: false)
+    setFrame(RecoveryWindowLayout.initialFrame, display: false)
   }
 }
 
@@ -546,7 +546,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let controller = InstallerView(model: model)
     window.contentViewController = controller
     self.controller = controller
-    window.setFrame(NSRect(x: 0, y: 0, width: 780, height: 660), display: false)
+    window.setFrame(RecoveryWindowLayout.initialFrame, display: false)
     LaunchTrace.mark("window.contentCreated")
     window.center()
     window.makeKeyAndOrderFront(nil)

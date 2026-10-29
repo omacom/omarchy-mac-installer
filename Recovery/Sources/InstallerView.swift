@@ -56,7 +56,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate, NSMenuItemVali
   }
 
   override func loadView() {
-    let root = NSView(frame: NSRect(x: 0, y: 0, width: 780, height: 660))
+    let root = NSView(frame: RecoveryWindowLayout.initialFrame)
     root.wantsLayer = true
     root.layer?.backgroundColor = OmarchyTheme.darkCGColor(OmarchyTheme.window)
     root.appearance = NSAppearance(named: .darkAqua)
@@ -93,7 +93,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate, NSMenuItemVali
       content.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 24),
       content.centerXAnchor.constraint(equalTo: root.centerXAnchor),
       content.widthAnchor.constraint(equalToConstant: 510),
-      content.heightAnchor.constraint(equalToConstant: 292),
+      content.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -8),
       footer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 32),
       footer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -32),
       footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -14),
@@ -118,6 +118,18 @@ final class InstallerView: NSViewController, NSTextFieldDelegate, NSMenuItemVali
       self, selector: #selector(windowResignedKey), name: NSWindow.didResignKeyNotification,
       object: window)
     track(NSEvent.modifierFlags)
+    fitWindow(animate: false)
+  }
+
+  /// Only the recovery account form uses the tall window. Resizing keeps the
+  /// top edge, so the wordmark and title stay where they were.
+  private func fitWindow(animate: Bool) {
+    guard let window = view.window else { return }
+    let height = RecoveryWindowLayout.height(showsAccountForm: model.stage == .account)
+    guard window.frame.height != height else { return }
+    let frame = RecoveryWindowLayout.frame(
+      window.frame, height: height, visible: window.screen?.visibleFrame)
+    window.setFrame(frame, display: true, animate: animate)
   }
 
   @objc private func windowBecameKey() { track(NSEvent.modifierFlags) }
@@ -144,15 +156,21 @@ final class InstallerView: NSViewController, NSTextFieldDelegate, NSMenuItemVali
     }
     guard isViewLoaded else { return }
     if renderedStage != model.stage || renderedAuthorization != model.asksForAuthorization {
+      let stageChanged = renderedStage != model.stage
       renderedStage = model.stage
       renderedAuthorization = model.asksForAuthorization
       buildStage()
+      if stageChanged { fitWindow(animate: true) }
     }
     titleLabel.stringValue = stageTitle
     titleLabel.alignment = model.stage == .account ? .left : .center
     titleWidthConstraint?.constant = model.stage == .account ? 380 : 600
-    titleTopConstraint?.constant =
-      model.stage == .installing ? 110 : model.stage == .complete ? 48 : 28
+    // Title offsets balance each screen in the compact window.
+    switch model.stage {
+    case .installing: titleTopConstraint?.constant = 40
+    case .complete: titleTopConstraint?.constant = model.accountNeedsAuthorization ? 28 : 48
+    case .welcome, .account: titleTopConstraint?.constant = 28
+    }
     progressIndicator?.doubleValue = model.progress * 100
     operationLabel?.stringValue = model.currentOperation + "…"
     primaryButton?.isEnabled =
@@ -626,7 +644,10 @@ final class InstallerView: NSViewController, NSTextFieldDelegate, NSMenuItemVali
         "Boot security is reduced only for this Omarchy installation. Your macOS security settings are unchanged."
         + (log.truncated
           ? " Showing recent output. Copy Log includes this attempt’s full log." : ""),
-      width: 550, body: viewer, bodyHeight: 290, buttons: [copy, done])
+      width: 550, body: viewer,
+      bodyHeight: RecoveryWindowLayout.detailsLogHeight(
+        windowHeight: view.window?.frame.height ?? RecoveryWindowLayout.compactHeight),
+      buttons: [copy, done])
     present(panel)
   }
 
