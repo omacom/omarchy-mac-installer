@@ -41,7 +41,9 @@
     "apple,j575d": "Mac Studio (M3 Ultra, 2025): the pinned v0.9.2 engine has no j575dap device or T6032 chip entry, so it cannot inspect or plan this Mac",
     "apple,j614s": "MacBook Pro 14-inch (M4 Pro, 2024): M4 and later Macs are not supported"
   },
-  "developer": {},
+  "developer": {
+    "apple,j713": "MacBook Air 13-inch (M4, 2025): developer builds only, with a J713 image built on Aurora Silicon's J713 m1n1, U-Boot and kernel and macOS 26.6.2 OS firmware; public builds keep every M4 Mac refused"
+  },
   "untested": {
     "apple,j433": "Untested: Omarchy Mac previews are not yet qualified on M3 Macs",
     "apple,j434": "Untested: Omarchy Mac previews are not yet qualified on M3 Macs",

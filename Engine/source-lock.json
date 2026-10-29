@@ -141,7 +141,7 @@
     }
   },
   "downstream_overlay": {
-    "version": "v0.9.2-omarchy.20261022.31425f17fb9b",
+    "version": "v0.9.2-omarchy.20261023.2078705fce04",
     "capability": "candidate_bound_full_os_stage_one_authenticated_recovery",
     "minimum_app_version": "2.3.0",
     "engine_modes": [
@@ -151,7 +151,7 @@
     ],
     "patch": {
       "path": "patches/0001-omarchy-engine-runtime.patch",
-      "sha256": "28c3dbceebaeb2d023d972f816184609c2ffb6065502e1f91839ac69e9e4a94a"
+      "sha256": "7122576bffcdca067b26d7353c6675bf9a97ac89647a97e36f5c286582451c51"
     },
     "files": [
       {
@@ -172,7 +172,7 @@
       {
         "path": "overlay/src/omarchy_asahi.py",
         "destination": "src/omarchy_asahi.py",
-        "sha256": "57333e0e8b92c264e11a374ec757e974b8ef4a1f67fbfbeb5511f4b952695f0e"
+        "sha256": "0f967c5241372fef5c7ed2104d9565f8e6cb1f8aed14732e37ee02e178fe160e"
       },
       {
         "path": "overlay/src/omarchy_contract.py",
@@ -207,7 +207,7 @@
       {
         "path": "overlay/tests/test_omarchy_asahi.py",
         "destination": "tests/test_omarchy_asahi.py",
-        "sha256": "816f33146819c869792c012ccd422077daa291d56b506d6c41e892678a75c65b"
+        "sha256": "5287372ed07c2809e94490b4bef01334f57cdd6f406e421025b3658133100889"
       },
       {
         "path": "overlay/tests/test_omarchy_contract.py",
@@ -292,7 +292,7 @@
       {
         "path": "overlay/tests/test_omarchy_firmware.py",
         "destination": "tests/test_omarchy_firmware.py",
-        "sha256": "3655ba86b7282c2ce3a5305b78dba2510e535e5ae5d669a473301003040c34f1"
+        "sha256": "b29ad4147e25e305fb2ea5880c51c02be7aa2266695ebb4cc9ccbb3eeb09f9b3"
       },
       {
         "path": "overlay/src/omarchy_als.py",
@@ -467,9 +467,9 @@
     }
   ],
   "validation_artifact": {
-    "filename": "installer-v0.9.2-omarchy.20261022.31425f17fb9b.tar.gz",
-    "size_bytes": 17902703,
-    "sha256": "5fea6b561e6fb82260f573bae099c70ba2e9998df56d38cf285987432320d4b5",
+    "filename": "installer-v0.9.2-omarchy.20261023.2078705fce04.tar.gz",
+    "size_bytes": 17902945,
+    "sha256": "7875611e23f100b307db36076c4338caa4bb3097fd1706a60c97464f8a784ab6",
     "reproducibility_scope": "two-identical-python-overlay-repacks-authenticated-base",
     "signature": "absent",
     "metadata_sha256": "2e6181ce6b6e17c11039e04bfadade8d10ae0e11889885ad8c9960b68f179a5d"
@@ -496,7 +496,7 @@
           "upstream_base_sha256": "c8d4d2a80f3a88a9ba4d6d4024c0001062e35d15d72ae530681a0612e6525984",
           "upstream_sha256": "894fb8cd2ffc672bb96a14969ee9de2879d250c8c5990fee122ccf66d9b50024",
           "base_sha256": "95760ed02d44b5457acb81559a4e2d892ffbb7f0f2b7417c0b2eb02937945ae7",
-          "sha256": "84da2978421cc551411bc4acd15e4fcd208ea21c4f2f01510bfed5ce49e809dc"
+          "sha256": "81587c14ab0ed46f7d624ddf774ba316a4ce6f32aafc53ee91684bc8b190688a"
         }
       ]
     },

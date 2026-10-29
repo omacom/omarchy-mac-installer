@@ -437,6 +437,68 @@ class AsahiStage1AdapterTests(unittest.TestCase):
         self.assertIn(b"180190f8-0000-4000-8000-000000000000", boot_object)
         self.assertIn(b";m1n1/boot.bin", boot_object)
 
+    def _m4_air_payload(self, stage1=True, stage2=b"m1n1 m4 air"):
+        with zipfile.ZipFile(self.payload, "a") as archive:
+            if stage1:
+                archive.writestr("esp/aurora/stage1-j713.bin", j700_stage1())
+            if stage2 is not None:
+                archive.writestr("esp/m1n1/boot-j713.bin", stage2)
+        (self.installed_esp / "aurora").mkdir()
+        if stage1:
+            (self.installed_esp / "aurora/stage1-j713.bin").write_bytes(j700_stage1())
+        if stage2 is not None:
+            (self.installed_esp / "m1n1/boot-j713.bin").write_bytes(stage2)
+
+    def _m4_air_on_26_6_2(self):
+        installer = self._on_26_6_2()
+        installer.sysinfo.device_class = "j713ap"
+        return installer
+
+    def test_an_m4_air_payload_without_the_j713_stage1_is_refused_before_disk_changes(self):
+        self._m4_air_payload(stage1=False)
+        installer = self._m4_air_on_26_6_2()
+        adapter = self._adapter(installer)
+
+        with self.assertRaisesRegex(AsahiAdapterError, "stage1-j713.bin"):
+            adapter.preflight(self.plan)
+
+        self.assertFalse(adapter.preflight_complete)
+        self.assertEqual(installer.dutil.add_calls, [])
+
+    def test_an_m4_air_payload_without_its_stage2_is_refused_before_disk_changes(self):
+        self._m4_air_payload(stage2=None)
+        installer = self._m4_air_on_26_6_2()
+        adapter = self._adapter(installer)
+
+        with self.assertRaisesRegex(
+            AsahiAdapterError, "no esp/m1n1/boot-j713.bin for a 13-inch M4 MacBook Air"
+        ):
+            adapter.preflight(self.plan)
+
+        self.assertFalse(adapter.preflight_complete)
+        self.assertEqual(installer.dutil.add_calls, [])
+
+    def test_an_m4_air_boots_through_the_filled_j713_stage1_and_its_own_stage2(self):
+        self._m4_air_payload()
+        installer = self._m4_air_on_26_6_2()
+        adapter = self._adapter(installer)
+
+        adapter.preflight(self.plan)
+        adapter.prepare_target(self.plan)
+        partition_disk = adapter.osins.partition_disk
+        def with_a_real_esp_uuid(name, size):
+            partition_disk(name, size)
+            adapter.osins.efi_part.uuid = "180190F8-0000-4000-8000-000000000000"
+        adapter.osins.partition_disk = with_a_real_esp_uuid
+        adapter.install_stub_and_esp(self.plan)
+
+        boot_object = Path(installer.ins.boot_obj_path).read_bytes()
+        self.assertTrue(boot_object.startswith(b"m1n1 j700 stage 1"))
+        self.assertIn(b"180190f8-0000-4000-8000-000000000000", boot_object)
+        self.assertIn(b";m1n1/boot.bin", boot_object)
+        self.assertEqual((self.installed_esp / "m1n1/boot.bin").read_bytes(), b"m1n1 m4 air")
+        self.assertFalse((self.installed_esp / "m1n1/boot-j713.bin").exists())
+
     def _common_payload(self, stage1=None, stage2=b"common stage2"):
         with zipfile.ZipFile(self.payload) as archive:
             entries = {name: archive.read(name) for name in archive.namelist()}
@@ -2010,6 +2072,36 @@ class BoardStage1Tests(unittest.TestCase):
                     install_board_stage1("j613ap", "26.6.2", package.__getitem__, self.UUID, str(target))
                 self.assertEqual(target.read_bytes(), b"asahi stage 1")
 
+    def test_a_13_inch_m4_air_on_26_6_2_gets_the_filled_j713_stage1(self):
+        import struct as _struct
+        with tempfile.TemporaryDirectory() as root:
+            target = self.write_generic(root)
+            package = {"esp/aurora/stage1-j713.bin": j700_stage1(window=4321)}
+            install_board_stage1("j713ap", "26.6.2", package.__getitem__, self.UUID, str(target))
+            data = target.read_bytes()
+            self.assertEqual(len(data), len(package["esp/aurora/stage1-j713.bin"]))
+            offset = data.index(b"AURORA-S1-CFG01\0") + 16
+            _, window, uuid, path = _struct.unpack_from("<II40s192s", data, offset)
+            self.assertEqual(window, 0)
+            self.assertEqual(uuid.rstrip(b"\0"), self.UUID.encode())
+            self.assertEqual(path.rstrip(b"\0"), b";m1n1/boot.bin")
+
+    def test_an_m4_air_image_without_the_j713_stage1_is_refused(self):
+        for package in ({}, {"esp/aurora/stage1-j613.bin": j700_stage1()}):
+            with self.subTest(package=sorted(package)), tempfile.TemporaryDirectory() as root:
+                target = self.write_generic(root)
+                with self.assertRaisesRegex(AsahiAdapterError, "stage1-j713.bin"):
+                    install_board_stage1("j713ap", "26.6.2", package.__getitem__, self.UUID, str(target))
+                self.assertEqual(target.read_bytes(), b"asahi stage 1")
+
+    def test_an_m4_air_image_with_a_malformed_j713_stage1_is_refused(self):
+        package = {"esp/aurora/stage1-j713.bin": b"not a stage 1"}
+        with tempfile.TemporaryDirectory() as root:
+            target = self.write_generic(root)
+            with self.assertRaises(AsahiAdapterError):
+                install_board_stage1("j713ap", "26.6.2", package.__getitem__, self.UUID, str(target))
+            self.assertEqual(target.read_bytes(), b"asahi stage 1")
+
     def test_common_stage1_is_used_on_every_admitted_board_with_zero_delay(self):
         import struct as _struct
         package = {"esp/aurora/stage1.bin": j700_stage1(window=5000),
@@ -2111,6 +2203,29 @@ class EspBoardLayoutTests(unittest.TestCase):
     def test_a_neo_payload_without_its_stage2_is_refused(self):
         with self.assertRaisesRegex(AsahiAdapterError, "no esp/m1n1/boot-j700.bin for the MacBook Neo"):
             esp_board_layout("j700ap", ["esp/m1n1/boot.bin"])
+
+    M4_AIR_MEMBERS = MEMBERS + ["esp/aurora/stage1-j713.bin", "esp/m1n1/boot-j713.bin"]
+
+    def test_an_m4_air_installs_its_stage2_as_m1n1_boot_bin(self):
+        self.assertEqual(esp_board_layout("j713ap", self.M4_AIR_MEMBERS), {
+            "esp/EFI/BOOT/BOOTAA64.EFI": "EFI/BOOT/BOOTAA64.EFI",
+            "esp/aurora/stage1-j700.bin": "aurora/stage1-j700.bin",
+            "esp/aurora/stage1-j713.bin": "aurora/stage1-j713.bin",
+            "esp/m1n1/boot-j713.bin": "m1n1/boot.bin",
+        })
+
+    def test_other_macs_drop_the_m4_air_stage2(self):
+        for device_class, own in (("j613ap", None), ("j700ap", "esp/m1n1/boot-j700.bin")):
+            with self.subTest(device_class=device_class):
+                layout = esp_board_layout(device_class, self.M4_AIR_MEMBERS)
+                self.assertNotIn("esp/m1n1/boot-j713.bin", layout)
+                self.assertEqual(layout.get(own or "esp/m1n1/boot.bin"), "m1n1/boot.bin")
+
+    def test_an_m4_air_payload_without_its_stage2_is_refused(self):
+        with self.assertRaisesRegex(
+            AsahiAdapterError, "no esp/m1n1/boot-j713.bin for a 13-inch M4 MacBook Air"
+        ):
+            esp_board_layout("j713ap", ["esp/m1n1/boot.bin", "esp/aurora/stage1-j713.bin"])
 
     def test_a_member_outside_the_esp_is_refused(self):
         with self.assertRaises(AsahiAdapterError):

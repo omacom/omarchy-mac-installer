@@ -447,6 +447,14 @@ BOARD_STAGE1 = {
         "esp/aurora/stage1-j613.bin", 0, "26.6.2",
         "a 13-inch M3 MacBook Air on macOS 26.6.2",
     ),
+    # The M4 Air installs only 26.6.2 OS firmware (its CHIP_MIN_VER), and its
+    # Stage 1 is Eryk Wieliczko's J713 m1n1 (aurora-silicon/m1n1 #35) built as
+    # stage 1: it handshakes iBoot's ANS and hands a quiesced session on. The
+    # Stage 2 beside it is that m1n1 with the J713 control tree and U-Boot.
+    "j713ap": BoardStage1(
+        "esp/aurora/stage1-j713.bin", 0, "26.6.2",
+        "a 13-inch M4 MacBook Air on macOS 26.6.2",
+    ),
 }
 
 
@@ -537,7 +545,7 @@ ESP_STAGE2 = "esp/m1n1/boot.bin"
 # carries every board's prebuilt Stage 2: on its own board the file replaces
 # m1n1/boot.bin, and every other board drops it, so no ESP ever holds another
 # board's Stage 2.
-BOARD_STAGE2 = {"j700ap": "esp/m1n1/boot-j700.bin"}
+BOARD_STAGE2 = {"j700ap": "esp/m1n1/boot-j700.bin", "j713ap": "esp/m1n1/boot-j713.bin"}
 
 
 def esp_board_layout(device_class, members, *, common_allowed=False):
