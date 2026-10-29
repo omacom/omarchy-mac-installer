@@ -64,12 +64,6 @@
       return steps
     }
 
-    public static func recoveryAccountShutdownConfirmationBody(resuming: Bool) -> String {
-      "Save your work first. When this Mac is off, press and hold the power button until “Loading startup options” appears. Choose Omarchy → Finish Installation and sign in with your macOS account if asked, then "
-        + (resuming
-          ? "enter the recovery password at Resume recovery setup and follow the steps to authorize it."
-          : "choose Utilities → Create Recovery Account… from the menu bar.")
-    }
     public static let closeInstaller = "Close"
 
     // MARK: Screen B — Plan
@@ -258,10 +252,6 @@
 
     public static let recoveryHeadline = "Finish setup"
     public static let recoveryShutDown = "Shut down"
-    public static let shutdownConfirmationTitle = "Shut down this Mac now?"
-    public static let shutdownConfirmationBody =
-      "Save your work first. When this Mac is off, press and hold the power button until “Loading startup options” appears. Choose Omarchy → Finish Installation, then sign in with your macOS account."
-    public static let shutdownConfirmationAction = "Shut down"
     public static let mediaHeadline = "Connect the installation media"
 
     /// Numbered plain-language steps for the signed `requiredHumanSteps`

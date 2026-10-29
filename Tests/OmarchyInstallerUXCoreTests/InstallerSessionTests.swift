@@ -210,12 +210,6 @@
       XCTAssertEqual(resume.map(\.number), [1, 2, 3, 4, 5])
       XCTAssertTrue(resume[3].title.contains("Resume recovery setup"), resume[3].title)
       XCTAssertTrue(resume[4].title.contains("authorize"), resume[4].title)
-      XCTAssertTrue(
-        PlainLanguage.recoveryAccountShutdownConfirmationBody(resuming: false)
-          .contains("Utilities → Create Recovery Account…"))
-      XCTAssertTrue(
-        PlainLanguage.recoveryAccountShutdownConfirmationBody(resuming: true)
-          .contains("Resume recovery setup"))
     }
 
     func testChannelAvailabilityKeepsTheLatestCheck() async {

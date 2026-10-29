@@ -11,7 +11,6 @@ import SwiftUI
 struct OnePageInstallerView: View {
   @Environment(\.scenePhase) private var scenePhase
   @State private var session: InstallerSession
-  @State private var showsShutdownConfirmation = false
   @State private var showsRecoveryRetryConfirmation = false
   /// The last host seen, so the header stays on the page through the phases
   /// that no longer carry it.
@@ -121,21 +120,6 @@ struct OnePageInstallerView: View {
           onCheckHelper: { await session.checkWhetherHelperIsSwitchedOff() }
         )
       }
-    }
-    .sheet(isPresented: $showsShutdownConfirmation) {
-      ConfirmationSheet(
-        title: PlainLanguage.shutdownConfirmationTitle,
-        message: session.showsRecoveryAccountSetup
-          ? PlainLanguage.recoveryAccountShutdownConfirmationBody(
-            resuming: session.recoveryAccountStarted)
-          : PlainLanguage.shutdownConfirmationBody,
-        action: PlainLanguage.shutdownConfirmationAction,
-        onConfirm: {
-          showsShutdownConfirmation = false
-          shutDown()
-        },
-        onCancel: { showsShutdownConfirmation = false }
-      )
     }
     .sheet(isPresented: $showsRecoveryRetryConfirmation) {
       ConfirmationSheet(
@@ -535,8 +519,10 @@ struct OnePageInstallerView: View {
     }
   }
 
+  /// Shuts down straight away: the steps above already say to save work
+  /// first, and macOS still asks about unsaved documents.
   private var shutDownButton: some View {
-    Button(PlainLanguage.recoveryShutDown) { showsShutdownConfirmation = true }
+    Button(PlainLanguage.recoveryShutDown) { shutDown() }
       .omarchyPrimaryButton()
       .disabled(preparingShutdown)
       .keyboardShortcut(.defaultAction)
