@@ -11,7 +11,6 @@ import SwiftUI
 struct OnePageInstallerView: View {
   @Environment(\.scenePhase) private var scenePhase
   @State private var session: InstallerSession
-  @State private var showsShutdownConfirmation = false
   @State private var showsRecoveryRetryConfirmation = false
   /// The last host seen, so the header stays on the page through the phases
   /// that no longer carry it.
@@ -47,6 +46,12 @@ struct OnePageInstallerView: View {
     self.onSessionAvailable = onSessionAvailable
   }
 
+  /// The window fits its content between these heights. A phase shorter than
+  /// the minimum, such as the first screen, keeps its content at the top and
+  /// its buttons at the bottom; a taller one scrolls past the maximum.
+  private static let minimumContentHeight: CGFloat = 400
+  private static let maximumContentHeight: CGFloat = 680
+
   var body: some View {
     ScrollView {
       VStack(spacing: 0) {
@@ -57,11 +62,12 @@ struct OnePageInstallerView: View {
         header.padding(.bottom, 20)
         VStack(alignment: .leading, spacing: 14) { stage }
           .frame(maxWidth: 560)
+        Spacer(minLength: 0)
         HStack(spacing: 16) { actions }
           .padding(.top, 24)
           .padding(.bottom, 24)
       }
-      .frame(maxWidth: .infinity)
+      .frame(maxWidth: .infinity, minHeight: Self.minimumContentHeight, alignment: .top)
       .padding(.horizontal, 40)
       .background {
         GeometryReader { geometry in
@@ -69,7 +75,9 @@ struct OnePageInstallerView: View {
         }
       }
     }
-    .frame(height: min(contentHeight, 680))
+    .frame(
+      height: min(max(contentHeight, Self.minimumContentHeight), Self.maximumContentHeight)
+    )
     .onPreferenceChange(InstallerContentHeight.self) { height in
       if height > 0 { contentHeight = height }
     }
@@ -112,21 +120,6 @@ struct OnePageInstallerView: View {
           onCheckHelper: { await session.checkWhetherHelperIsSwitchedOff() }
         )
       }
-    }
-    .sheet(isPresented: $showsShutdownConfirmation) {
-      ConfirmationSheet(
-        title: PlainLanguage.shutdownConfirmationTitle,
-        message: session.showsRecoveryAccountSetup
-          ? PlainLanguage.recoveryAccountShutdownConfirmationBody(
-            resuming: session.recoveryAccountStarted)
-          : PlainLanguage.shutdownConfirmationBody,
-        action: PlainLanguage.shutdownConfirmationAction,
-        onConfirm: {
-          showsShutdownConfirmation = false
-          shutDown()
-        },
-        onCancel: { showsShutdownConfirmation = false }
-      )
     }
     .sheet(isPresented: $showsRecoveryRetryConfirmation) {
       ConfirmationSheet(
@@ -212,7 +205,6 @@ struct OnePageInstallerView: View {
       DownloadPanel(update: update)
 
     case .planReview(let plan, let acknowledged):
-      planIdentity(plan)
       DiskSplitPanel(
         plan: plan,
         editable: plan.isResizable,
@@ -230,14 +222,9 @@ struct OnePageInstallerView: View {
         onRetry: session.canRetryPrefetch ? { session.retryPrefetch() } : nil
       )
       if session.allowsEncryption {
-        EncryptDiskToggle(
-          isOn: session.encryptLinuxDisk,
-          enabled: !session.isBusy && !session.isEditingSize,
-          onChange: { session.setEncryptLinuxDisk($0) }
-        )
+        encryptionNote
       } else {
-        Text("Private M3 test: Linux will be installed without disk encryption.")
-          .font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
+        plainInstallCaution
       }
       if let notice = session.allocationNotice {
         Text(notice).font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
@@ -245,21 +232,15 @@ struct OnePageInstallerView: View {
       acknowledgement(acknowledged, resizesMacOS: plan.fixedMacOSBytes == nil)
 
     case .awaitingInstall(let plan, let helper, _):
-      planIdentity(plan)
       DiskSplitPanel(plan: plan, editable: false, isBusy: false, onSizeChosen: { _ in })
       PrefetchStrip(
         state: session.prefetchState,
         onRetry: session.canRetryPrefetch ? { session.retryPrefetch() } : nil
       )
       if session.allowsEncryption {
-        EncryptDiskToggle(
-          isOn: session.encryptLinuxDisk,
-          enabled: false,
-          onChange: { _ in }
-        )
+        encryptionNote
       } else {
-        Text("Private M3 test: Linux will be installed without disk encryption.")
-          .font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
+        plainInstallCaution
       }
       if !helper.isReady {
         helperNote
@@ -504,6 +485,21 @@ struct OnePageInstallerView: View {
     .padding(.top, 4)
   }
 
+  /// Every build but the private plain-install test encrypts the Omarchy
+  /// disk. There is nothing to choose, only the password to keep safe.
+  private var encryptionNote: some View {
+    Text(PlainLanguage.encryptionNote)
+      .omarchyHelpText()
+      .padding(.horizontal, 4)
+  }
+
+  /// The private plain-install test build never encrypts; every other build
+  /// always does, so there is nothing to choose.
+  private var plainInstallCaution: some View {
+    Text("Private M3 test: Linux will be installed without disk encryption.")
+      .font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
+  }
+
   private var helperNote: some View {
     HStack(spacing: 10) {
       Image(systemName: "lock.shield")
@@ -529,27 +525,19 @@ struct OnePageInstallerView: View {
       ForEach(handoff.steps) { step in
         RecoveryStepRow(step: step)
       }
-      Button("Copy setup steps") {
-        let steps = handoff.steps.map { step in
-          "\(step.number). \(step.title)" + (step.detail.map { "\n\($0)" } ?? "")
-        }
-        let text = ([handoff.headline] + [handoff.warning].compactMap { $0 } + steps)
-          .joined(separator: "\n\n")
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-      }
-      .omarchySecondaryButton()
       if let message = shutdownFailure ?? session.shutdownMessage {
         Text(message).font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
       }
     }
   }
 
+  /// Shuts down straight away: the steps above already say to save work
+  /// first, and macOS still asks about unsaved documents. With no
+  /// confirmation left, Return doesn't press it; only a click does.
   private var shutDownButton: some View {
-    Button(PlainLanguage.recoveryShutDown) { showsShutdownConfirmation = true }
+    Button(PlainLanguage.recoveryShutDown) { shutDown() }
       .omarchyPrimaryButton()
       .disabled(preparingShutdown)
-      .keyboardShortcut(.defaultAction)
   }
 
   /// The Recovery steps for an installation that finished but has not been
@@ -576,7 +564,10 @@ struct OnePageInstallerView: View {
       steps: [
         RecoveryStep(number: 1, title: "Shut down completely."),
         RecoveryStep(number: 2, title: guide.holdInstruction),
-        RecoveryStep(number: 3, title: "Choose “\(target.volumeName)” → Finish Installation."),
+        RecoveryStep(
+          number: 3,
+          title:
+            "Choose “\(target.volumeName)”, click Continue, then sign in with your macOS account."),
       ],
       warning: "Don’t restart normally yet: unfinished setup can cause a boot loop.")
   }
@@ -626,16 +617,6 @@ struct OnePageInstallerView: View {
 
   // MARK: Plumbing
 
-  private func planIdentity(_ plan: PlanDisplay) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text(plan.releaseDescription)
-      Text(plan.targetDescription)
-    }
-    .font(OmarchyTheme.body)
-    .foregroundStyle(OmarchyTheme.secondaryText)
-    .fixedSize(horizontal: false, vertical: true)
-  }
-
   private var approvedSize: String? {
     guard case .awaitingInstall(let plan, _, _) = session.phase else { return nil }
     return PlainLanguage.bytes(plan.omarchyBytes)
@@ -677,7 +658,7 @@ struct OnePageInstallerView: View {
   }
 }
 
-// MARK: - Prefetch strip and encryption
+// MARK: - Prefetch strip
 
 private struct PrefetchStrip: View {
   let state: PayloadPrefetchState
@@ -739,33 +720,6 @@ private struct PrefetchStrip: View {
     default:
       nil
     }
-  }
-}
-
-private struct EncryptDiskToggle: View {
-  let isOn: Bool
-  let enabled: Bool
-  let onChange: (Bool) -> Void
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Toggle(
-        PlainLanguage.encryptLinuxDiskTitle,
-        isOn: Binding(
-          get: { isOn },
-          set: { value in onChange(value) }
-        )
-      )
-      .toggleStyle(.checkbox)
-      .controlSize(.large)
-      .tint(OmarchyTheme.accent)
-      .disabled(!enabled)
-      // One help paragraph: the password, and that nothing else unlocks the disk.
-      Text(PlainLanguage.encryptLinuxDiskPassword + " " + PlainLanguage.encryptLinuxDiskNoRecovery)
-        .omarchyHelpText()
-    }
-    .padding(.horizontal, 4)
-    .padding(.top, 4)
   }
 }
 
@@ -935,8 +889,6 @@ private struct DiskSplitPanel: View {
             )
             .omarchyHelpText()
           }
-          Text("Omarchy will use the space selected above.")
-            .omarchyHelpText()
           if isBusy {
             // A released divider re-plans through the engine, which takes a
             // moment; say so instead of leaving the bar and the tick inert.
@@ -1007,47 +959,25 @@ private struct DiskSplitPanel: View {
 
 // MARK: - The install bar
 
-/// Stage count and verified activity describe progress without inventing a
-/// percentage for operations whose duration is unknown.
+/// The current phase, one estimated bar and the time left. Verified activity
+/// stays one click away.
 private struct InstallPanel: View {
   let progress: InstallProgressDisplay
   @State private var estimate = InstallationProgressEstimate(
     expectedSeconds: InstallationTimingHistory.expectedSeconds)
 
-  private var stageLabel: String {
-    let index = progress.stageIndex
-    if progress.stageLabels.indices.contains(index) {
-      return progress.phaseTitle
-    }
-    return progress.phaseTitle
-  }
-
   var body: some View {
     Panel {
       VStack(alignment: .leading, spacing: 12) {
-        HStack(alignment: .firstTextBaseline) {
-          Text(stageLabel)
-            .font(OmarchyTheme.heading)
-            .lineLimit(1)
-            .truncationMode(.tail)
-          Spacer(minLength: 8)
-          TimelineView(.periodic(from: progress.startedAt, by: 1)) { context in
-            Text(elapsed(at: context.date))
-              .font(OmarchyTheme.detail)
-              .foregroundStyle(OmarchyTheme.secondaryText)
-          }
-          Text(
-            "Step \(min(progress.stageIndex + 1, progress.stageLabels.count)) of \(progress.stageLabels.count)"
-          )
-          .font(OmarchyTheme.body)
-        }
+        Text(progress.phaseTitle)
+          .font(OmarchyTheme.heading)
+          .lineLimit(1)
+          .truncationMode(.tail)
         TimelineView(.periodic(from: progress.startedAt, by: 1)) { context in
           let elapsed = max(0, context.date.timeIntervalSince(progress.startedAt))
           VStack(alignment: .leading, spacing: 6) {
             ProgressTrack(fraction: estimate.fraction, height: 18)
-            HStack {
-              Text("Estimated progress · \(Int(estimate.fraction * 100))%")
-              Spacer()
+            Group {
               if let minutes = estimate.remainingMinutes(elapsed: elapsed) {
                 Text("About \(minutes) min remaining")
               } else {
@@ -1075,11 +1005,6 @@ private struct InstallPanel: View {
       }
       .padding(.vertical, 4)
     }
-  }
-
-  private func elapsed(at date: Date) -> String {
-    let seconds = max(0, Int(date.timeIntervalSince(progress.startedAt)))
-    return String(format: "%d:%02d", seconds / 60, seconds % 60)
   }
 }
 

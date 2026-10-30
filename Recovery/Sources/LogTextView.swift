@@ -24,7 +24,8 @@ final class LogTextView: NSScrollView {
     editor.textContainerInset = NSSize(width: 12, height: 12)
     editor.isVerticallyResizable = true
     editor.isHorizontallyResizable = false
-    editor.autoresizingMask = [.width]
+    // tile() sets the width; autoresizing would add the growth from .zero.
+    editor.autoresizingMask = []
     editor.textContainer?.widthTracksTextView = true
     editor.textContainer?.containerSize = NSSize(
       width: 474, height: CGFloat.greatestFiniteMagnitude)
@@ -33,6 +34,19 @@ final class LogTextView: NSScrollView {
   }
 
   required init?(coder: NSCoder) { fatalError("Use the programmatic initializer") }
+
+  /// This view starts at .zero and takes its size from constraints. With a
+  /// width autoresizing mask the text view would gain that whole growth on top
+  /// of its initial width and end up twice as wide as the visible area: lines
+  /// wrapped past the right edge, and the clip view kept the sideways offset
+  /// left by scrolling to the end before layout. Keep the text view exactly as
+  /// wide as the clip view, whichever scroller style is in use.
+  override func tile() {
+    super.tile()
+    let width = contentView.bounds.width
+    guard width > 0, editor.frame.width != width else { return }
+    editor.setFrameSize(NSSize(width: width, height: editor.frame.height))
+  }
 
   var displayedText: String { editor.string }
   var textView: NSTextView { editor }

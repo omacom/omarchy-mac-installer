@@ -52,10 +52,10 @@ For ambiguous outcomes, expand **Last verified activity**. Lack of a checkpoint 
 2. Disk controls use the engine candidate's actual bounds. Every replan resets tentative UI state and acknowledgement, even when allocation is unchanged. Free extents keep total capacity and macOS capacity stable and show remaining unallocated space.
 3. Ambiguous helper outcomes no longer claim that nothing changed. Verified activity stays visible and resubmission stays locked.
 4. Cancelling authorization permits returning to disk review and discards approval.
-5. Progress shows step count, actual phase, elapsed time, and expandable verified activity. Byte-based download progress remains measurable.
-6. Shutdown dispatch success or failure stays visible; the app does not quit before macOS decides whether shutdown can proceed. Recovery steps can be copied for another device.
+5. Progress shows the actual phase, one estimated bar with the time remaining, and expandable verified activity. Byte-based download progress remains measurable.
+6. Shutdown dispatch success or failure stays visible; the app does not quit before macOS decides whether shutdown can proceed.
 7. Disk resizing has a text field with green Apply and red Cancel controls, plus an assistive adjustment action. Keyboard focus is retained. Long content scrolls, and technical errors expand on demand.
-8. Plan review names the release/channel and target. The credential sheet explains the macOS account and authorization purpose. Wording consistently uses macOS, SSD, and Shut down.
+8. The credential sheet explains the macOS account and authorization purpose. Wording consistently uses macOS, SSD, and Shut down.
 
 ## Verification
 

@@ -17,6 +17,10 @@ final class InstallerModel {
   var password = "" { didSet { changed() } }
   var authorizationOwner: RecoveryOwner? { didSet { changed() } }
   var authorizationUsesSourceOwner = false { didSet { changed() } }
+  /// The first screen asks for the password to install, or to repair the
+  /// startup disk after a wrong-Recovery issue.
+  var authorizationPurpose = AuthorizationPrompt.Purpose.install { didSet { changed() } }
+  var authorizationRejection: String? { didSet { changed() } }
   var progress = 0.0 { didSet { changed() } }
   var currentOperation = "Preparing installation" { didSet { changed() } }
   var operations: [String] = [] { didSet { changed() } }
@@ -34,8 +38,8 @@ final class InstallerModel {
   var restartingCompletedSetup = false { didSet { changed() } }
   var accountNeedsAuthorization = false { didSet { changed() } }
   /// The recovery account has not been started and stays optional: the
-  /// finished screen restarts straight away and only offers the account form
-  /// when the person asks for it.
+  /// finished screen restarts straight away and only opens the account form
+  /// when the person holds Shift or chooses Utilities → Create Recovery Account….
   var accountOffered = false { didSet { changed() } }
   var previewNotice: (title: String, message: String)? { didSet { changed() } }
   private var checkingAccount = false
@@ -60,8 +64,13 @@ final class InstallerModel {
     stage = accountNeedsAuthorization ? .account : .complete
   }
 
+  /// The finished screen can still open the optional account form.
+  var canShowRecoveryAccountForm: Bool {
+    stage == .complete && accountOffered && !restartingWithoutAccount
+  }
+
   func showRecoveryAccountForm() {
-    guard stage == .complete, accountOffered, !restartingWithoutAccount else { return }
+    guard canShowRecoveryAccountForm else { return }
     stage = .account
   }
 
@@ -227,6 +236,57 @@ final class InstallerModel {
         }
       }
     }
+  }
+
+  var authorizationPrompt: AuthorizationPrompt {
+    AuthorizationPrompt(
+      purpose: authorizationPurpose,
+      owner: RecoveryActions.inRecovery
+        ? (authorizationOwner?.username ?? "the volume owner") : NSUserName(),
+      // Outside Recovery the preview asks for the current macOS user, like the
+      // original-owner bootstrap does.
+      macOSOwner: !RecoveryActions.inRecovery || authorizationUsesSourceOwner,
+      rejection: authorizationRejection)
+  }
+
+  /// The first screen asks for a password, except Repair startup's Restore screen.
+  var asksForAuthorization: Bool { !recoveryInterface || authorizationPurpose == .repair }
+
+  var canAuthorize: Bool { stage == .welcome && asksForAuthorization && !checkingEnvironment }
+
+  /// Submits the password typed on the first screen. Installing rechecks the
+  /// Recovery environment first, as the old Continue button did.
+  func authorize(with credential: String) {
+    guard canAuthorize, !credential.isEmpty else { return }
+    authorizationRejection = nil
+    if authorizationPurpose == .repair {
+      repairRecoveryBoot(password: credential) { [weak self] rejection in
+        self?.requestRepairPassword(rejection)
+      }
+      return
+    }
+    checkEnrollmentEnvironment { [weak self] in
+      guard let self else { return }
+      self.password = credential
+      self.startDemo { [weak self] rejection in self?.authorizationRejection = rejection }
+    }
+  }
+
+  /// Set Startup Disk and Shut Down; the first screen asks for the owner's
+  /// password only if selecting the startup disk needs it.
+  func repairStartupDisk() {
+    repairRecoveryBoot { [weak self] rejection in self?.requestRepairPassword(rejection) }
+  }
+
+  private func requestRepairPassword(_ rejection: String?) {
+    authorizationPurpose = .repair
+    authorizationRejection = rejection
+  }
+
+  func cancelStartupDiskRepair() {
+    guard authorizationPurpose == .repair, !checkingEnvironment else { return }
+    authorizationPurpose = .install
+    authorizationRejection = nil
   }
 
   /// `needsPassword` receives the reason when a password was refused.
@@ -407,7 +467,7 @@ final class InstallerModel {
     if RecoveryActions.isPreview {
       previewNotice = (
         "Choose your startup disk",
-        "In Recovery, this opens Startup Disk. Select \(DestinationVolume.name), click Restart, and authorize your recovery account when asked."
+        "In Recovery, this opens Startup Disk. Select \(RecoveryActions.volumeName), click Restart, and authorize your recovery account when asked."
       )
       return
     }
@@ -444,30 +504,11 @@ final class InstallerModel {
   }
 }
 
-enum DestinationVolume {
-  static let url = RecoveryActions.volume
-  static let name = RecoveryActions.volumeName
-  static let icon: NSImage = {
-    // Read the actual custom volume icon without synchronously asking
-    // LaunchServices/IconServices while Recovery is launching this app.
-    if let image = NSImage(contentsOf: url.appendingPathComponent(".VolumeIcon.icns")) {
-      return image
-    }
-    if let bundled = Bundle.main.url(forResource: "OmarchyVolumeIcon", withExtension: "png"),
-      let image = NSImage(contentsOf: bundled)
-    {
-      return image
-    }
-    return NSImage(systemSymbolName: "internaldrive", accessibilityDescription: "Startup volume")
-      ?? NSImage(size: NSSize(width: 96, height: 96))
-  }()
-}
-
 // AppKit owns the window and sheets, including their titlebar and background.
 final class InstallerWindow: NSWindow {
   init() {
     super.init(
-      contentRect: NSRect(x: 0, y: 0, width: 780, height: 660),
+      contentRect: RecoveryWindowLayout.initialFrame,
       styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
     titleVisibility = .hidden
     titlebarAppearsTransparent = true
@@ -480,7 +521,7 @@ final class InstallerWindow: NSWindow {
     isMovableByWindowBackground = true
     // Full-size content occupies the titlebar too. Preserve the original outer
     // dimensions instead of adding AppKit's titlebar height to the layout.
-    setFrame(NSRect(x: 0, y: 0, width: 780, height: 660), display: false)
+    setFrame(RecoveryWindowLayout.initialFrame, display: false)
   }
 }
 
@@ -501,12 +542,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     window.backgroundColor = .clear
     window.hasShadow = true
     window.isMovableByWindowBackground = true
-    NSApp.applicationIconImage = DestinationVolume.icon
     LaunchTrace.mark("window.creatingContent")
     let controller = InstallerView(model: model)
     window.contentViewController = controller
     self.controller = controller
-    window.setFrame(NSRect(x: 0, y: 0, width: 780, height: 660), display: false)
+    window.setFrame(RecoveryWindowLayout.initialFrame, display: false)
     LaunchTrace.mark("window.contentCreated")
     window.center()
     window.makeKeyAndOrderFront(nil)
@@ -577,6 +617,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       withTitle: "Terminal", action: #selector(openTerminal(_:)), keyEquivalent: "t")
     terminal.keyEquivalentModifierMask = [.command, .option]
     terminal.target = self
+    utilities.addItem(.separator())
+    let details = utilities.addItem(
+      withTitle: "Show Details", action: #selector(InstallerView.showDetails(_:)),
+      keyEquivalent: "")
+    details.target = controller
+    let account = utilities.addItem(
+      withTitle: "Create Recovery Account…",
+      action: #selector(InstallerView.showRecoveryAccountForm(_:)), keyEquivalent: "")
+    account.target = controller
 
     let windows = submenu("Window")
     windows.addItem(

@@ -56,7 +56,9 @@
     }
     public private(set) var allocationNotice: String?
     public private(set) var shutdownMessage: String?
-    public private(set) var encryptLinuxDisk = true
+    /// Whether this build encrypts the Omarchy disk. Every build does, except
+    /// the private plain-install test profile, which never does. It is not a
+    /// choice the person makes.
     public let allowsEncryption: Bool
     public private(set) var prefetchState: PayloadPrefetchState = .verified
 
@@ -155,10 +157,8 @@
 
     public init(environment: any InstallerEnvironment, allowsEncryption: Bool = true) {
       self.allowsEncryption = allowsEncryption
-      encryptLinuxDisk = allowsEncryption
       self.environment = environment
       prefetchState = environment.payloadPrefetchRequired ? .idle : .verified
-      environment.setEncryptLinuxDisk(allowsEncryption)
     }
 
     // MARK: Derived state
@@ -443,18 +443,6 @@
       phase = .planReview(plan, acknowledged: value)
     }
 
-    public func setEncryptLinuxDisk(_ value: Bool) {
-      guard allowsEncryption || !value else { return }
-      guard !isBusy && !isExecuting else { return }
-      switch phase {
-      case .planReview, .awaitingInstall:
-        encryptLinuxDisk = value
-        environment.setEncryptLinuxDisk(value)
-      default:
-        break
-      }
-    }
-
     public func approve() {
       guard !isBusy && !isExecuting && !isEditingSize,
         case .planReview(let plan, let acknowledged) = phase,
@@ -639,7 +627,7 @@
         let completion = try await environment.execute(
           operation: context.kind,
           authorization: authorization,
-          encryptLinuxDisk: encryptLinuxDisk,
+          encryptLinuxDisk: allowsEncryption,
           journal: { [weak self] chunk in
             receivedJournal.append(chunk)
             Task { @MainActor in
@@ -994,8 +982,6 @@
       isExecuting = false
       lastHost = nil
       refusedPlan = nil
-      encryptLinuxDisk = allowsEncryption
-      environment.setEncryptLinuxDisk(allowsEncryption)
       stopPrefetch()
     }
 

@@ -363,6 +363,10 @@
       XCTAssertEqual(steps.count, 3)
       XCTAssertEqual(steps.map(\.number), [1, 2, 3])
       XCTAssertTrue(steps.allSatisfy { !($0.detail ?? "").isEmpty })
+      XCTAssertEqual(steps[1].title, "Hold the power button")
+      XCTAssertEqual(steps[1].detail, "Hold until “Loading startup options” appears.")
+      XCTAssertEqual(
+        steps[2].detail, "Choose Omarchy, click Continue, then sign in with your macOS account.")
 
       let unknown = PlainLanguage.recoverySteps(for: ["somethingNew"])
       XCTAssertEqual(unknown.count, 1)
@@ -557,14 +561,18 @@
       XCTAssertTrue(PlainLanguage.planAcknowledgement(resizesMacOS: false).contains("backup"))
     }
 
-    func testEncryptionCopyNamesTheCheckboxAndDefaultOnFailure() {
-      XCTAssertEqual(
-        PlainLanguage.encryptLinuxDiskTitle, "Encrypt the Omarchy disk")
-      XCTAssertEqual(
-        PlainLanguage.encryptLinuxDiskPassword,
-        "The Omarchy password you create at first boot will unlock the encrypted disk after installation."
-      )
-      XCTAssertFalse(PlainLanguage.encryptLinuxDiskPassword.lowercased().contains("macos"))
+    func testEncryptionNoteIsOneLineWithThePasswordWarning() {
+      let note = PlainLanguage.encryptionNote
+      XCTAssertTrue(note.contains("encrypts Omarchy"), note)
+      XCTAssertTrue(note.contains("first-boot password"), note)
+      XCTAssertTrue(note.contains("no recovery key"), note)
+      XCTAssertFalse(note.contains("\n"))
+      // One line: 10-point SF Mono is about 6.2 points per character, and
+      // the help text has 552 points of the page column.
+      XCTAssertLessThanOrEqual(note.count, 84, note)
+    }
+
+    func testEncryptionHandoffCopyDefaultsToEncryptingOnFailure() {
       XCTAssertEqual(
         PlainLanguage.encryptionChoiceNotRecorded,
         "The encryption choice wasn’t saved, so Omarchy will encrypt its disk at first boot."

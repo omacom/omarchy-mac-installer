@@ -66,18 +66,6 @@
       feed = []
     }
 
-    /// The number of the stage currently being worked on (0-based), derived
-    /// from the highest checkpoint reached plus the last started event.
-    public var stageIndex: Int {
-      let completedStages = Self.stagePhases.filter { phase in
-        checkpoints.contains { $0.phase == phase }
-      }.count
-      if completion != nil {
-        return max(0, Self.stagePhases.count - 1)
-      }
-      return min(completedStages, Self.stagePhases.count - 1)
-    }
-
     public var stageFractions: [Double] {
       Self.stagePhases.map { phase in
         checkpoints.contains { $0.phase == phase } ? 1 : 0
@@ -110,9 +98,7 @@
     public func display(startedAt: Date) -> InstallProgressDisplay {
       InstallProgressDisplay(
         phaseTitle: phaseTitle,
-        stageIndex: stageIndex,
         stageFractions: stageFractions,
-        stageLabels: PlainLanguage.installStageLabels,
         feed: feed,
         degraded: degraded,
         startedAt: startedAt

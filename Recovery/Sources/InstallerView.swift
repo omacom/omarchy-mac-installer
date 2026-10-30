@@ -2,7 +2,7 @@ import AppKit
 
 /// The complete Recovery interface uses only AppKit. The model owns installation
 /// work; this controller renders its state and keeps credentials in native fields.
-final class InstallerView: NSViewController, NSTextFieldDelegate {
+final class InstallerView: NSViewController, NSTextFieldDelegate, NSMenuItemValidation {
   private let model: InstallerModel
   private let log = InstallerLog.shared
   private let titleLabel = NSTextField(labelWithString: "")
@@ -11,6 +11,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   private let content = NSView()
   private let footer = NSView()
   private var renderedStage: Stage?
+  private var renderedAuthorization: Bool?
   private var primaryButton: NSButton?
   private var debugButton: NSButton?
   private var proxyButton: NSButton?
@@ -21,16 +22,18 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   private var accountConfirmationField: NSSecureTextField?
   private var accountButton: NSButton?
   private var skipButton: NSButton?
-  private var offerAccountButton: NSButton?
-  private var detailsButton: NSButton?
   private var issueShowing = false
   private var issueRepair = false
-  private var authorizationRepair = false
   private let sheets = SheetPresenter()
+  private var authorizationMessage: NSTextField?
   private var authorizationField: NSSecureTextField?
+  private var cancelRepairButton: NSButton?
   private var detailsViewer: LogTextView?
   private var copyButton: NSButton?
   private var copyingLog = false
+  /// Modifiers held in the key window; they pick the finished screen's action.
+  private var heldModifiers: NSEvent.ModifierFlags = []
+  private var modifierMonitor: Any?
 
   init(model: InstallerModel) {
     self.model = model
@@ -38,7 +41,6 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     model.onChange = { [weak self] in self?.refresh() }
     log.onChange = { [weak self] in self?.refresh() }
     sheets.onDismiss = { [weak self] in
-      self?.authorizationField = nil
       self?.detailsViewer = nil
       self?.copyButton = nil
       self?.refresh()
@@ -50,10 +52,11 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   deinit {
     model.onChange = nil
     log.onChange = nil
+    if let modifierMonitor { NSEvent.removeMonitor(modifierMonitor) }
   }
 
   override func loadView() {
-    let root = NSView(frame: NSRect(x: 0, y: 0, width: 780, height: 660))
+    let root = NSView(frame: RecoveryWindowLayout.initialFrame)
     root.wantsLayer = true
     root.layer?.backgroundColor = OmarchyTheme.darkCGColor(OmarchyTheme.window)
     root.appearance = NSAppearance(named: .darkAqua)
@@ -90,7 +93,7 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
       content.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 24),
       content.centerXAnchor.constraint(equalTo: root.centerXAnchor),
       content.widthAnchor.constraint(equalToConstant: 510),
-      content.heightAnchor.constraint(equalToConstant: 292),
+      content.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -8),
       footer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 32),
       footer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -32),
       footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -14),
@@ -99,28 +102,100 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     refresh()
   }
 
+  override func viewDidAppear() {
+    super.viewDidAppear()
+    guard modifierMonitor == nil, let window = view.window else { return }
+    modifierMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) {
+      [weak self] event in
+      self?.track(event.modifierFlags)
+      return event
+    }
+    let center = NotificationCenter.default
+    center.addObserver(
+      self, selector: #selector(windowBecameKey), name: NSWindow.didBecomeKeyNotification,
+      object: window)
+    center.addObserver(
+      self, selector: #selector(windowResignedKey), name: NSWindow.didResignKeyNotification,
+      object: window)
+    track(NSEvent.modifierFlags)
+    fitWindow(animate: false)
+  }
+
+  /// Only the recovery account form uses the tall window. Resizing keeps the
+  /// top edge, so the wordmark and title stay where they were.
+  private func fitWindow(animate: Bool) {
+    guard let window = view.window else { return }
+    let height = RecoveryWindowLayout.height(showsAccountForm: model.stage == .account)
+    guard window.frame.height != height else { return }
+    let frame = RecoveryWindowLayout.frame(
+      window.frame, height: height, visible: window.screen?.visibleFrame)
+    window.setFrame(frame, display: true, animate: animate)
+  }
+
+  @objc private func windowBecameKey() { track(NSEvent.modifierFlags) }
+  @objc private func windowResignedKey() { track([]) }
+
+  /// Only keys held while this window is key count, so Shift can't stick
+  /// after the window loses focus or a sheet opens over it.
+  private func track(_ modifiers: NSEvent.ModifierFlags) {
+    let held = view.window?.isKeyWindow == true ? modifiers : []
+    guard held != heldModifiers else { return }
+    heldModifiers = held
+    refresh()
+  }
+
+  private var completionAction: CompletionAction {
+    CompletionAction.current(
+      modifiers: heldModifiers, accountAvailable: model.canShowRecoveryAccountForm)
+  }
+
   private func refresh() {
     if !Thread.isMainThread {
       DispatchQueue.main.async { [weak self] in self?.refresh() }
       return
     }
     guard isViewLoaded else { return }
-    if renderedStage != model.stage {
+    if renderedStage != model.stage || renderedAuthorization != model.asksForAuthorization {
+      let stageChanged = renderedStage != model.stage
       renderedStage = model.stage
+      renderedAuthorization = model.asksForAuthorization
       buildStage()
+      if stageChanged { fitWindow(animate: true) }
     }
     titleLabel.stringValue = stageTitle
     titleLabel.alignment = model.stage == .account ? .left : .center
     titleWidthConstraint?.constant = model.stage == .account ? 380 : 600
-    titleTopConstraint?.constant =
-      model.stage == .installing ? 110 : model.stage == .complete ? 48 : 28
+    // Title offsets balance each screen in the compact window.
+    switch model.stage {
+    case .installing: titleTopConstraint?.constant = 40
+    case .complete: titleTopConstraint?.constant = model.accountNeedsAuthorization ? 28 : 48
+    case .welcome, .account: titleTopConstraint?.constant = 28
+    }
     progressIndicator?.doubleValue = model.progress * 100
     operationLabel?.stringValue = model.currentOperation + "…"
     primaryButton?.isEnabled =
       !model.checkingEnvironment && !model.restartingCompletedSetup
       && !model.restartingWithoutAccount
-    offerAccountButton?.isEnabled = !model.restartingWithoutAccount
-    detailsButton?.isHidden = model.stage == .welcome && log.text.isEmpty
+    if model.stage == .welcome && model.asksForAuthorization {
+      let prompt = model.authorizationPrompt
+      authorizationMessage?.stringValue = prompt.message
+      // A disabled field loses focus; give it back once the check finishes.
+      let wasEnabled = authorizationField?.isEnabled
+      authorizationField?.isEnabled = model.canAuthorize
+      if wasEnabled == false && model.canAuthorize { focusAuthorizationField() }
+      // RecoveryPrimaryButton shows its title in capitals.
+      primaryButton?.title = prompt.action.uppercased()
+      cancelRepairButton?.isHidden = prompt.purpose != .repair
+      cancelRepairButton?.isEnabled = prompt.purpose == .repair && model.canAuthorize
+    }
+    if model.stage == .complete, let restart = primaryButton {
+      let action = completionAction
+      // RecoveryPrimaryButton shows its title in capitals.
+      let title = action.title.uppercased()
+      if restart.title != title { restart.title = title }
+      restart.action =
+        action == .restart ? #selector(restartPressed) : #selector(showRecoveryAccountForm(_:))
+    }
     debugButton?.title = model.debugEnabled ? "Disable Debug" : "Enable Debug"
     proxyButton?.title = model.proxyEnabled ? "Disable Proxy" : "Enable Proxy"
     accountButton?.title =
@@ -168,14 +243,15 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
 
   private var stageTitle: String {
     switch model.stage {
-    case .welcome: return model.recoveryInterface ? "Repair startup" : "Finish setup"
+    case .welcome:
+      return model.asksForAuthorization ? model.authorizationPrompt.title : "Repair startup"
     case .installing:
       return model.recoveryInterface ? "Restoring startup software" : "Setting up Omarchy"
     case .account:
       return model.accountAlreadyStarted ? "Resume recovery setup" : "Create a recovery account"
     case .complete:
       if model.accountNeedsAuthorization { return "Authorize recovery account" }
-      return model.recoveryInterface ? "Recovery complete" : "Installation complete"
+      return model.recoveryInterface ? "Recovery complete" : "Installation complete!"
     }
   }
 
@@ -192,8 +268,10 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     accountConfirmationField = nil
     accountButton = nil
     skipButton = nil
-    offerAccountButton = nil
-    detailsButton = nil
+    authorizationMessage = nil
+    authorizationField = nil
+    cancelRepairButton = nil
+    heldModifiers = view.window?.isKeyWindow == true ? NSEvent.modifierFlags : []
 
     switch model.stage {
     case .welcome: buildWelcome()
@@ -205,35 +283,39 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   }
 
   private func buildWelcome() {
-    let stack = vertical(spacing: 9)
-    stack.addArrangedSubview(
-      label(
-        model.recoveryInterface
-          ? "Restore the startup software for your Mac."
-          : "Finish setting up Omarchy on your Mac.", size: 15))
-    stack.addArrangedSubview(
-      label(
-        model.recoveryInterface
-          ? "Use the saved recovery files to repair your\nstartup software."
-          : "The final step installs the startup software for your\nselected Omarchy volume.",
-        size: 13))
-    let icon = NSImageView(image: DestinationVolume.icon)
-    icon.imageScaling = .scaleProportionallyUpOrDown
-    icon.translatesAutoresizingMaskIntoConstraints = false
-    icon.widthAnchor.constraint(equalToConstant: 96).isActive = true
-    icon.heightAnchor.constraint(equalToConstant: 96).isActive = true
-    stack.setCustomSpacing(54, after: stack.arrangedSubviews[1])
-    stack.addArrangedSubview(icon)
-    stack.addArrangedSubview(label(DestinationVolume.name, size: 14))
+    guard model.asksForAuthorization else {
+      let stack = vertical(spacing: 9)
+      stack.addArrangedSubview(label("Restore the startup software for your Mac.", size: 15))
+      stack.addArrangedSubview(
+        label("Use the saved recovery files to repair your\nstartup software.", size: 13))
+      place(stack)
+      return
+    }
+    // Finish setup is the password request itself; refresh() fills in the copy.
+    let stack = vertical(spacing: 16)
+    let message = label("", size: 13)
+    message.preferredMaxLayoutWidth = 470
+    stack.addArrangedSubview(message)
+    authorizationMessage = message
+    let field = NSSecureTextField()
+    field.placeholderString = "Password"
+    field.delegate = self
+    style(field)
+    stack.addArrangedSubview(field)
+    authorizationField = field
     place(stack)
+    focusAuthorizationField()
+  }
+
+  private func focusAuthorizationField() {
+    DispatchQueue.main.async { [weak self] in
+      guard let self, let field = self.authorizationField, field.isEnabled else { return }
+      self.view.window?.makeFirstResponder(field)
+    }
   }
 
   private func buildInstalling() {
     let stack = vertical(spacing: 15)
-    stack.addArrangedSubview(
-      label(
-        (model.recoveryInterface ? "Restoring " : "Setting up ") + DestinationVolume.name,
-        size: 14))
     let progress = NSProgressIndicator()
     progress.isIndeterminate = false
     progress.minValue = 0
@@ -294,23 +376,11 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
 
   private func buildComplete() {
     let stack = vertical(spacing: 13)
-    stack.addArrangedSubview(
-      label(
-        model.accountNeedsAuthorization
-          ? DestinationVolume.name + " is ready for authorization."
-          : DestinationVolume.name + " is ready to start.", size: 15))
-    stack.setCustomSpacing(40, after: stack.arrangedSubviews[0])
-    let icon = NSImageView(image: DestinationVolume.icon)
-    icon.imageScaling = .scaleProportionallyUpOrDown
-    icon.translatesAutoresizingMaskIntoConstraints = false
-    icon.widthAnchor.constraint(equalToConstant: 96).isActive = true
-    icon.heightAnchor.constraint(equalToConstant: 96).isActive = true
-    stack.addArrangedSubview(icon)
-    stack.setCustomSpacing(40, after: icon)
     if model.accountNeedsAuthorization {
       stack.addArrangedSubview(
         label(
-          "Select “" + DestinationVolume.name + "”, click “Restart…”, then “Authorize Users…”.",
+          "Select “" + RecoveryActions.volumeName
+            + "”, click “Restart…”, then “Authorize Users…”.",
           size: 12))
       stack.addArrangedSubview(
         label(
@@ -324,29 +394,39 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
 
   private func buildFooter() {
     let center = NSStackView()
-    let stacked = model.stage == .account || (model.stage == .complete && model.accountOffered)
+    let stacked = model.stage == .account
     center.orientation = stacked ? .vertical : .horizontal
     center.spacing = stacked ? 6 : 12
     center.alignment = stacked ? .centerX : .centerY
     center.translatesAutoresizingMaskIntoConstraints = false
 
     switch model.stage {
+    case .welcome where model.asksForAuthorization:
+      // Cancel appears only while repairing the startup disk.
+      let cancel = RecoverySecondaryButton(
+        title: "Cancel", target: self, action: #selector(cancelRepairPressed))
+      cancel.keyEquivalent = "\u{1b}"
+      center.addArrangedSubview(cancel)
+      cancelRepairButton = cancel
+      let submit = RecoveryPrimaryButton(
+        title: model.authorizationPrompt.action, target: self,
+        action: #selector(authorizePressed))
+      submit.keyEquivalent = "\r"
+      center.addArrangedSubview(submit)
+      primaryButton = submit
     case .welcome:
       let start = RecoveryPrimaryButton(
-        title: model.recoveryInterface ? "Restore" : "Continue",
-        target: self, action: #selector(startPressed))
+        title: "Restore", target: self, action: #selector(startPressed))
       center.addArrangedSubview(start)
       primaryButton = start
-      if model.recoveryInterface {
-        let debug = RecoverySecondaryButton(
-          title: "Enable Debug", target: self, action: #selector(debugPressed))
-        let proxy = RecoverySecondaryButton(
-          title: "Enable Proxy", target: self, action: #selector(proxyPressed))
-        center.addArrangedSubview(debug)
-        center.addArrangedSubview(proxy)
-        debugButton = debug
-        proxyButton = proxy
-      }
+      let debug = RecoverySecondaryButton(
+        title: "Enable Debug", target: self, action: #selector(debugPressed))
+      let proxy = RecoverySecondaryButton(
+        title: "Enable Proxy", target: self, action: #selector(proxyPressed))
+      center.addArrangedSubview(debug)
+      center.addArrangedSubview(proxy)
+      debugButton = debug
+      proxyButton = proxy
     case .installing: break
     case .account:
       let account = RecoveryPrimaryButton(
@@ -365,34 +445,24 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
         title: "Restart", target: self, action: #selector(restartPressed))
       center.addArrangedSubview(restart)
       primaryButton = restart
-      if model.accountOffered {
-        let offer = RecoveryTextButton(
-          title: "Create a recovery account", target: self,
-          action: #selector(offerAccountPressed))
-        offer.font = OmarchyTheme.detail
-        center.addArrangedSubview(offer)
-        offerAccountButton = offer
-      }
     }
     footer.addSubview(center)
     NSLayoutConstraint.activate([
       center.centerXAnchor.constraint(equalTo: footer.centerXAnchor),
       center.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
     ])
-    let details = RecoveryTextButton(
-      title: "Show details", target: self, action: #selector(detailsPressed))
-    footer.addSubview(details)
-    NSLayoutConstraint.activate([
-      details.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
-      details.centerYAnchor.constraint(equalTo: footer.centerYAnchor),
-    ])
-    detailsButton = details
   }
 
   private func fieldRow(_ title: String, field: NSTextField) -> NSStackView {
     let row = vertical(spacing: 4)
     row.alignment = .leading
     row.addArrangedSubview(label(title, size: 12, alignment: .left))
+    style(field)
+    row.addArrangedSubview(field)
+    return row
+  }
+
+  private func style(_ field: NSTextField) {
     field.font = OmarchyTheme.body
     field.textColor = OmarchyTheme.text
     field.isBezeled = true
@@ -401,8 +471,6 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     field.translatesAutoresizingMaskIntoConstraints = false
     field.widthAnchor.constraint(equalToConstant: 380).isActive = true
     field.heightAnchor.constraint(equalToConstant: 28).isActive = true
-    row.addArrangedSubview(field)
-    return row
   }
 
   private func vertical(spacing: CGFloat) -> NSStackView {
@@ -458,7 +526,9 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
       return true
     }
     guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
-    if control === accountUsernameField {
+    if control === authorizationField {
+      authorizePressed()
+    } else if control === accountUsernameField {
       view.window?.makeFirstResponder(accountPasswordField)
     } else if control === accountPasswordField {
       view.window?.makeFirstResponder(accountConfirmationField)
@@ -471,15 +541,28 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   }
 
   @objc private func startPressed() {
-    LaunchTrace.mark("ui.continue.pressed")
-    if model.recoveryInterface {
-      model.restore()
-    } else {
-      model.checkEnrollmentEnvironment { [weak self] in
-        LaunchTrace.mark("ui.continue.ready")
-        self?.showAuthorization(repair: false)
-      }
+    LaunchTrace.mark("ui.restore.pressed")
+    model.restore()
+  }
+
+  /// Install, or Shut Down while repairing the startup disk. The field is
+  /// cleared as soon as its password is handed to the model.
+  @objc private func authorizePressed() {
+    guard model.canAuthorize, let field = authorizationField else { return }
+    let credential = field.stringValue
+    guard !credential.isEmpty else {
+      view.window?.makeFirstResponder(field)
+      return
     }
+    field.stringValue = ""
+    LaunchTrace.mark("ui.authorization.submitted")
+    model.authorize(with: credential)
+  }
+
+  @objc private func cancelRepairPressed() {
+    authorizationField?.stringValue = ""
+    model.cancelStartupDiskRepair()
+    focusAuthorizationField()
   }
 
   @objc private func debugPressed() { model.toggleBootFlag("debug") }
@@ -499,7 +582,11 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     accountPasswordField?.stringValue = ""
     accountConfirmationField?.stringValue = ""
   }
-  @objc private func offerAccountPressed() { model.showRecoveryAccountForm() }
+  /// Shift-modified Restart and Utilities → Create Recovery Account….
+  @objc func showRecoveryAccountForm(_ sender: Any?) {
+    guard sheets.active == nil else { return }
+    model.showRecoveryAccountForm()
+  }
   @objc private func restartPressed() {
     // Restarting without the optional account records the deferral, so a
     // later Recovery session can still offer it.
@@ -510,113 +597,36 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
     }
   }
 
-  @discardableResult private func present(_ panel: RecoverySheet, focus: NSView? = nil) -> Bool {
-    guard sheets.present(panel, on: view.window) else { return false }
-    if let focus { panel.makeFirstResponder(focus) }
-    return true
+  @discardableResult private func present(_ panel: RecoverySheet) -> Bool {
+    sheets.present(panel, on: view.window)
   }
 
   private func closePanel() { sheets.close() }
 
-  /// Asks for the password again. A sheet such as Show details may be open
-  /// when the command refuses it; the request then waits for that sheet to
-  /// close. If the sheet still can't open, the refusal is shown as a failure.
-  private func authorizeAgain(repair: Bool, rejection: String?) {
-    sheets.whenFree { [weak self] in
-      guard let self else { return }
-      if !self.showAuthorization(repair: repair, rejection: rejection), let rejection {
-        self.model.failure = rejection
-      }
+  /// Utilities → Show Details. A failure sheet gives way to the details, as
+  /// its own Show details button once did; any other sheet keeps it disabled.
+  @objc func showDetails(_ sender: Any?) {
+    guard canShowDetails else { return }
+    if issueShowing { issueCancelPressed() }
+    presentDetails()
+  }
+
+  private var canShowDetails: Bool {
+    // There is nothing to show before the first attempt has logged anything.
+    guard model.stage != .welcome || !log.text.isEmpty else { return false }
+    return sheets.active == nil || (issueShowing && !issueRepair)
+  }
+
+  func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+    switch menuItem.action {
+    case #selector(showDetails(_:)): return canShowDetails
+    case #selector(showRecoveryAccountForm(_:)):
+      return model.canShowRecoveryAccountForm && sheets.active == nil
+    default: return true
     }
   }
 
-  @discardableResult private func showAuthorization(repair: Bool, rejection: String? = nil)
-    -> Bool
-  {
-    guard view.window != nil else {
-      LaunchTrace.mark("ui.authorization.noWindow")
-      return false
-    }
-    LaunchTrace.mark("ui.authorization.open")
-    authorizationRepair = repair
-    let owner =
-      RecoveryActions.inRecovery
-      ? (model.authorizationOwner?.username ?? "the volume owner") : NSUserName()
-    var explanation =
-      rejection.map { $0 + " Enter it again, or Cancel and open Show details." }
-      ?? "Enter password for " + owner + "."
-    if !repair {
-      explanation +=
-        model.authorizationUsesSourceOwner
-        ? " Use your existing macOS owner’s password to set up Omarchy. Your macOS security settings are unaffected."
-        : " Use your Omarchy installation’s credentials to adjust its security settings. The security of your macOS installations is unaffected."
-    }
-    let field = NSSecureTextField()
-    field.placeholderString = "Password"
-    field.font = OmarchyTheme.body
-    field.textColor = OmarchyTheme.text
-    field.isBezeled = true
-    field.bezelStyle = .roundedBezel
-    field.focusRingType = .exterior
-    field.translatesAutoresizingMaskIntoConstraints = false
-    field.widthAnchor.constraint(equalToConstant: 374).isActive = true
-    field.heightAnchor.constraint(equalToConstant: 28).isActive = true
-    authorizationField = field
-    let body = NSStackView()
-    body.orientation = .vertical
-    body.alignment = .leading
-    body.spacing = 8
-    body.addArrangedSubview(field)
-    let showBootArgumentNote = !repair && RecoveryActions.allowsCustomBootArguments
-    if showBootArgumentNote {
-      let note = label(
-        "Omarchy will allow custom Aura boot arguments, including USB proxy mode.", size: 11,
-        alignment: .left)
-      note.preferredMaxLayoutWidth = 374
-      note.widthAnchor.constraint(equalToConstant: 374).isActive = true
-      body.addArrangedSubview(note)
-    }
-    let cancel = RecoverySecondaryButton(
-      title: "Cancel", target: self, action: #selector(cancelPanelPressed))
-    cancel.keyEquivalent = "\u{1b}"
-    let proceed = RecoveryPrimaryButton(
-      title: repair ? "Shut Down" : "Install", target: self,
-      action: #selector(authorizePanelPressed))
-    proceed.keyEquivalent = "\r"
-    let panel = RecoverySheet(
-      title: repair ? "Authorize startup disk" : "Authorize installation",
-      message: explanation, width: 430,
-      body: body, bodyHeight: showBootArgumentNote ? 72 : 32, buttons: [cancel, proceed])
-    return present(panel, focus: field)
-  }
-
-  @objc private func authorizePanelPressed() {
-    let credential = authorizationField?.stringValue ?? ""
-    guard !credential.isEmpty else {
-      authorizationField?.window?.makeFirstResponder(authorizationField)
-      return
-    }
-    authorizationField?.stringValue = ""
-    closePanel()
-    if authorizationRepair {
-      model.repairRecoveryBoot(password: credential) { [weak self] rejection in
-        self?.authorizeAgain(repair: true, rejection: rejection)
-      }
-    } else {
-      model.password = credential
-      model.startDemo { [weak self] rejection in
-        self?.authorizeAgain(repair: false, rejection: rejection)
-      }
-    }
-  }
-
-  @objc private func cancelPanelPressed() {
-    authorizationField?.stringValue = ""
-    model.password.removeAll(keepingCapacity: false)
-    closePanel()
-  }
-
-  @objc private func detailsPressed() {
+  private func presentDetails() {
     let viewer = LogTextView(
       text: log.text.isEmpty ? model.operations.joined(separator: "\n") : log.text)
     viewer.translatesAutoresizingMaskIntoConstraints = false
@@ -634,7 +644,10 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
         "Boot security is reduced only for this Omarchy installation. Your macOS security settings are unchanged."
         + (log.truncated
           ? " Showing recent output. Copy Log includes this attempt’s full log." : ""),
-      width: 550, body: viewer, bodyHeight: 290, buttons: [copy, done])
+      width: 550, body: viewer,
+      bodyHeight: RecoveryWindowLayout.detailsLogHeight(
+        windowHeight: view.window?.frame.height ?? RecoveryWindowLayout.compactHeight),
+      buttons: [copy, done])
     present(panel)
   }
 
@@ -666,34 +679,35 @@ final class InstallerView: NSViewController, NSTextFieldDelegate {
   private func presentIssue() {
     let issue = model.environmentIssue
     issueRepair = issue?.canRepairStartupSelection == true
-    let primary = RecoveryPrimaryButton(
-      title: issueRepair ? "Set Startup Disk and Shut Down" : "Show details",
-      target: self, action: #selector(issuePrimaryPressed))
-    let cancel = RecoverySecondaryButton(
-      title: issueRepair ? "Cancel" : "OK", target: self,
-      action: #selector(issueCancelPressed))
-    cancel.keyEquivalent = "\u{1b}"
+    let buttons: [NSButton]
+    if issueRepair {
+      let cancel = RecoverySecondaryButton(
+        title: "Cancel", target: self, action: #selector(issueCancelPressed))
+      cancel.keyEquivalent = "\u{1b}"
+      let repair = RecoveryPrimaryButton(
+        title: "Set Startup Disk and Shut Down", target: self,
+        action: #selector(issueRepairPressed))
+      buttons = [cancel, repair]
+    } else {
+      // The details are in Utilities → Show Details, so OK is the only action.
+      let done = RecoveryPrimaryButton(
+        title: "OK", target: self, action: #selector(issueCancelPressed))
+      done.keyEquivalent = "\r"
+      buttons = [done]
+    }
     let panel = RecoverySheet(
       title: issue?.title ?? "Setup could not finish",
       message: issue?.message ?? model.failure ?? "",
-      width: 460, body: NSView(), bodyHeight: 0,
-      buttons: [cancel, primary])
+      width: 460, body: NSView(), bodyHeight: 0, buttons: buttons)
     issueShowing = present(panel)
   }
 
-  @objc private func issuePrimaryPressed() {
-    let repair = issueRepair
+  @objc private func issueRepairPressed() {
     issueShowing = false
     model.environmentIssue = nil
     model.failure = nil
     closePanel()
-    if repair {
-      model.repairRecoveryBoot { [weak self] rejection in
-        self?.authorizeAgain(repair: true, rejection: rejection)
-      }
-    } else {
-      detailsPressed()
-    }
+    model.repairStartupDisk()
   }
 
   @objc private func issueCancelPressed() {

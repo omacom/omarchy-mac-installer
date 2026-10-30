@@ -34,8 +34,8 @@
       "Optional: you started setting up a recovery password but didn’t finish. To finish it, select Installation → Finish Recovery Password… from the menu bar."
     public static let recoveryAccountFinishHeadline = "Finish setting up your recovery password"
 
-    /// What Recovery shows for a skipped account: "Recovery complete" with a
-    /// Create a recovery account link, or, once the account was started,
+    /// What Recovery offers for a skipped account: Utilities → Create Recovery
+    /// Account… on its completion screen, or, once the account was started,
     /// "Resume recovery setup" and then its authorization steps.
     public static func recoveryAccountSteps(
       volumeName: String, holdInstruction: String, resuming: Bool
@@ -43,7 +43,9 @@
       var steps = [
         RecoveryStep(number: 1, title: "Shut down completely."),
         RecoveryStep(number: 2, title: holdInstruction),
-        RecoveryStep(number: 3, title: "Choose “\(volumeName)” → Finish Installation."),
+        RecoveryStep(
+          number: 3,
+          title: "Choose “\(volumeName)”, click Continue, then sign in with your macOS account."),
       ]
       if resuming {
         steps.append(
@@ -58,17 +60,12 @@
         steps.append(
           RecoveryStep(
             number: 4,
-            title: "Choose Create a recovery account, then choose a username and password."))
+            title:
+              "Choose Utilities → Create Recovery Account…, then choose a username and password."))
       }
       return steps
     }
 
-    public static func recoveryAccountShutdownConfirmationBody(resuming: Bool) -> String {
-      "Save your work first. When this Mac is off, press and hold the power button until “Loading startup options” appears. Choose Omarchy → Finish Installation and sign in with your macOS account if asked, then "
-        + (resuming
-          ? "enter the recovery password at Resume recovery setup and follow the steps to authorize it."
-          : "choose Create a recovery account.")
-    }
     public static let closeInstaller = "Close"
 
     // MARK: Screen B — Plan
@@ -95,11 +92,9 @@
     public static let installHoldAcknowledgement = "Tick the backup box above to continue."
     public static let installHoldDownload = "Install unlocks once the download is verified."
     public static let downloadingPackagesTitle = "Downloading Omarchy"
-    public static let encryptLinuxDiskTitle = "Encrypt the Omarchy disk"
-    public static let encryptLinuxDiskPassword =
-      "The Omarchy password you create at first boot will unlock the encrypted disk after installation."
-    public static let encryptLinuxDiskNoRecovery =
-      "There is no separate recovery key, so keep the password somewhere safe."
+    /// One help line under the disk card; there is no encryption choice.
+    public static let encryptionNote =
+      "Your first-boot password encrypts Omarchy. Keep it safe: there’s no recovery key."
     public static let encryptionChoiceNotRecorded =
       "The encryption choice wasn’t saved, so Omarchy will encrypt its disk at first boot."
     public static let encryptionOptOutRecorded =
@@ -213,10 +208,6 @@
     public static let installDegraded =
       "Live progress isn’t available. The installer will check the installation record when complete."
     public static let installVerifyingOwner = "Checking your macOS account…"
-    public static let installStageLabels = [
-      "Preparing disk space", "Installing boot files",
-      "Preparing final setup",
-    ]
 
     public static func installPhaseTitle(forPhase phase: String?) -> String {
       switch phase {
@@ -266,10 +257,6 @@
 
     public static let recoveryHeadline = "Finish setup"
     public static let recoveryShutDown = "Shut down"
-    public static let shutdownConfirmationTitle = "Shut down this Mac now?"
-    public static let shutdownConfirmationBody =
-      "Save your work first. When this Mac is off, press and hold the power button until “Loading startup options” appears. Choose Omarchy → Finish Installation, then sign in with your macOS account."
-    public static let shutdownConfirmationAction = "Shut down"
     public static let mediaHeadline = "Connect the installation media"
 
     /// Numbered plain-language steps for the signed `requiredHumanSteps`
@@ -285,15 +272,12 @@
       }
       func enterRecovery() {
         append("Shut down this Mac", "Save your work first.")
-        append(
-          "Hold the power button",
-          "When this Mac is off, press and hold the power button until “Loading startup options” appears."
-        )
+        append("Hold the power button", "Hold until “Loading startup options” appears.")
       }
       func authenticate() {
         append(
           "Finish installation",
-          "Choose Omarchy → Finish Installation, then sign in with your macOS account.")
+          "Choose Omarchy, click Continue, then sign in with your macOS account.")
       }
       for token in requiredHumanSteps {
         switch token {

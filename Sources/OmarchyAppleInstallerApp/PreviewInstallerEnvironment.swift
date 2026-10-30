@@ -129,8 +129,7 @@
         diskTotalBytes: total,
         omarchyBytes: length,
         bindingDigest: "sha256:" + String(repeating: "b", count: 64),
-        minimumBytes: 30_000_000_000, maximumBytes: total - 120_000_000_000,
-        releaseDescription: "Recorded simulation"
+        minimumBytes: 30_000_000_000, maximumBytes: total - 120_000_000_000
       )
     }
 

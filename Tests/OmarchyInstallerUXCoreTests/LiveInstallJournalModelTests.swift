@@ -26,7 +26,6 @@
       )
       XCTAssertEqual(model.completion, .awaitingRecovery)
       XCTAssertEqual(model.stageFractions, [1, 1, 1])
-      XCTAssertEqual(model.stageIndex, 2)
       XCTAssertTrue(titles.contains("Preparing disk space…"))
       XCTAssertTrue(titles.contains("Writing boot files…"))
       XCTAssertTrue(titles.contains("Preparing final setup…"))
@@ -45,7 +44,6 @@
 
       XCTAssertFalse(model.degraded)
       XCTAssertEqual(model.stageFractions, [1, 0, 0])
-      XCTAssertEqual(model.stageIndex, 1)
       XCTAssertEqual(model.phaseTitle, "Writing boot files…")
       XCTAssertNil(model.completion)
     }
@@ -91,7 +89,7 @@
 
       XCTAssertFalse(model.degraded)
       XCTAssertEqual(model.completion, .awaitingRecovery)
-      XCTAssertEqual(model.stageIndex, 2)
+      XCTAssertEqual(model.stageFractions, [1, 1, 1])
     }
 
     func testResetClearsEverything() throws {

@@ -45,53 +45,8 @@ import AppKit
     precondition(dismissals == 2)
     precondition(!sheets.present(panel(), on: nil), "presented without a window")
 
-    // A password refused while Show details is open waits for it to close,
-    // after onDismiss has cleared the old sheet's state.
-    var order = [String]()
-    sheets.onDismiss = { order.append("dismiss") }
-    let authorization = panel()
-    var immediate = false
-    sheets.whenFree { immediate = true }
-    precondition(immediate, "a free presenter must show at once")
-    precondition(sheets.present(details, on: window))
-    settle()
-    sheets.whenFree {
-      order.append("authorization")
-      precondition(sheets.present(authorization, on: window))
-    }
-    precondition(order.isEmpty, "waiting request ran while a sheet was open")
-    sheets.close()
-    settle()
-    precondition(order == ["dismiss", "authorization"], "\(order)")
-    precondition(sheets.active === authorization && window.attachedSheet === authorization)
-    sheets.close()
-    settle()
-    precondition(order == ["dismiss", "authorization", "dismiss"], "request ran twice: \(order)")
-
-    // If onDismiss opens another sheet first, the request waits for that one.
-    let notice = panel()
-    order = []
-    sheets.onDismiss = {
-      order.append("dismiss")
-      if order.count == 1 { sheets.present(notice, on: window) }
-    }
-    precondition(sheets.present(details, on: window))
-    settle()
-    sheets.whenFree {
-      order.append("authorization")
-      precondition(sheets.present(authorization, on: window))
-    }
-    sheets.close()
-    settle()
-    precondition(sheets.active === notice && order == ["dismiss"], "\(order)")
-    sheets.close()
-    settle()
-    precondition(order == ["dismiss", "dismiss", "authorization"], "\(order)")
-    precondition(sheets.active === authorization)
-    sheets.close()
-    settle()
     print(
-      "PASS sheet lifecycle: a sheet raised while another closes stays dismissible; a waiting sheet opens once the others close"
+      "PASS sheet lifecycle: a sheet raised while another closes stays dismissible"
     )
     window.orderOut(nil)
   }

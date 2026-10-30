@@ -313,7 +313,9 @@ enum RecoveryActions {
     if aurora_authorization_password_rejected(result) != 0 {
       throw RecoveryPasswordRejected(username: owner.username)
     }
-    try check(result == 0, "\(name) failed: \(reason). Open Show details for the command output.")
+    try check(
+      result == 0,
+      "\(name) failed: \(reason). Choose Utilities → Show Details for the command output.")
   }
   static func install(
     selection: BootSelection, owner: RecoveryOwner, password: String,

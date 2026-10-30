@@ -115,8 +115,6 @@
     public let bindingDigest: String
     public let minimumBytes: UInt64
     public let maximumBytes: UInt64
-    public let releaseDescription: String
-    public let targetDescription: String
     public let fixedMacOSBytes: UInt64?
     /// Fresh APFS free space after reserving remaining staging and handoff copies.
     public let macOSFreeBeforeAllocationBytes: UInt64?
@@ -134,8 +132,6 @@
       isResizable: Bool = true,
       minimumBytes: UInt64? = nil,
       maximumBytes: UInt64? = nil,
-      releaseDescription: String = "Verified release",
-      targetDescription: String = "Internal storage",
       fixedMacOSBytes: UInt64? = nil,
       macOSFreeBeforeAllocationBytes: UInt64? = nil,
       recommendedOmarchyBytes: UInt64? = nil
@@ -145,8 +141,6 @@
       self.bindingDigest = bindingDigest
       self.minimumBytes = minimumBytes ?? omarchyBytes
       self.maximumBytes = maximumBytes ?? omarchyBytes
-      self.releaseDescription = releaseDescription
-      self.targetDescription = targetDescription
       self.fixedMacOSBytes = fixedMacOSBytes
       self.macOSFreeBeforeAllocationBytes = macOSFreeBeforeAllocationBytes
       self.recommendedOmarchyBytes = recommendedOmarchyBytes
@@ -323,26 +317,20 @@
 
   public struct InstallProgressDisplay: Equatable, Sendable {
     public let phaseTitle: String
-    public let stageIndex: Int
     public let stageFractions: [Double]
-    public let stageLabels: [String]
     public let feed: [JournalFeedLine]
     public let degraded: Bool
     public let startedAt: Date
 
     public init(
       phaseTitle: String,
-      stageIndex: Int,
       stageFractions: [Double],
-      stageLabels: [String],
       feed: [JournalFeedLine],
       degraded: Bool,
       startedAt: Date
     ) {
       self.phaseTitle = phaseTitle
-      self.stageIndex = stageIndex
       self.stageFractions = stageFractions
-      self.stageLabels = stageLabels
       self.feed = feed
       self.degraded = degraded
       self.startedAt = startedAt
@@ -586,7 +574,6 @@
     /// Returns true when the machine is actually going down; the preview
     /// environment and tests return false so nothing powers off.
     func requestShutdown() -> Bool
-    func setEncryptLinuxDisk(_ encrypt: Bool)
     func prefetchPayload(
       progress: @escaping @Sendable (PayloadPrefetchState) -> Void
     ) async throws
@@ -619,7 +606,6 @@
     public func requestShutdown() -> Bool { false }
     public var payloadPrefetchRequired: Bool { false }
     public var payloadPrefetchState: PayloadPrefetchState { .verified }
-    public func setEncryptLinuxDisk(_ encrypt: Bool) {}
     public func prefetchPayload(
       progress: @escaping @Sendable (PayloadPrefetchState) -> Void
     ) async throws {

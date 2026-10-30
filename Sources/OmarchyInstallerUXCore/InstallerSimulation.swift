@@ -279,10 +279,6 @@
           omarchyBytes: length,
           bindingDigest: "simulation-\(length)", minimumBytes: 80_000_000_000,
           maximumBytes: maximum,
-          releaseDescription:
-            "SIMULATION · \(channel.rawValue.uppercased()) · Omarchy test release",
-          targetDescription:
-            "Simulated internal disk · \(scenario == .freeSpace ? "Use free space" : "Resize macOS container")",
           fixedMacOSBytes: scenario == .freeSpace ? 100_000_000_000 : nil))
     }
 
