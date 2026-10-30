@@ -1,10 +1,11 @@
 name: Installer checks
 
 on:
+  # integrate/ branches collect a stack of PRs that later merges to main as one.
   pull_request:
-    branches: [main]
+    branches: [main, 'integrate/**']
   push:
-    branches: [main]
+    branches: [main, 'integrate/**']
   workflow_dispatch:
 
 permissions:
