@@ -4,7 +4,7 @@
   },
   "installer": {
     "minimumVersion": "2.3.9",
-    "latestVersion": "2.3.10",
-    "downloadURL": "https://mac.omarchy.org/v1/installer/2.3.10/Omarchy-Mac-Installer-2.3.10.dmg"
+    "latestVersion": "2.3.11",
+    "downloadURL": "https://mac.omarchy.org/v1/installer/2.3.11/Omarchy-Mac-Installer-2.3.11.dmg"
   }
 }
