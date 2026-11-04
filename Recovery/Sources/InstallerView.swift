@@ -590,9 +590,10 @@ final class InstallerView: NSViewController, NSTextFieldDelegate, NSMenuItemVali
     model.showRecoveryAccountForm()
   }
   @objc private func restartPressed() {
-    // Restarting without the optional account records the deferral, so a
-    // later Recovery session can still offer it.
-    if model.accountMandatory && (model.accountOffered || model.accountNeedsAuthorization) {
+    // A single-boot install with no account yet must open the form. Once the
+    // account exists, Restart still opens Startup Disk so that account can
+    // become the volume owner. Deferral is the other branch.
+    if model.accountMandatory && model.accountOffered {
       model.showRecoveryAccountForm()
     } else if model.accountOffered {
       model.skipRecoveryAccountAndRestart()
