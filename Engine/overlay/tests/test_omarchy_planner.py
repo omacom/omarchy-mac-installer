@@ -22,7 +22,7 @@ sys.path.insert(
     str(Path(__file__).resolve().parents[1] / "src"),
 )
 
-from omarchy_contract import Journal  # noqa: E402
+from omarchy_contract import ContractError, Journal  # noqa: E402
 from omarchy_execution import _select_candidate, ExecutionAdmissionError  # noqa: E402
 from omarchy_planner import (  # noqa: E402
     PlanningError,
@@ -469,6 +469,110 @@ class PlannerTests(unittest.TestCase):
                 stub_size=2 * 1024**3,
                 part_align=1024**2,
             )
+
+    def test_single_boot_reclaims_to_the_diskutil_floor_between_system_containers(self):
+        gib = 1024**3
+        unit = 1024**2
+        container = 500 * gib
+        diskutil = 80 * gib + 100
+        macos = SimpleNamespace(
+            name="disk0s2", offset=gib, size=container, free=False, type="Apple_APFS",
+        )
+        self.installer.dutil = SimpleNamespace(get_disk_size=lambda _: 512 * gib)
+        self.installer.resize_bounds = {
+            "total_bytes": container,
+            "free_bytes": 300 * gib,
+            "diskutil_minimum_bytes": diskutil,
+            "minimum_size_bytes": 200 * gib,
+            "available_bytes": 300 * gib,
+        }
+        self.installer.parts = [
+            SimpleNamespace(
+                name="disk0s1", offset=0, size=512 * 1024**2,
+                free=False, type="Apple_APFS_ISC",
+            ),
+            macos,
+            SimpleNamespace(
+                name="disk0s3", offset=gib + container, size=5 * gib,
+                free=False, type="Apple_APFS_Recovery",
+            ),
+        ]
+        inventory = collect_inventory(self.installer, [], [macos], 2 * gib, unit)
+        reclaim = next(item for item in inventory["candidates"] if item["kind"] == "reclaim")
+        resize = next(item for item in inventory["candidates"] if item["kind"] == "resize")
+        aligned = (diskutil + unit - 1) // unit * unit
+        available = (container - aligned) // unit * unit
+        self.assertEqual(reclaim["minimum_container_bytes"], aligned)
+        self.assertEqual(reclaim["length_bytes"], container)
+        self.assertEqual(reclaim["recommended_install_bytes"], available)
+        self.assertGreater(resize["minimum_container_bytes"], aligned)
+        self.assertGreater(
+            container - reclaim["minimum_container_bytes"],
+            container - resize["minimum_container_bytes"],
+        )
+        layout = self.journal.inventory("disk0", inventory["candidates"])
+        digest = "sha256:" + "ab" * 32
+        with self.assertRaises(ContractError):
+            self.journal.plan(
+                device_identifier="apple,j314s", layout_digest=layout,
+                candidate_kind="reclaim", source_identifier="disk0s2",
+                requested_length_bytes=available, engine_version="test",
+                engine_digest=digest, metadata_digest=digest, payload_digest=digest,
+                required_human_steps=[
+                    "enterOneTrueRecovery", "authenticateMachineOwner",
+                ],
+            )
+        plan = self.journal.plan(
+            device_identifier="apple,j314s", layout_digest=layout,
+            candidate_kind="reclaim", source_identifier="disk0s2",
+            requested_length_bytes=available, engine_version="test",
+            engine_digest=digest, metadata_digest=digest, payload_digest=digest,
+            required_human_steps=[
+                "enterOneTrueRecovery", "authenticateMachineOwner",
+                "createRecoveryAccount",
+            ],
+        )
+        self.assertEqual(
+            self.journal.plan_payload["offset_bytes"],
+            macos.offset + container - available,
+        )
+        self.assertEqual(self.journal.plan_payload["length_bytes"], available)
+        self.assertEqual(plan, self.journal.plan_payload["plan_digest"])
+
+    def test_single_boot_is_withheld_when_another_partition_sits_after_macos(self):
+        gib = 1024**3
+        macos = SimpleNamespace(
+            name="disk0s2", offset=gib, size=400 * gib, free=False, type="Apple_APFS",
+        )
+        self.installer.parts = [
+            SimpleNamespace(
+                name="disk0s1", offset=0, size=gib, free=False, type="Apple_APFS_ISC",
+            ),
+            macos,
+            SimpleNamespace(
+                name="disk0s4", offset=402 * gib, size=2 * gib,
+                free=False, type="EFI",
+            ),
+            SimpleNamespace(
+                name="disk0s3", offset=480 * gib, size=5 * gib,
+                free=False, type="Apple_APFS_Recovery",
+            ),
+        ]
+        self.installer.resize_bounds = {
+            "total_bytes": macos.size,
+            "free_bytes": 200 * gib,
+            "diskutil_minimum_bytes": 80 * gib,
+            "minimum_size_bytes": 120 * gib,
+            "available_bytes": 280 * gib,
+        }
+        kinds = [
+            item["kind"]
+            for item in collect_inventory(
+                self.installer, [], [macos], 2 * gib, 1024**2
+            )["candidates"]
+        ]
+        self.assertIn("resize", kinds)
+        self.assertNotIn("reclaim", kinds)
 
     def _write(self, name, value):
         path = self.root / name

@@ -37,6 +37,7 @@
   @MainActor
   @Observable
   public final class InstallerSession {
+    public private(set) var installationLayout: DiskInstallationLayout = .alongsideMacOS
     public private(set) var phase: InstallerSessionPhase = .inspecting
     public private(set) var recoveryAccount: RecoveryAccountReply?
 
@@ -236,6 +237,7 @@
     public func inspect() async {
       guard canInspect else { return }
       operationID = UUID()
+      installationLayout = .alongsideMacOS
       resetForInspection()
       phase = .inspecting
       isBusy = true
@@ -291,6 +293,18 @@
 
     // MARK: Plan preparation
 
+    /// Dual-boot stays the default. Choosing single-boot asks for a new plan
+    /// that uses the diskutil floor and requires the recovery account.
+    public func setInstallationLayout(_ layout: DiskInstallationLayout) async {
+      guard !isBusy && !isExecuting, case .planReview = phase,
+        layout != installationLayout
+      else { return }
+      installationLayout = layout
+      isReplanning = true
+      defer { isReplanning = false }
+      await preparePlan(host: lastHost, omarchyBytes: nil, hold: false)
+    }
+
     public func continueToPlan() async {
       guard case .welcome(let host) = phase else {
         return
@@ -338,7 +352,9 @@
       defer { isBusy = false }
 
       do {
-        let outcome = try await environment.preparePlan(omarchyBytes: omarchyBytes) {
+        let outcome = try await environment.preparePlan(
+          omarchyBytes: omarchyBytes, layout: installationLayout
+        ) {
           [weak self] update in
           Task { @MainActor in
             guard let self, self.operationID == currentOperation else { return }
@@ -348,6 +364,7 @@
         guard operationID == currentOperation else { return }
         switch outcome {
         case .plan(let plan):
+          installationLayout = plan.layout
           planRevision += 1
           allocationNotice = omarchyBytes.flatMap {
             PlainLanguage.allocationNotice(requestedBytes: $0, actualBytes: plan.omarchyBytes)

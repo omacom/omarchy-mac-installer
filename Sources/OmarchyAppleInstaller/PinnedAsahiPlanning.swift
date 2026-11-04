@@ -28,7 +28,7 @@ public struct PinnedAsahiPlanRequest: Equatable, Sendable, Encodable {
       maximum = candidate.lengthBytes
     } else if candidate.kind == "repair" || candidate.kind == "replace" {
       maximum = candidate.lengthBytes
-    } else if candidate.kind == "resize",
+    } else if candidate.kind == "resize" || candidate.kind == "reclaim",
       candidate.lengthBytes > candidate.minimumContainerBytes
     {
       maximum = candidate.lengthBytes - candidate.minimumContainerBytes

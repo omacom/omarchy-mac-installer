@@ -1454,11 +1454,16 @@ class AsahiStage1Adapter:
         self._require_preflight()
         self.installer.check_cur_os()
         self._refresh_parts()
-        if plan.candidate_kind == "resize":
+        if plan.candidate_kind in ("resize", "reclaim"):
             source = self._find_partition(
                 name=plan.source_identifier,
                 free=False,
             )
+            # partitionDisk would erase the iBoot and System Recovery containers.
+            if plan.candidate_kind == "reclaim" and source.type != "Apple_APFS":
+                raise AsahiAdapterError(
+                    "single-boot refuses to resize a system container"
+                )
             new_size = source.size - plan.length_bytes
             if new_size < plan.minimum_container_bytes:
                 raise AsahiAdapterError(
@@ -1525,6 +1530,7 @@ class AsahiStage1Adapter:
                 requirement=self.recovery_requirement if self.use_helper_recovery else None,
                 authorized_owner=self.authorized_owner if self.use_helper_recovery else None,
                 expected_bootstrap=self.source_bootstrap if self.use_helper_recovery else None,
+                single_boot=plan.candidate_kind == "reclaim",
             )
         for target in self.osins.idata_targets:
             self.installer.ins.collect_installer_data(target)

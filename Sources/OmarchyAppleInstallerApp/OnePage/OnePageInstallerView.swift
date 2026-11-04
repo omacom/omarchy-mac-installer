@@ -205,6 +205,7 @@ struct OnePageInstallerView: View {
       DownloadPanel(update: update)
 
     case .planReview(let plan, let acknowledged):
+      installationLayoutPicker(plan)
       DiskSplitPanel(
         plan: plan,
         editable: plan.isResizable,
@@ -229,7 +230,8 @@ struct OnePageInstallerView: View {
       if let notice = session.allocationNotice {
         Text(notice).font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
       }
-      acknowledgement(acknowledged, resizesMacOS: plan.fixedMacOSBytes == nil)
+      acknowledgement(
+        acknowledged, resizesMacOS: plan.fixedMacOSBytes == nil, layout: plan.layout)
 
     case .awaitingInstall(let plan, let helper, _):
       DiskSplitPanel(plan: plan, editable: false, isBusy: false, onSizeChosen: { _ in })
@@ -461,8 +463,36 @@ struct OnePageInstallerView: View {
 
   /// The tick and its text. Both are inert while a re-plan runs so a tick
   /// cannot land between the drag and the new plan.
-  private func acknowledgement(_ acknowledged: Bool, resizesMacOS: Bool) -> some View {
-    let text = PlainLanguage.planAcknowledgement(resizesMacOS: resizesMacOS)
+  private func installationLayoutPicker(_ plan: PlanDisplay) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Picker(
+        "Installation",
+        selection: Binding(
+          get: { plan.layout },
+          set: { layout in
+            Task { await session.setInstallationLayout(layout) }
+          }
+        )
+      ) {
+        Text(PlainLanguage.alongsideMacOSChoice).tag(DiskInstallationLayout.alongsideMacOS)
+        Text(PlainLanguage.singleBootChoice).tag(DiskInstallationLayout.singleBoot)
+      }
+      .pickerStyle(.segmented)
+      .labelsHidden()
+      .disabled(session.isBusy || session.isEditingSize)
+      if plan.layout == .singleBoot {
+        Text(PlainLanguage.singleBootExplanation)
+          .omarchyHelpText()
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .padding(.horizontal, 4)
+  }
+
+  private func acknowledgement(
+    _ acknowledged: Bool, resizesMacOS: Bool, layout: DiskInstallationLayout
+  ) -> some View {
+    let text = PlainLanguage.planAcknowledgement(resizesMacOS: resizesMacOS, layout: layout)
     return HStack(alignment: .center, spacing: 12) {
       Toggle(
         "",

@@ -575,7 +575,7 @@ def _validate_candidate(candidate):
     }
     if (
         isinstance(candidate, dict)
-        and candidate.get("kind") in ("resize", "free", "replace")
+        and candidate.get("kind") in ("resize", "free", "replace", "reclaim")
         and recommendation_keys & candidate.keys()
     ):
         keys.update(recommendation_keys)
@@ -586,7 +586,7 @@ def _validate_candidate(candidate):
         keys.add("identity_digest")
     _require_exact_keys(candidate, keys)
     if (
-        candidate["kind"] not in ("free", "resize", "repair", "replace")
+        candidate["kind"] not in ("free", "resize", "repair", "replace", "reclaim")
         or not PARTITION_IDENTIFIER.fullmatch(
             candidate["source_identifier"]
         )
@@ -615,7 +615,7 @@ def _validate_candidate(candidate):
             and candidate["minimum_container_bytes"] != 0
         )
         or (
-            candidate["kind"] == "resize"
+            candidate["kind"] in ("resize", "reclaim")
             and candidate["minimum_container_bytes"] == 0
         )
         or (
@@ -697,6 +697,19 @@ def _plan_payload(
     ):
         raise ContractError("invalid plan")
     candidate = matches[0]
+    expected_steps = (
+        ["authenticateMachineOwner"]
+        if candidate_kind == "repair"
+        else [
+            "enterOneTrueRecovery",
+            "authenticateMachineOwner",
+            "createRecoveryAccount",
+        ]
+        if candidate_kind == "reclaim"
+        else ["enterOneTrueRecovery", "authenticateMachineOwner"]
+    )
+    if required_human_steps != expected_steps:
+        raise ContractError("invalid plan")
     if requested_length_bytes < candidate["minimum_install_bytes"]:
         raise ContractError("requested extent is too small")
     if candidate_kind in ("free", "repair", "replace"):

@@ -25,6 +25,9 @@ REQUIRED_HUMAN_STEPS = (
     "enterOneTrueRecovery",
     "authenticateMachineOwner",
 )
+RECLAIM_REQUIRED_HUMAN_STEPS = REQUIRED_HUMAN_STEPS + (
+    "createRecoveryAccount",
+)
 
 REQUEST_KEYS = {
     "format",
@@ -193,16 +196,17 @@ def _load_exact_json(path, keys, role):
 def _validate_request(request):
     operation_matches_candidate = (
         request["operation"] == "install"
-        and request["candidate_kind"] in ("free", "resize", "replace")
+        and request["candidate_kind"] in ("free", "resize", "replace", "reclaim")
     ) or (
         request["operation"] == "repair-installed-system"
         and request["candidate_kind"] == "repair"
     )
-    required_steps = (
-        ["authenticateMachineOwner"]
-        if request["candidate_kind"] == "repair"
-        else list(REQUIRED_HUMAN_STEPS)
-    )
+    if request["candidate_kind"] == "repair":
+        required_steps = ["authenticateMachineOwner"]
+    elif request["candidate_kind"] == "reclaim":
+        required_steps = list(RECLAIM_REQUIRED_HUMAN_STEPS)
+    else:
+        required_steps = list(REQUIRED_HUMAN_STEPS)
     integers = ("offset_bytes", "length_bytes")
     if (
         request["format"] != 1
@@ -211,7 +215,9 @@ def _validate_request(request):
         or not DEVICE_IDENTIFIER.fullmatch(request["device_identifier"])
         or not STORE_IDENTIFIER.fullmatch(request["store_identifier"])
         or not SHA256_DIGEST.fullmatch(request["layout_digest"])
-        or request["candidate_kind"] not in ("free", "resize", "repair", "replace")
+        or request["candidate_kind"] not in (
+            "free", "resize", "repair", "replace", "reclaim",
+        )
         or not PARTITION_IDENTIFIER.fullmatch(request["source_identifier"])
         or not isinstance(request["engine_version"], str)
         or not request["engine_version"]
@@ -313,7 +319,7 @@ def _validate_candidate(candidate):
     }
     if (
         isinstance(candidate, dict)
-        and candidate.get("kind") in ("resize", "free", "replace")
+        and candidate.get("kind") in ("resize", "free", "replace", "reclaim")
         and recommendation_keys & candidate.keys()
     ):
         keys.update(recommendation_keys)
@@ -325,7 +331,9 @@ def _validate_candidate(candidate):
     if not isinstance(candidate, dict) or set(candidate) != keys:
         raise ExecutionAdmissionError("invalid live candidate")
     if (
-        candidate["kind"] not in ("free", "resize", "repair", "replace")
+        candidate["kind"] not in (
+            "free", "resize", "repair", "replace", "reclaim",
+        )
         or not PARTITION_IDENTIFIER.fullmatch(candidate["source_identifier"])
     ):
         raise ExecutionAdmissionError("invalid live candidate")
@@ -353,7 +361,7 @@ def _validate_candidate(candidate):
             and candidate["minimum_container_bytes"] != 0
         )
         or (
-            candidate["kind"] == "resize"
+            candidate["kind"] in ("resize", "reclaim")
             and candidate["minimum_container_bytes"] == 0
         )
     ):

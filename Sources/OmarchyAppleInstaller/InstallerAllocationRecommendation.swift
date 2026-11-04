@@ -1,5 +1,12 @@
 import Foundation
 
+/// Alongside macOS is the default. Single-boot reclaims every byte Apple's
+/// disk utility will release and requires the recovery account.
+public enum DiskInstallationLayout: Equatable, Hashable, Sendable {
+  case alongsideMacOS
+  case singleBoot
+}
+
 public enum APFSSnapshotConstraint: Equatable, Sendable {
   case timeMachine
   case other
@@ -9,6 +16,7 @@ public enum InstallerAllocationRecommendationError:
   Error, Equatable, Sendable
 {
   case noEligibleCandidate
+  case singleBootUnavailable
   case snapshotConstrained(APFSSnapshotConstraint)
   /// A free extent or resizable container exists, but the most it can give
   /// Omarchy is below the install minimum.
@@ -31,13 +39,26 @@ public struct InstallerAllocationRecommendation:
   public let minimumBytes: UInt64
   public let maximumBytes: UInt64
   public let requestedLengthBytes: UInt64
+  public let layout: DiskInstallationLayout
 
   public init(
     inventory: ValidatedEngineInventory,
     targetBytes: UInt64 = Self.balancedTargetBytes,
     reservedBytes: UInt64 = 0,
+    layout: DiskInstallationLayout = .alongsideMacOS,
     snapshotConstraint: () -> APFSSnapshotConstraint? = { nil }
   ) throws {
+    if layout == .singleBoot {
+      let choice = try Self.singleBoot(
+        inventory: inventory, reservedBytes: reservedBytes
+      )
+      candidate = choice.candidate
+      minimumBytes = choice.minimum
+      maximumBytes = choice.maximum
+      requestedLengthBytes = choice.maximum
+      self.layout = .singleBoot
+      return
+    }
     let unit = PinnedAsahiPlanRequest.allocationUnitBytes
     let ranked = inventory.candidates.compactMap { candidate -> Ranked? in
       var minimum = Self.alignUp(
@@ -127,6 +148,32 @@ public struct InstallerAllocationRecommendation:
       selected.maximum,
       max(selected.minimum, alignedTarget)
     )
+    self.layout = .alongsideMacOS
+  }
+
+  /// The whole span above diskutil's floor, after the bytes the download still
+  /// needs. No 38GB upgrade reserve and no drift margin: those exist so a
+  /// dual-boot macOS can keep taking updates.
+  private static func singleBoot(
+    inventory: ValidatedEngineInventory,
+    reservedBytes: UInt64
+  ) throws -> (candidate: ValidatedEngineCandidate, minimum: UInt64, maximum: UInt64) {
+    let unit = PinnedAsahiPlanRequest.allocationUnitBytes
+    let ranked = inventory.candidates.compactMap { candidate -> (ValidatedEngineCandidate, UInt64)? in
+      guard candidate.kind == "reclaim",
+        candidate.lengthBytes > candidate.minimumContainerBytes
+      else { return nil }
+      let available = candidate.lengthBytes - candidate.minimumContainerBytes
+      guard available > reservedBytes else { return nil }
+      let aligned = (available - reservedBytes) / unit * unit
+      let minimum = alignUp(candidate.minimumInstallBytes, unit: unit)
+      guard minimum <= aligned else { return nil }
+      return (candidate, aligned)
+    }.sorted { $0.1 > $1.1 }
+    guard let selected = ranked.first else {
+      throw InstallerAllocationRecommendationError.singleBootUnavailable
+    }
+    return (selected.0, selected.1, selected.1)
   }
 
   /// The free or resize candidate that comes closest to the install minimum,

@@ -204,6 +204,7 @@
 
     public func preparePlan(
       omarchyBytes: UInt64?,
+      layout: DiskInstallationLayout,
       progress: @escaping @Sendable (AssetProgressUpdate) -> Void
     ) async throws -> PlanPreparationDisplay {
       progress(AssetProgressUpdate(stage: .fetchingCatalog))
@@ -273,13 +274,18 @@
       let requested = min(maximum, max(80_000_000_000, omarchyBytes ?? initial))
       let unit = PinnedAsahiPlanRequest.allocationUnitBytes
       let length = scenario == .allocationAligned ? requested - requested % unit : requested
+      let single = layout == .singleBoot
+      let omarchy = single ? maximum : length
       return .plan(
         PlanDisplay(
           diskTotalBytes: scenario == .freeSpace ? 900_000_000_000 : 994_662_584_320,
-          omarchyBytes: length,
-          bindingDigest: "simulation-\(length)", minimumBytes: 80_000_000_000,
+          omarchyBytes: omarchy,
+          bindingDigest: "simulation-\(omarchy)",
+          isResizable: !single,
+          minimumBytes: single ? maximum : 80_000_000_000,
           maximumBytes: maximum,
-          fixedMacOSBytes: scenario == .freeSpace ? 100_000_000_000 : nil))
+          fixedMacOSBytes: scenario == .freeSpace ? 100_000_000_000 : nil,
+          layout: layout))
     }
 
     public func approve() throws {

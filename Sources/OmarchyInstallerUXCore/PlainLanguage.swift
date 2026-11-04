@@ -82,8 +82,18 @@
     public static let replanning = "Checking the new size…"
     /// A free-space plan leaves macOS its current size, so only a plan that
     /// shrinks macOS asks to approve a resize.
-    public static func planAcknowledgement(resizesMacOS: Bool) -> String {
-      resizesMacOS
+    public static let alongsideMacOSChoice = "Alongside macOS"
+    public static let singleBootChoice = "Single-boot"
+    public static let singleBootExplanation =
+      "Single-boot gives Omarchy every byte macOS can release. It does not erase the iBoot system container or System Recovery, and it does not delete the running macOS system. You must create a recovery account on the next boot. That account owns Omarchy’s startup volume, so startup changes still have an owner after macOS is only as large as Apple allows."
+    public static func planAcknowledgement(
+      resizesMacOS: Bool, layout: DiskInstallationLayout = .alongsideMacOS
+    ) -> String {
+      if layout == .singleBoot {
+        return
+          "I have a current backup. macOS will shrink to Apple’s minimum, the recovery containers stay, and I will create the recovery account before restarting."
+      }
+      return resizesMacOS
         ? "I have a current backup and approve the disk resize above."
         : "I have a current backup and approve the disk layout above."
     }
@@ -284,6 +294,11 @@
           enterRecovery()
         case "authenticateMachineOwner":
           authenticate()
+        case "createRecoveryAccount":
+          append(
+            "Create the recovery account",
+            "Single-boot requires it before the Mac restarts. It owns Omarchy’s startup volume."
+          )
         default:
           append(
             "Unsupported Recovery instruction: \(token)",
@@ -821,6 +836,15 @@
             technicalDetail: technical,
             remedy:
               "Remove files you no longer need in macOS and empty the Trash, then choose Check again. The installer will check the available space again before allowing installation."
+          )
+        case .singleBootUnavailable:
+          return FailureDisplay(
+            headline: "This Mac can’t give the whole releasable disk to Omarchy",
+            plainDetail:
+              "Single-boot needs the internal disk’s iBoot container first, System Recovery last, and only the macOS container between them, with enough space above Apple’s shrink limit. The disk has not been changed.",
+            technicalDetail: technical,
+            remedy:
+              "Choose Check again to keep macOS alongside Omarchy. Delete files you no longer need, empty the Trash, and remove any other partitions between macOS and System Recovery before trying single-boot again. The installer will not erase iBoot or System Recovery."
           )
         case .noEligibleCandidate:
           return FailureDisplay(

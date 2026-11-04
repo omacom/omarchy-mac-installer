@@ -205,7 +205,7 @@ struct EngineTranscriptDecoder: Sendable {
               "kind", "source_identifier", "offset_bytes", "length_bytes",
               "minimum_install_bytes", "minimum_container_bytes",
             ]
-          if ["resize", "free", "replace"].contains(candidate["kind"] as? String ?? ""),
+          if ["resize", "free", "replace", "reclaim"].contains(candidate["kind"] as? String ?? ""),
             candidate["recommended_install_bytes"] != nil
               || candidate["recommended_container_bytes"] != nil
           {
@@ -307,14 +307,14 @@ struct EngineTranscriptDecoder: Sendable {
         }
         var candidateIdentities = Set<String>()
         for candidate in candidateInventory.candidates {
-          guard ["free", "resize", "repair", "replace"].contains(candidate.kind),
+          guard ["free", "resize", "repair", "replace", "reclaim"].contains(candidate.kind),
             isPartitionIdentifier(candidate.sourceIdentifier),
             candidateIdentities.insert("\(candidate.kind):\(candidate.sourceIdentifier)").inserted,
             candidate.lengthBytes > 0,
             candidate.minimumInstallBytes > 0,
             (candidate.recommendedInstallBytes == nil
               && candidate.recommendedContainerBytes == nil)
-              || (["resize", "free", "replace"].contains(candidate.kind)
+              || (["resize", "free", "replace", "reclaim"].contains(candidate.kind)
                 && candidate.recommendedInstallBytes.map { $0 >= candidate.minimumInstallBytes }
                   == true
                 && candidate.recommendedContainerBytes.map { $0 >= candidate.minimumContainerBytes }
@@ -323,6 +323,9 @@ struct EngineTranscriptDecoder: Sendable {
             (candidate.kind == "free" && candidate.minimumContainerBytes == 0
               && candidate.identityDigest == nil)
               || (candidate.kind == "resize"
+                && candidate.minimumContainerBytes > 0
+                && candidate.identityDigest == nil)
+              || (candidate.kind == "reclaim"
                 && candidate.minimumContainerBytes > 0
                 && candidate.identityDigest == nil)
               || (candidate.kind == "repair"
@@ -428,7 +431,7 @@ struct EngineTranscriptDecoder: Sendable {
         && plan.lengthBytes == candidate.lengthBytes
     }
 
-    guard candidate.kind == "resize",
+    guard candidate.kind == "resize" || candidate.kind == "reclaim",
       candidate.lengthBytes >= candidate.minimumContainerBytes
     else {
       return false

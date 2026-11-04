@@ -57,6 +57,43 @@ class ExecutionAdmissionTests(unittest.TestCase):
         with self.assertRaises(AttributeError):
             plan.length_bytes = 1
 
+    def test_reclaim_uses_the_diskutil_floor_and_requires_the_recovery_account(self):
+        self.inventory = self._inventory(kind="reclaim")
+        candidate = self.inventory["candidates"][0]
+        requested = (
+            candidate["length_bytes"] - candidate["minimum_container_bytes"]
+        )
+        self.request = self._request(
+            kind="reclaim",
+            source_identifier="disk0s2",
+            offset_bytes=candidate["offset_bytes"] + candidate["length_bytes"] - requested,
+            length_bytes=requested,
+        )
+        self.identity = self._identity()
+        self._write_inputs()
+
+        plan = self._admit()
+
+        self.assertEqual(plan.candidate_kind, "reclaim")
+        self.assertEqual(plan.minimum_container_bytes, 100 * 1024**3)
+        self.assertEqual(plan.length_bytes, requested)
+        self.assertEqual(
+            plan.required_human_steps,
+            (
+                "enterOneTrueRecovery",
+                "authenticateMachineOwner",
+                "createRecoveryAccount",
+            ),
+        )
+        self.request["required_human_steps"] = [
+            "enterOneTrueRecovery",
+            "authenticateMachineOwner",
+        ]
+        self.request["plan_digest"] = self._plan_digest(self.request)
+        self.identity = self._identity()
+        self._write_inputs()
+        self._assert_rejected("invalid request")
+
     def test_valid_resize_candidate_uses_end_aligned_extent(self):
         self.inventory = self._inventory(kind="resize")
         candidate = self.inventory["candidates"][0]
@@ -295,6 +332,19 @@ class ExecutionAdmissionTests(unittest.TestCase):
                     "minimum_container_bytes": 320 * 1024**3,
                 }
             ]
+        elif kind == "reclaim":
+            candidates = [
+                {
+                    "kind": "reclaim",
+                    "source_identifier": "disk0s2",
+                    "offset_bytes": 1_000_000_000,
+                    "length_bytes": 500 * 1024**3,
+                    "minimum_install_bytes": 64 * 1024**3,
+                    "minimum_container_bytes": 100 * 1024**3,
+                    "recommended_install_bytes": 400 * 1024**3,
+                    "recommended_container_bytes": 100 * 1024**3,
+                }
+            ]
         else:
             candidates = [
                 {
@@ -338,6 +388,12 @@ class ExecutionAdmissionTests(unittest.TestCase):
             "required_human_steps": (
                 ["authenticateMachineOwner"]
                 if operation == "repair-installed-system"
+                else [
+                    "enterOneTrueRecovery",
+                    "authenticateMachineOwner",
+                    "createRecoveryAccount",
+                ]
+                if kind == "reclaim"
                 else [
                     "enterOneTrueRecovery",
                     "authenticateMachineOwner",

@@ -124,6 +124,7 @@
     /// existing install and reuses its exact extent, so there is nothing to
     /// drag; showing a divider there invites a re-plan the engine refuses.
     public let isResizable: Bool
+    public let layout: DiskInstallationLayout
 
     public init(
       diskTotalBytes: UInt64,
@@ -134,7 +135,8 @@
       maximumBytes: UInt64? = nil,
       fixedMacOSBytes: UInt64? = nil,
       macOSFreeBeforeAllocationBytes: UInt64? = nil,
-      recommendedOmarchyBytes: UInt64? = nil
+      recommendedOmarchyBytes: UInt64? = nil,
+      layout: DiskInstallationLayout = .alongsideMacOS
     ) {
       self.diskTotalBytes = diskTotalBytes
       self.omarchyBytes = omarchyBytes
@@ -145,12 +147,17 @@
       self.macOSFreeBeforeAllocationBytes = macOSFreeBeforeAllocationBytes
       self.recommendedOmarchyBytes = recommendedOmarchyBytes
       self.isResizable = isResizable && self.minimumBytes < self.maximumBytes
+      self.layout = layout
     }
   }
 
   extension PlanDisplay {
     /// Shared by the bar, its accessibility value, and the visible warning.
     public func macOSSpaceCaution(for allocation: UInt64) -> String? {
+      if layout == .singleBoot {
+        return
+          "macOS keeps only what Apple’s disk utility will not release, including the files still on it. The iBoot container and System Recovery stay, so this Mac can still download macOS."
+      }
       guard fixedMacOSBytes == nil, let free = macOSFreeBeforeAllocationBytes else { return nil }
       let remaining = free - min(free, allocation)
       guard remaining < Self.recommendedMacOSFreeBytes else { return nil }
@@ -535,6 +542,7 @@
     /// candidate's real minimum and maximum.
     func preparePlan(
       omarchyBytes: UInt64?,
+      layout: DiskInstallationLayout,
       progress: @escaping @Sendable (AssetProgressUpdate) -> Void
     ) async throws -> PlanPreparationDisplay
     func approve() throws

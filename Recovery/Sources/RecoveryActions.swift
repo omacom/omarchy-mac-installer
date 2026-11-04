@@ -677,6 +677,12 @@ enum RecoveryActions {
     try recoveryOnly()
     let record = try installed()
     let config = try configuration.get()
+    if config.singleBoot == true {
+      throw RecoveryFailure(
+        message:
+          "Single-boot needs a recovery account before this Mac restarts. Create that account to continue."
+      )
+    }
     let expected = try asset("raw/boot.bin", manifest: manifest())
     let target = try esp().appendingPathComponent(config.stage2Path)
     try check(

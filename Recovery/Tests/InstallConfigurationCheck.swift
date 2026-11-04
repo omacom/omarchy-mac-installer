@@ -18,7 +18,7 @@ import Foundation
       ("espUUID", "00000000-0000-0000-0000-000000000000"),
       ("volumeName", "../macOS"), ("volumeName", "bad\nname"), ("volumeName", ""),
       ("unknown", "unused"), ("allowCustomBootArguments", 1),
-      ("allowCustomBootArguments", "true"),
+      ("allowCustomBootArguments", "true"), ("singleBoot", "yes"),
     ] as [(String, Any)] {
       var changed = value
       changed[key] = bad
@@ -28,11 +28,15 @@ import Foundation
       } catch {}
     }
     precondition(config.allowCustomBootArguments == nil)
+    precondition(config.singleBoot == nil)
     for allowed in [false, true] {
       var scoped = value
       scoped["allowCustomBootArguments"] = allowed
       let decoded = try InstallConfiguration.decode(JSONSerialization.data(withJSONObject: scoped))
       precondition(decoded.allowCustomBootArguments == allowed)
+      scoped["singleBoot"] = allowed
+      let single = try InstallConfiguration.decode(JSONSerialization.data(withJSONObject: scoped))
+      precondition(single.singleBoot == allowed)
     }
     for key in value.keys {
       var changed = value

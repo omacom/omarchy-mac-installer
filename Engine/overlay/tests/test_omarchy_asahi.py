@@ -259,6 +259,7 @@ class AsahiStage1AdapterTests(unittest.TestCase):
             "manifest_path": adapter.recovery_manifest,
             "requirement": adapter.recovery_requirement, "authorized_owner": "mina",
             "expected_bootstrap": {"ownerUUIDs": ["original owner"]},
+            "single_boot": False,
         })
 
     def test_image_native_template_wins_over_installer_template(self):
@@ -736,6 +737,57 @@ class AsahiStage1AdapterTests(unittest.TestCase):
             [("disk0s2", 420 * GIB)],
         )
         self.assertEqual(dutil.add_calls[0][0], "disk0s3")
+
+    def test_reclaim_shrinks_only_the_macos_container_to_the_approved_floor(self):
+        source = FakePart(
+            "disk0s2",
+            offset=1 * GIB,
+            size=500 * GIB,
+            free=False,
+        )
+        resized_free = FakePart(
+            "disk0s3",
+            offset=401 * GIB,
+            size=100 * GIB,
+            free=True,
+            part_type="Free space",
+        )
+        plan = SimpleNamespace(
+            **{
+                **self.plan.__dict__,
+                "candidate_kind": "reclaim",
+                "source_identifier": "disk0s2",
+                "offset_bytes": resized_free.offset,
+                "length_bytes": 100 * GIB,
+                "minimum_container_bytes": 400 * GIB,
+            }
+        )
+        dutil = FakeDiskUtil([[source], [resized_free]])
+        adapter = self._adapter(FakeInstaller(dutil))
+        adapter.preflight(plan)
+        adapter.prepare_target(plan)
+        self.assertEqual(dutil.resize_calls, [("disk0s2", 400 * GIB)])
+        adapter.native_recovery_gui = True
+        with patch("omarchy_asahi.omarchy_recovery.stage") as stage:
+            adapter.install_stub_and_esp(plan)
+        self.assertIs(stage.call_args.kwargs["single_boot"], True)
+
+        protected = FakePart(
+            "disk0s1",
+            offset=0,
+            size=512 * 1024**2,
+            free=False,
+            part_type="Apple_APFS_ISC",
+        )
+        refused = SimpleNamespace(
+            **{**plan.__dict__, "source_identifier": "disk0s1"}
+        )
+        protected_disk = FakeDiskUtil([[protected]])
+        refused_adapter = self._adapter(FakeInstaller(protected_disk))
+        refused_adapter.preflight(refused)
+        with self.assertRaisesRegex(AsahiAdapterError, "system container"):
+            refused_adapter.prepare_target(refused)
+        self.assertEqual(protected_disk.resize_calls, [])
 
     def test_changed_free_extent_is_rejected_before_partition_creation(self):
         changed = FakePart(

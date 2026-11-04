@@ -68,8 +68,10 @@
 
     func preparePlan(
       omarchyBytes: UInt64?,
+      layout: DiskInstallationLayout,
       progress: @escaping @Sendable (AssetProgressUpdate) -> Void
     ) async throws -> PlanPreparationDisplay {
+      _ = layout
       if scenario == .existingInstall {
         try? await Task.sleep(for: .milliseconds(400))
         return .existingInstallChoice([

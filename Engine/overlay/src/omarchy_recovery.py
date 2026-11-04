@@ -185,7 +185,7 @@ def source_bootstrap(dutil, source_os, authorized_owner=None, target_group=None)
                  "sourceGroupUUID": source_group, "ownerUUIDs": [selected]}
 
 
-def target_config(installer, esp_uuid, esp_root, source_os=None, authorized_owner=None, expected_bootstrap=None):
+def target_config(installer, esp_uuid, esp_root, source_os=None, authorized_owner=None, expected_bootstrap=None, single_boot=False):
     osi = installer.osi
     system = Path(osi.system)
     info = installer.dutil.get("info", "-plist", str(system))
@@ -208,12 +208,16 @@ def target_config(installer, esp_uuid, esp_root, source_os=None, authorized_owne
                  if source_os is not None else None)
     if expected_bootstrap is not None and bootstrap != expected_bootstrap:
         raise RecoveryError("source owner changed after native Recovery preflight")
-    return {
+    result = {
         "schema": 2, "volumeName": name, "systemUUID": identifier(info.get("VolumeUUID")),
         "groupUUID": group, "prebootUUID": preboot_uuid, "espUUID": esp_uuid,
         "bootMode": "raw", "stage2Path": STAGE2_PATH, "bootstrap": bootstrap,
         "allowCustomBootArguments": getattr(getattr(installer, "sysinfo", None), "device_class", "") == "j700ap",
     }
+    if single_boot:
+        # Absent on a dual-boot install, so older recovery builds still decode.
+        result["singleBoot"] = True
+    return result
 
 
 def _json(path, value):
@@ -310,7 +314,8 @@ def _payload(path, maximum=256 << 20):
 
 def stage(installer, esp_uuid, esp_root, app_source=None,
           manifest_path=None, run=subprocess.run, source_os=None,
-          requirement=None, authorized_owner=None, expected_bootstrap=None):
+          requirement=None, authorized_owner=None, expected_bootstrap=None,
+          single_boot=False):
     """Called after OS/ESP installation and common stage-1 target patching.
 
     Preserve upstream's Finish Installation resource paths for resume checks;
@@ -321,7 +326,10 @@ def stage(installer, esp_uuid, esp_root, app_source=None,
     app_source = Path(app_source) if app_source is not None else template_root / APP_NAME
     manifest_path = Path(manifest_path) if manifest_path is not None else template_root / MANIFEST_NAME
     template = validate_source(app_source, manifest_path, run, requirement=requirement)
-    config = target_config(installer, esp_uuid, esp_root, source_os, authorized_owner, expected_bootstrap)
+    config = target_config(
+        installer, esp_uuid, esp_root, source_os, authorized_owner,
+        expected_bootstrap, single_boot=single_boot,
+    )
     system = Path(installer.osi.system)
     esp_root = Path(esp_root)
     stage1 = _payload(installer.boot_obj_path)

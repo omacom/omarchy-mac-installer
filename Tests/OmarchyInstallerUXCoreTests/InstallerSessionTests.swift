@@ -1823,8 +1823,10 @@
 
     func preparePlan(
       omarchyBytes: UInt64?,
+      layout: DiskInstallationLayout,
       progress: @escaping @Sendable (AssetProgressUpdate) -> Void
     ) async throws -> PlanPreparationDisplay {
+      _ = layout
       savedProgress = progress
       await prepareGate?.wait()
       prepareCount += 1

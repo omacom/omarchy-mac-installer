@@ -235,6 +235,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
 
   func preparePlan(
     omarchyBytes: UInt64?,
+    layout: DiskInstallationLayout,
     progress: @escaping @Sendable (AssetProgressUpdate) -> Void
   ) async throws -> PlanPreparationDisplay {
     let (host, hasTranscript) = lock.withLock {
@@ -334,6 +335,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       inventory: inventory,
       targetBytes: omarchyBytes ?? InstallerAllocationRecommendation.balancedTargetBytes,
       reservedBytes: planningReserve,
+      layout: layout,
       snapshotConstraint: {
         APFSSnapshotInspector().constraint(in: host.storage)
       }
@@ -702,7 +704,8 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       diskTotalBytes: total,
       omarchyBytes: length,
       bindingDigest: review.identity.bindingDigest,
-      isResizable: review.plan.candidateKind != "replace",
+      isResizable: review.plan.candidateKind != "replace"
+        && review.plan.candidateKind != "reclaim",
       minimumBytes: recommendation.minimumBytes,
       maximumBytes: recommendation.maximumBytes,
       fixedMacOSBytes: review.plan.candidateKind == "free" ? host.storage.containerSizeBytes : nil,
@@ -711,7 +714,8 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
         && recommendation.candidate.sourceIdentifier == host.storage.physicalStoreIdentifier
         ? host.storage.containerFreeBytes - min(host.storage.containerFreeBytes, reservedBytes)
         : nil,
-      recommendedOmarchyBytes: recommendation.candidate.recommendedInstallBytes
+      recommendedOmarchyBytes: recommendation.candidate.recommendedInstallBytes,
+      layout: recommendation.layout
     )
   }
 

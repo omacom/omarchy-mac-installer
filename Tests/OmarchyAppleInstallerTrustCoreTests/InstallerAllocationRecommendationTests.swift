@@ -691,6 +691,45 @@ final class InstallerAllocationRecommendationTests: XCTestCase {
     XCTAssertEqual(recommendation.candidate, free)
   }
 
+  func testSingleBootUsesTheDiskutilFloorAndLeavesDualBootOnTheReserve() throws {
+    let resize = candidate(
+      kind: "resize", source: "disk0s2", length: 500 * gib,
+      minimumInstall: 32 * gib, minimumContainer: 180 * gib)
+    let reclaim = candidate(
+      kind: "reclaim", source: "disk0s2", length: 500 * gib,
+      minimumInstall: 32 * gib, minimumContainer: 100 * gib)
+    let shared = inventory([resize, reclaim])
+    let dual = try InstallerAllocationRecommendation(
+      inventory: shared, reservedBytes: 10 * gib)
+    XCTAssertEqual(dual.layout, .alongsideMacOS)
+    XCTAssertEqual(dual.candidate.kind, "resize")
+    XCTAssertLessThanOrEqual(dual.maximumBytes, 310 * gib)
+
+    let single = try InstallerAllocationRecommendation(
+      inventory: shared, reservedBytes: 10 * gib, layout: .singleBoot)
+    XCTAssertEqual(single.layout, .singleBoot)
+    XCTAssertEqual(single.candidate.kind, "reclaim")
+    XCTAssertEqual(single.requestedLengthBytes, 390 * gib)
+    XCTAssertEqual(single.minimumBytes, single.maximumBytes)
+    XCTAssertGreaterThan(single.requestedLengthBytes, dual.maximumBytes)
+    XCTAssertNoThrow(
+      try PinnedAsahiPlanRequest(
+        inventory: shared, candidate: single.candidate,
+        requestedLengthBytes: single.requestedLengthBytes))
+    XCTAssertThrowsError(
+      try PinnedAsahiPlanRequest(
+        inventory: shared, candidate: single.candidate,
+        requestedLengthBytes: 391 * gib))
+
+    XCTAssertThrowsError(
+      try InstallerAllocationRecommendation(
+        inventory: inventory([resize]), layout: .singleBoot)
+    ) {
+      XCTAssertEqual(
+        $0 as? InstallerAllocationRecommendationError, .singleBootUnavailable)
+    }
+  }
+
   private func inventory(
     _ candidates: [ValidatedEngineCandidate]
   ) -> ValidatedEngineInventory {

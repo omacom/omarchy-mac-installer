@@ -433,13 +433,15 @@ final class InstallerView: NSViewController, NSTextFieldDelegate, NSMenuItemVali
         title: "Create Account", target: self, action: #selector(accountPressed))
       center.addArrangedSubview(account)
       accountButton = account
-      let skip =
-        model.accountOffered
-        ? RecoveryTextButton(title: "Back", target: self, action: #selector(backPressed))
-        : RecoveryTextButton(
-          title: "Skip, Restart Now", target: self, action: #selector(skipPressed))
-      center.addArrangedSubview(skip)
-      skipButton = skip
+      if !model.accountMandatory {
+        let skip =
+          model.accountOffered
+          ? RecoveryTextButton(title: "Back", target: self, action: #selector(backPressed))
+          : RecoveryTextButton(
+            title: "Skip, Restart Now", target: self, action: #selector(skipPressed))
+        center.addArrangedSubview(skip)
+        skipButton = skip
+      }
     case .complete:
       let restart = RecoveryPrimaryButton(
         title: "Restart", target: self, action: #selector(restartPressed))
@@ -590,7 +592,9 @@ final class InstallerView: NSViewController, NSTextFieldDelegate, NSMenuItemVali
   @objc private func restartPressed() {
     // Restarting without the optional account records the deferral, so a
     // later Recovery session can still offer it.
-    if model.accountOffered {
+    if model.accountMandatory && (model.accountOffered || model.accountNeedsAuthorization) {
+      model.showRecoveryAccountForm()
+    } else if model.accountOffered {
       model.skipRecoveryAccountAndRestart()
     } else {
       model.finishSetup()

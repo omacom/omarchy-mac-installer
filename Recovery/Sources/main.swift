@@ -41,6 +41,8 @@ final class InstallerModel {
   /// finished screen restarts straight away and only opens the account form
   /// when the person holds Shift or chooses Utilities → Create Recovery Account….
   var accountOffered = false { didSet { changed() } }
+  /// Single-boot cannot restart until the recovery account exists.
+  var accountMandatory = false { didSet { changed() } }
   var previewNotice: (title: String, message: String)? { didSet { changed() } }
   private var checkingAccount = false
   private var awaitingStartupDiskReturn = false
@@ -60,7 +62,13 @@ final class InstallerModel {
     accountConfirmation = ""
     // An account that was started resumes on its form; one never started is
     // only offered from the finished screen.
+    accountMandatory = (try? RecoveryActions.configuration.get().singleBoot) == true
+      && !RecoveryActions.isPreview
     accountOffered = required && record == nil
+    if accountMandatory && record?.phase != "finalized" {
+      stage = .account
+      return
+    }
     stage = accountNeedsAuthorization ? .account : .complete
   }
 
@@ -151,6 +159,11 @@ final class InstallerModel {
   }
 
   func skipRecoveryAccountAndRestart() {
+    guard !accountMandatory else {
+      failure =
+        "Single-boot needs a recovery account before this Mac restarts. Create that account to continue."
+      return
+    }
     guard stage == .account || (stage == .complete && accountOffered), !creatingAccount,
       !restartingWithoutAccount, !checkingAccount
     else {

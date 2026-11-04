@@ -153,6 +153,14 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse((app / "Contents/Resources/AuraPayloads").exists())
         self.assertTrue(all("--verify" in command for command in self.commands))
 
+    def test_single_boot_marks_the_recovery_account_mandatory(self):
+        dual = recovery.target_config(self.installer, ESP, str(self.esp))
+        self.assertNotIn("singleBoot", dual)
+        single = recovery.stage(
+            self.installer, ESP, str(self.esp), run=self.fake_run, single_boot=True,
+        )
+        self.assertIs(single["configuration"]["singleBoot"], True)
+
     def test_neo_configuration_explicitly_allows_custom_boot_arguments(self):
         self.installer.sysinfo = SimpleNamespace(device_class="j700ap")
         result = self.stage()

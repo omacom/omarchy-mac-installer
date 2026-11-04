@@ -37,6 +37,11 @@ REQUIRED_HUMAN_STEPS = [
     "authenticateMachineOwner",
 ]
 REPAIR_REQUIRED_HUMAN_STEPS = ["authenticateMachineOwner"]
+# Single-boot leaves macOS at Apple's shrink floor, so the stub needs its own
+# volume owner before restart. Deferring that account is not a valid plan.
+RECLAIM_REQUIRED_HUMAN_STEPS = REQUIRED_HUMAN_STEPS + [
+    "createRecoveryAccount",
+]
 
 
 class PlanningError(ValueError):
@@ -101,6 +106,74 @@ def _resize_offer(installer, part, bounds, floor, part_align):
     return floor, minimum, minimum
 
 
+def _internal_disk_can_reclaim(installer, part):
+    """True when shrinking this container cannot touch iBoot or System Recovery.
+
+    Those two containers are the first and last partitions on an Apple Silicon
+    system disk. Deleting either strands the Mac on a DFU restore. Asahi's
+    whole-disk partition is for an external disk and removes both, so reclaim
+    never uses it. A foreign partition between the containers is refused too:
+    the free space from a shrink opens before that partition, and the Omarchy
+    root cannot grow backward into it.
+    """
+    parts = list(getattr(installer, "parts", None) or [])
+    if len(parts) < 3 or getattr(part, "type", None) != "Apple_APFS":
+        return False
+    ordered = sorted(parts, key=lambda item: (item.offset, item.name))
+    first = ordered[0]
+    if getattr(first, "free", False) or getattr(first, "type", None) != "Apple_APFS_ISC":
+        return False
+    occupied = [item for item in ordered if not getattr(item, "free", False)]
+    if not occupied:
+        return False
+    recovery = occupied[-1]
+    if getattr(recovery, "type", None) != "Apple_APFS_Recovery":
+        return False
+    if not (
+        first.offset < part.offset
+        and part.offset + part.size <= recovery.offset
+    ):
+        return False
+    kept = {
+        (first.name, first.offset),
+        (part.name, part.offset),
+        (recovery.name, recovery.offset),
+    }
+    return all((item.name, item.offset) in kept for item in occupied)
+
+
+def _reclaim_candidate(installer, part, bounds, floor, recommended, part_align):
+    """Offer the bytes above diskutil's floor, without the 38GB macOS reserve."""
+    if not _internal_disk_can_reclaim(installer, part):
+        return None
+    preferred = bounds.get("diskutil_minimum_bytes")
+    if (
+        isinstance(preferred, bool)
+        or not isinstance(preferred, int)
+        or not 0 < preferred < part.size
+        or part_align <= 0
+    ):
+        return None
+    aligned = (preferred + part_align - 1) // part_align * part_align
+    if aligned >= part.size or aligned >= 2**64:
+        return None
+    length = align_down(part.size - aligned, part_align)
+    if length < floor:
+        return None
+    return {
+        "kind": "reclaim",
+        "source_identifier": part.name,
+        "offset_bytes": part.offset,
+        "length_bytes": part.size,
+        "minimum_install_bytes": _minimum_that_fits(
+            length, floor, recommended
+        ),
+        "minimum_container_bytes": aligned,
+        "recommended_install_bytes": length,
+        "recommended_container_bytes": aligned,
+    }
+
+
 def collect_inventory(
     installer,
     free_parts,
@@ -162,6 +235,11 @@ def collect_inventory(
                 "recommended_container_bytes": recommended_container,
             }
         )
+        reclaim = _reclaim_candidate(
+            installer, part, bounds, floor, recommended, part_align
+        )
+        if reclaim is not None:
+            candidates.append(reclaim)
     candidates.extend(
         collect_existing_installs(
             installer,
@@ -335,11 +413,12 @@ def emit_plan(
         raise PlanningError(
             "requested length must be a positive aligned integer"
         )
-    required_human_steps = (
-        REPAIR_REQUIRED_HUMAN_STEPS
-        if request["candidate_kind"] == "repair"
-        else REQUIRED_HUMAN_STEPS
-    )
+    if request["candidate_kind"] == "repair":
+        required_human_steps = REPAIR_REQUIRED_HUMAN_STEPS
+    elif request["candidate_kind"] == "reclaim":
+        required_human_steps = RECLAIM_REQUIRED_HUMAN_STEPS
+    else:
+        required_human_steps = REQUIRED_HUMAN_STEPS
     return journal.plan(
         device_identifier=device_identifier,
         layout_digest=request["layout_digest"],

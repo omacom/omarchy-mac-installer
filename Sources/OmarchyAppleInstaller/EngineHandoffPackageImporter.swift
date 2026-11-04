@@ -437,7 +437,11 @@
         let request = try JSONDecoder().decode(ImportedRequest.self, from: data)
         guard request.format == 1,
           (request.operation == "install"
-            && ["free", "resize", "replace"].contains(request.candidateKind))
+            && ["free", "resize", "replace", "reclaim"].contains(request.candidateKind)
+            && (request.candidateKind != "reclaim"
+              || request.requiredHumanSteps == [
+                "enterOneTrueRecovery", "authenticateMachineOwner", "createRecoveryAccount",
+              ]))
             || (request.operation == "repair-installed-system"
               && request.candidateKind == "repair"),
           isHexDigest(request.planDigest),

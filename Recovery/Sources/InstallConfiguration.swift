@@ -18,15 +18,19 @@ struct InstallConfiguration: Decodable {
   let stage2Path: String
   let bootstrap: BootstrapAuthorization?
   let allowCustomBootArguments: Bool?
+  /// Set only for a single-boot install. Absent means the recovery account
+  /// can still be deferred, which is the dual-boot behavior.
+  let singleBoot: Bool?
 
   static func decode(_ data: Data) throws -> InstallConfiguration {
     let keys: Set<String> = [
       "schema", "volumeName", "systemUUID", "groupUUID", "prebootUUID", "espUUID",
       "bootMode", "stage2Path", "bootstrap",
     ]
+    let optionalBools: Set<String> = ["allowCustomBootArguments", "singleBoot"]
     guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-      Set(object.keys).subtracting(["allowCustomBootArguments"]) == keys
-        && (object["allowCustomBootArguments"] == nil || object["allowCustomBootArguments"] is Bool)
+      Set(object.keys).subtracting(optionalBools) == keys
+        && optionalBools.allSatisfy({ object[$0] == nil || object[$0] is Bool })
     else { throw InstallConfigurationError.invalid }
     let config = try JSONDecoder().decode(Self.self, from: data)
     guard config.schema == 2, config.bootMode == "raw", config.stage2Path == "m1n1/boot.bin",
