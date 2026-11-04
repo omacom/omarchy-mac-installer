@@ -673,6 +673,92 @@ enum RecoveryActions {
       })
   }
 
+  /// Deletes the recorded macOS container only after the recovery account is
+  /// its Omarchy volume owner. iBoot and System Recovery are never named.
+  static func removeOwnedMacOSContainer() throws {
+    let config = try configuration.get()
+    guard config.singleBoot == true else { return }
+    guard let target = config.macosContainerUUID, let stub = config.stubContainerUUID,
+      let isc = config.iscContainerUUID, let recovery = config.recoveryContainerUUID
+    else {
+      throw RecoveryFailure(message: "Single-boot did not record the macOS container.")
+    }
+    guard let record = try recoveryAccount(), record.phase == "finalized" else {
+      throw RecoveryFailure(
+        message: "Create and authorize the recovery account before macOS can be removed.")
+    }
+    try RecoveryAccountInstaller.requireOwnership(record)
+    let slices = try partitionSlices()
+    let decision: MacOSContainerRemovalDecision
+    do {
+      decision = try MacOSContainerRemoval.decide(
+        partitions: slices, targetUUID: target, stubUUID: stub, iscUUID: isc,
+        recoveryUUID: recovery, ownerIsVolumeOwner: true)
+    } catch let error as MacOSContainerRemovalError {
+      if case .refused(let message) = error {
+        throw RecoveryFailure(message: message)
+      }
+      throw error
+    }
+    try confirmedReclaimPlan(config)
+    if case .delete(let device) = decision {
+      try run("/usr/sbin/diskutil", ["apfs", "deleteContainer", device])
+      let afterwards = try partitionSlices()
+      let again = try MacOSContainerRemoval.decide(
+        partitions: afterwards, targetUUID: target, stubUUID: stub, iscUUID: isc,
+        recoveryUUID: recovery, ownerIsVolumeOwner: true)
+      guard case .alreadyAbsent = again else {
+        throw RecoveryFailure(message: "The macOS container is still on the disk.")
+      }
+    }
+    try writeReclaimPlan(config)
+  }
+
+  static func confirmedReclaimPlan(_ config: InstallConfiguration) throws -> [String: Any] {
+    let planURL = try esp().appendingPathComponent("omarchy/experimental/reclaim-plan.json")
+    guard
+      let existing = try? JSONSerialization.jsonObject(with: Data(contentsOf: planURL))
+        as? [String: Any],
+      existing["experimental"] as? Bool == true,
+      existing["iscUUID"] as? String == config.iscContainerUUID,
+      existing["recoveryUUID"] as? String == config.recoveryContainerUUID
+    else {
+      throw RecoveryFailure(
+        message: "The experimental migration plan is missing, so macOS was not removed.")
+    }
+    return existing
+  }
+
+  static func partitionSlices() throws -> [PartitionSlice] {
+    let bytes = try run("/usr/sbin/diskutil", ["list", "-plist"])
+    guard
+      let list = try PropertyListSerialization.propertyList(from: bytes, format: nil)
+        as? [String: Any],
+      let disks = list["AllDisksAndPartitions"] as? [[String: Any]]
+    else { throw RecoveryFailure(message: "The partition map could not be read.") }
+    var slices: [PartitionSlice] = []
+    for disk in disks where disk["Content"] as? String == "GUID_partition_scheme" {
+      let parts = disk["Partitions"] as? [[String: Any]] ?? []
+      for (index, part) in parts.enumerated() {
+        slices.append(
+          PartitionSlice(
+            name: part["DeviceIdentifier"] as? String ?? "",
+            uuid: (part["DiskUUID"] as? String ?? "").uppercased(),
+            type: part["Content"] as? String ?? "",
+            offset: UInt64(index)))
+      }
+    }
+    return slices
+  }
+
+  static func writeReclaimPlan(_ config: InstallConfiguration) throws {
+    let planURL = try esp().appendingPathComponent("omarchy/experimental/reclaim-plan.json")
+    var plan = try confirmedReclaimPlan(config)
+    plan["macosDeleted"] = true
+    let data = try JSONSerialization.data(withJSONObject: plan, options: [.sortedKeys])
+    try atomic(data, to: planURL)
+  }
+
   static func skipRecoveryAccountAndRestart() throws {
     try recoveryOnly()
     let record = try installed()

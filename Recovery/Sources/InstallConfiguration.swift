@@ -18,9 +18,13 @@ struct InstallConfiguration: Decodable {
   let stage2Path: String
   let bootstrap: BootstrapAuthorization?
   let allowCustomBootArguments: Bool?
-  /// Set only for a single-boot install. Absent means the recovery account
-  /// can still be deferred, which is the dual-boot behavior.
+  /// Set only for an experimental single-boot install. Absent means the
+  /// recovery account can still be deferred, which is the dual-boot behavior.
   let singleBoot: Bool?
+  let macosContainerUUID: String?
+  let stubContainerUUID: String?
+  let iscContainerUUID: String?
+  let recoveryContainerUUID: String?
 
   static func decode(_ data: Data) throws -> InstallConfiguration {
     let keys: Set<String> = [
@@ -28,9 +32,13 @@ struct InstallConfiguration: Decodable {
       "bootMode", "stage2Path", "bootstrap",
     ]
     let optionalBools: Set<String> = ["allowCustomBootArguments", "singleBoot"]
+    let containerKeys = [
+      "macosContainerUUID", "stubContainerUUID", "iscContainerUUID", "recoveryContainerUUID",
+    ]
     guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-      Set(object.keys).subtracting(optionalBools) == keys
+      Set(object.keys).subtracting(optionalBools).subtracting(containerKeys) == keys
         && optionalBools.allSatisfy({ object[$0] == nil || object[$0] is Bool })
+        && containerKeys.allSatisfy({ object[$0] == nil || object[$0] is String })
     else { throw InstallConfigurationError.invalid }
     let config = try JSONDecoder().decode(Self.self, from: data)
     guard config.schema == 2, config.bootMode == "raw", config.stage2Path == "m1n1/boot.bin",
@@ -42,6 +50,21 @@ struct InstallConfiguration: Decodable {
       guard let uuid = UUID(uuidString: identifier), uuid.uuidString == identifier,
         identifier != "00000000-0000-0000-0000-000000000000"
       else { throw InstallConfigurationError.invalid }
+    }
+    let containers = [
+      config.macosContainerUUID, config.stubContainerUUID,
+      config.iscContainerUUID, config.recoveryContainerUUID,
+    ]
+    if config.singleBoot == true {
+      guard containers.allSatisfy({ value in
+        guard let value, let uuid = UUID(uuidString: value), uuid.uuidString == value,
+          value != "00000000-0000-0000-0000-000000000000"
+        else { return false }
+        return true
+      }), Set(containers.compactMap { $0 }).count == 4
+      else { throw InstallConfigurationError.invalid }
+    } else if containers.contains(where: { $0 != nil }) {
+      throw InstallConfigurationError.invalid
     }
     if let bootstrap = config.bootstrap {
       guard let values = object["bootstrap"] as? [String: Any],

@@ -454,6 +454,14 @@ final class InstallerModel {
         return
       }
       guard !restartingCompletedSetup else { return }
+      do {
+        try RecoveryActions.removeOwnedMacOSContainer()
+      } catch {
+        DispatchQueue.main.async {
+          self.failure = error.localizedDescription
+        }
+        return
+      }
       restartingCompletedSetup = true
       DispatchQueue.global(qos: .userInitiated).async {
         do {

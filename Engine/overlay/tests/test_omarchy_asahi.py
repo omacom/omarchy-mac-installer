@@ -739,11 +739,20 @@ class AsahiStage1AdapterTests(unittest.TestCase):
         self.assertEqual(dutil.add_calls[0][0], "disk0s3")
 
     def test_reclaim_shrinks_only_the_macos_container_to_the_approved_floor(self):
+        isc = FakePart(
+            "disk0s1", offset=0, size=512 * 1024**2, free=False,
+            part_type="Apple_APFS_ISC", uuid="ISC-UUID",
+        )
         source = FakePart(
             "disk0s2",
             offset=1 * GIB,
             size=500 * GIB,
             free=False,
+            uuid="MAC-UUID",
+        )
+        recovery = FakePart(
+            "disk0s9", offset=600 * GIB, size=5 * GIB, free=False,
+            part_type="Apple_APFS_Recovery", uuid="REC-UUID",
         )
         resized_free = FakePart(
             "disk0s3",
@@ -762,7 +771,7 @@ class AsahiStage1AdapterTests(unittest.TestCase):
                 "minimum_container_bytes": 400 * GIB,
             }
         )
-        dutil = FakeDiskUtil([[source], [resized_free]])
+        dutil = FakeDiskUtil([[isc, source, recovery], [resized_free]])
         adapter = self._adapter(FakeInstaller(dutil))
         adapter.preflight(plan)
         adapter.prepare_target(plan)
@@ -771,6 +780,9 @@ class AsahiStage1AdapterTests(unittest.TestCase):
         with patch("omarchy_asahi.omarchy_recovery.stage") as stage:
             adapter.install_stub_and_esp(plan)
         self.assertIs(stage.call_args.kwargs["single_boot"], True)
+        self.assertEqual(stage.call_args.kwargs["macos_container_uuid"], "MAC-UUID")
+        self.assertEqual(stage.call_args.kwargs["isc_container_uuid"], "ISC-UUID")
+        self.assertEqual(stage.call_args.kwargs["recovery_container_uuid"], "REC-UUID")
 
         protected = FakePart(
             "disk0s1",

@@ -83,15 +83,18 @@
     /// A free-space plan leaves macOS its current size, so only a plan that
     /// shrinks macOS asks to approve a resize.
     public static let alongsideMacOSChoice = "Alongside macOS"
-    public static let singleBootChoice = "Single-boot"
+    public static let singleBootChoice = "Experimental single-boot"
     public static let singleBootExplanation =
-      "Single-boot gives Omarchy every byte macOS can release. It does not erase the iBoot system container or System Recovery, and it does not delete the running macOS system. You must create a recovery account on the next boot. That account owns Omarchy’s startup volume, so startup changes still have an owner after macOS is only as large as Apple allows."
+      "Experimental. This deletes the macOS container after the recovery account owns Omarchy. Keep a backup somewhere else. Hardware testing of this path is limited. The iBoot container and System Recovery stay, so macOS can be reinstalled from System Recovery or by a DFU restore from another Mac."
+    public static let experimentalAcknowledgement =
+      "I have a backup. I understand this experimental option deletes macOS and has had limited hardware testing."
+    public static let experimentalHold = "Tick the experimental warning above to continue."
     public static func planAcknowledgement(
       resizesMacOS: Bool, layout: DiskInstallationLayout = .alongsideMacOS
     ) -> String {
       if layout == .singleBoot {
         return
-          "I have a current backup. macOS will shrink to Apple’s minimum, the recovery containers stay, and I will create the recovery account before restarting."
+          "I will create the recovery account and authorize it before macOS is deleted."
       }
       return resizesMacOS
         ? "I have a current backup and approve the disk resize above."

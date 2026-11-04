@@ -158,8 +158,19 @@ class RecoveryTests(unittest.TestCase):
         self.assertNotIn("singleBoot", dual)
         single = recovery.stage(
             self.installer, ESP, str(self.esp), run=self.fake_run, single_boot=True,
+            macos_container_uuid="88888888-8888-4888-8888-888888888888",
+            stub_container_uuid="99999999-9999-4999-8999-999999999999",
+            isc_container_uuid="AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+            recovery_container_uuid="BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB",
+            root_partition_uuid="CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC",
+            boot_partition_uuid="DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD",
         )
         self.assertIs(single["configuration"]["singleBoot"], True)
+        self.assertEqual(
+            single["configuration"]["macosContainerUUID"],
+            "88888888-8888-4888-8888-888888888888",
+        )
+        self.assertTrue((self.esp / "omarchy/experimental/reclaim-root.sh").is_file())
 
     def test_neo_configuration_explicitly_allows_custom_boot_arguments(self):
         self.installer.sysinfo = SimpleNamespace(device_class="j700ap")

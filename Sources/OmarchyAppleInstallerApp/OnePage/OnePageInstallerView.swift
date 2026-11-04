@@ -481,8 +481,12 @@ struct OnePageInstallerView: View {
       .labelsHidden()
       .disabled(session.isBusy || session.isEditingSize)
       if plan.layout == .singleBoot {
+        Text("Experimental")
+          .font(OmarchyTheme.eyebrow)
+          .foregroundStyle(OmarchyTheme.caution)
         Text(PlainLanguage.singleBootExplanation)
-          .omarchyHelpText()
+          .font(OmarchyTheme.body)
+          .foregroundStyle(OmarchyTheme.caution)
           .fixedSize(horizontal: false, vertical: true)
       }
     }
@@ -493,26 +497,37 @@ struct OnePageInstallerView: View {
     _ acknowledged: Bool, resizesMacOS: Bool, layout: DiskInstallationLayout
   ) -> some View {
     let text = PlainLanguage.planAcknowledgement(resizesMacOS: resizesMacOS, layout: layout)
-    return HStack(alignment: .center, spacing: 12) {
-      Toggle(
-        "",
-        isOn: Binding(get: { acknowledged }, set: { session.setAcknowledged($0) })
-      )
-      .labelsHidden()
-      .toggleStyle(.checkbox)
-      .controlSize(.large)
-      .tint(OmarchyTheme.accent)
-      .accessibilityLabel(text)
-      Text(text)
-        .font(OmarchyTheme.heading)
-        .foregroundStyle(OmarchyTheme.accent)
-        .fixedSize(horizontal: false, vertical: true)
-        .onTapGesture { session.setAcknowledged(!acknowledged) }
-      Spacer(minLength: 0)
+    return VStack(alignment: .leading, spacing: 8) {
+      if layout == .singleBoot {
+        acknowledgementRow(
+          session.experimentalAcknowledged,
+          PlainLanguage.experimentalAcknowledgement
+        ) { session.setExperimentalAcknowledged($0) }
+      }
+      acknowledgementRow(acknowledged, text) { session.setAcknowledged($0) }
     }
     .disabled(session.isBusy || session.isEditingSize)
     .padding(.horizontal, 4)
     .padding(.top, 4)
+  }
+
+  private func acknowledgementRow(
+    _ checked: Bool, _ text: String, set: @escaping (Bool) -> Void
+  ) -> some View {
+    HStack(alignment: .center, spacing: 12) {
+      Toggle("", isOn: Binding(get: { checked }, set: set))
+        .labelsHidden()
+        .toggleStyle(.checkbox)
+        .controlSize(.large)
+        .tint(OmarchyTheme.accent)
+        .accessibilityLabel(text)
+      Text(text)
+        .font(OmarchyTheme.heading)
+        .foregroundStyle(OmarchyTheme.accent)
+        .fixedSize(horizontal: false, vertical: true)
+        .onTapGesture { set(!checked) }
+      Spacer(minLength: 0)
+    }
   }
 
   /// Every build but the private plain-install test encrypts the Omarchy

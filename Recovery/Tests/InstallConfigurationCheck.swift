@@ -34,9 +34,22 @@ import Foundation
       scoped["allowCustomBootArguments"] = allowed
       let decoded = try InstallConfiguration.decode(JSONSerialization.data(withJSONObject: scoped))
       precondition(decoded.allowCustomBootArguments == allowed)
-      scoped["singleBoot"] = allowed
+      scoped["singleBoot"] = true
+      do {
+        _ = try InstallConfiguration.decode(JSONSerialization.data(withJSONObject: scoped))
+        preconditionFailure("accepted experimental single-boot without its containers")
+      } catch {}
+      scoped["macosContainerUUID"] = "88888888-8888-4888-8888-888888888888"
+      scoped["stubContainerUUID"] = "99999999-9999-4999-8999-999999999999"
+      scoped["iscContainerUUID"] = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"
+      scoped["recoveryContainerUUID"] = "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"
       let single = try InstallConfiguration.decode(JSONSerialization.data(withJSONObject: scoped))
-      precondition(single.singleBoot == allowed)
+      precondition(single.singleBoot == true)
+      scoped["singleBoot"] = false
+      do {
+        _ = try InstallConfiguration.decode(JSONSerialization.data(withJSONObject: scoped))
+        preconditionFailure("accepted container identity without experimental single-boot")
+      } catch {}
     }
     for key in value.keys {
       var changed = value

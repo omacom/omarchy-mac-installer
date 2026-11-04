@@ -185,7 +185,7 @@ def source_bootstrap(dutil, source_os, authorized_owner=None, target_group=None)
                  "sourceGroupUUID": source_group, "ownerUUIDs": [selected]}
 
 
-def target_config(installer, esp_uuid, esp_root, source_os=None, authorized_owner=None, expected_bootstrap=None, single_boot=False):
+def target_config(installer, esp_uuid, esp_root, source_os=None, authorized_owner=None, expected_bootstrap=None, single_boot=False, macos_container_uuid=None, stub_container_uuid=None, isc_container_uuid=None, recovery_container_uuid=None):
     osi = installer.osi
     system = Path(osi.system)
     info = installer.dutil.get("info", "-plist", str(system))
@@ -216,7 +216,24 @@ def target_config(installer, esp_uuid, esp_root, source_os=None, authorized_owne
     }
     if single_boot:
         # Absent on a dual-boot install, so older recovery builds still decode.
+        identities = (
+            macos_container_uuid, stub_container_uuid,
+            isc_container_uuid, recovery_container_uuid,
+        )
+        if any(identifier(value) == identifier(other) for value, other in (
+            (macos_container_uuid, stub_container_uuid),
+            (macos_container_uuid, isc_container_uuid),
+            (macos_container_uuid, recovery_container_uuid),
+            (stub_container_uuid, isc_container_uuid),
+            (stub_container_uuid, recovery_container_uuid),
+            (isc_container_uuid, recovery_container_uuid),
+        )):
+            raise RecoveryError("single-boot container identity is ambiguous")
         result["singleBoot"] = True
+        result["macosContainerUUID"] = identifier(macos_container_uuid)
+        result["stubContainerUUID"] = identifier(stub_container_uuid)
+        result["iscContainerUUID"] = identifier(isc_container_uuid)
+        result["recoveryContainerUUID"] = identifier(recovery_container_uuid)
     return result
 
 
@@ -315,7 +332,9 @@ def _payload(path, maximum=256 << 20):
 def stage(installer, esp_uuid, esp_root, app_source=None,
           manifest_path=None, run=subprocess.run, source_os=None,
           requirement=None, authorized_owner=None, expected_bootstrap=None,
-          single_boot=False):
+          single_boot=False, macos_container_uuid=None, stub_container_uuid=None,
+          isc_container_uuid=None, recovery_container_uuid=None,
+          root_partition_uuid=None, boot_partition_uuid=None):
     """Called after OS/ESP installation and common stage-1 target patching.
 
     Preserve upstream's Finish Installation resource paths for resume checks;
@@ -329,7 +348,27 @@ def stage(installer, esp_uuid, esp_root, app_source=None,
     config = target_config(
         installer, esp_uuid, esp_root, source_os, authorized_owner,
         expected_bootstrap, single_boot=single_boot,
+        macos_container_uuid=macos_container_uuid,
+        stub_container_uuid=stub_container_uuid,
+        isc_container_uuid=isc_container_uuid,
+        recovery_container_uuid=recovery_container_uuid,
     )
+    if single_boot:
+        import omarchy_reclaim
+        destination = Path(esp_root) / "omarchy" / "experimental"
+        destination.mkdir(parents=True, exist_ok=True)
+        script = destination / "reclaim-root.sh"
+        _atomic_bytes(script, omarchy_reclaim.script_text().encode("utf-8"), mode=0o755)
+        plan = omarchy_reclaim.initial_plan(
+            root_uuid=identifier(root_partition_uuid),
+            boot_uuid=identifier(boot_partition_uuid),
+            isc_uuid=config["iscContainerUUID"],
+            recovery_uuid=config["recoveryContainerUUID"],
+        )
+        _atomic_bytes(
+            destination / "reclaim-plan.json",
+            (json.dumps(plan, sort_keys=True) + "\n").encode("utf-8"),
+        )
     system = Path(installer.osi.system)
     esp_root = Path(esp_root)
     stage1 = _payload(installer.boot_obj_path)

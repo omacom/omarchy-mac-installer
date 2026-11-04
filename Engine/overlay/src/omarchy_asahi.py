@@ -1464,6 +1464,8 @@ class AsahiStage1Adapter:
                 raise AsahiAdapterError(
                     "single-boot refuses to resize a system container"
                 )
+            if plan.candidate_kind == "reclaim":
+                self._remember_reclaim_containers(source)
             new_size = source.size - plan.length_bytes
             if new_size < plan.minimum_container_bytes:
                 raise AsahiAdapterError(
@@ -1521,6 +1523,17 @@ class AsahiStage1Adapter:
             common_allowed=self.common_stage1,
         )
         if self.native_recovery_gui:
+            reclaim = plan.candidate_kind == "reclaim"
+            stage_kwargs = {}
+            if reclaim:
+                stage_kwargs = {
+                    "macos_container_uuid": self.reclaim_macos_uuid,
+                    "stub_container_uuid": self.target_part.uuid,
+                    "isc_container_uuid": self.reclaim_isc_uuid,
+                    "recovery_container_uuid": self.reclaim_recovery_uuid,
+                    "root_partition_uuid": self.osins.part_info[2].uuid,
+                    "boot_partition_uuid": self.osins.part_info[1].uuid,
+                }
             omarchy_recovery.stage(
                 self.installer.ins, self.osins.efi_part.uuid,
                 self.installer.dutil.mount(self.osins.efi_part.name),
@@ -1530,7 +1543,8 @@ class AsahiStage1Adapter:
                 requirement=self.recovery_requirement if self.use_helper_recovery else None,
                 authorized_owner=self.authorized_owner if self.use_helper_recovery else None,
                 expected_bootstrap=self.source_bootstrap if self.use_helper_recovery else None,
-                single_boot=plan.candidate_kind == "reclaim",
+                single_boot=reclaim,
+                **stage_kwargs,
             )
         for target in self.osins.idata_targets:
             self.installer.ins.collect_installer_data(target)
@@ -1740,6 +1754,24 @@ class AsahiStage1Adapter:
         ):
             raise AsahiAdapterError("installed checkpoint is invalid")
         return payload
+
+    def _remember_reclaim_containers(self, source):
+        occupied = [
+            part for part in self.installer.parts if not getattr(part, "free", False)
+        ]
+        occupied.sort(key=lambda part: (part.offset, part.name))
+        if (
+            len(occupied) < 3
+            or occupied[0].type != "Apple_APFS_ISC"
+            or occupied[-1].type != "Apple_APFS_Recovery"
+            or source.uuid in (occupied[0].uuid, occupied[-1].uuid)
+        ):
+            raise AsahiAdapterError(
+                "single-boot disk is missing its iBoot or System Recovery container"
+            )
+        self.reclaim_macos_uuid = source.uuid
+        self.reclaim_isc_uuid = occupied[0].uuid
+        self.reclaim_recovery_uuid = occupied[-1].uuid
 
     def _refresh_parts(self):
         self.installer.dutil.get_info()

@@ -135,6 +135,9 @@ def rebuild(checkout, base, output):
         if sha256((root / item['path']).read_bytes()) != item['sha256']:
             raise ValueError('source lock digest mismatch: ' + item['path'])
     overlay = {Path(name).name: (root / name).read_bytes() for name in sorted(expected)}
+    for item in records:
+        if item['destination'] == 'experimental_reclaim_root.sh':
+            overlay['experimental_reclaim_root.sh'] = (root / item['path']).read_bytes()
     # Executables are the app's to sign: notarization rejects native code the
     # release signing cannot reach, and the engine archive is byte-pinned.
     if any(item['destination'].startswith('bin/') for item in records) or (root / 'overlay/bin').exists():

@@ -38,6 +38,8 @@
   @Observable
   public final class InstallerSession {
     public private(set) var installationLayout: DiskInstallationLayout = .alongsideMacOS
+    /// Unticked until the person accepts the experimental single-boot warning.
+    public private(set) var experimentalAcknowledged = false
     public private(set) var phase: InstallerSessionPhase = .inspecting
     public private(set) var recoveryAccount: RecoveryAccountReply?
 
@@ -214,10 +216,20 @@
     /// Why the plan's Install button can't be pressed yet, or `nil` when it
     /// can. The button is disabled exactly when this is set, so the page
     /// always says what is holding it.
+    public func setExperimentalAcknowledged(_ value: Bool) {
+      guard !isBusy, case .planReview(let plan, _) = phase, plan.layout == .singleBoot else {
+        return
+      }
+      experimentalAcknowledged = value
+    }
+
     public var planInstallHold: String? {
-      guard case .planReview(_, let acknowledged) = phase else { return nil }
+      guard case .planReview(let plan, let acknowledged) = phase else { return nil }
       if isBusy || isEditingSize { return PlainLanguage.replanning }
       if !acknowledged { return PlainLanguage.installHoldAcknowledgement }
+      if plan.layout == .singleBoot && !experimentalAcknowledged {
+        return PlainLanguage.experimentalHold
+      }
       if prefetchState != .verified { return PlainLanguage.installHoldDownload }
       return nil
     }
@@ -300,6 +312,7 @@
         layout != installationLayout
       else { return }
       installationLayout = layout
+      experimentalAcknowledged = false
       isReplanning = true
       defer { isReplanning = false }
       await preparePlan(host: lastHost, omarchyBytes: nil, hold: false)
@@ -365,6 +378,7 @@
         switch outcome {
         case .plan(let plan):
           installationLayout = plan.layout
+          experimentalAcknowledged = false
           planRevision += 1
           allocationNotice = omarchyBytes.flatMap {
             PlainLanguage.allocationNotice(requestedBytes: $0, actualBytes: plan.omarchyBytes)
@@ -463,7 +477,8 @@
     public func approve() {
       guard !isBusy && !isExecuting && !isEditingSize,
         case .planReview(let plan, let acknowledged) = phase,
-        acknowledged
+        acknowledged,
+        plan.layout != .singleBoot || experimentalAcknowledged
       else {
         return
       }
