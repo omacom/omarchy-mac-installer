@@ -85,7 +85,7 @@ final class ExperimentalReclaimEngineTests: XCTestCase {
   ) throws -> PinnedInstallerArtifact {
     try PinnedInstallerArtifact(
       role: role,
-      sourceURL: URL(string: "https://mac.omarchy.org/v1/engine/\(name)")!,
+      sourceURL: URL(string: "https://example.com/engine/\(name)")!,
       fileName: name,
       expectedDigest: "sha256:" + digest,
       expectedSizeBytes: 1024

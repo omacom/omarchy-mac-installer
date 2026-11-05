@@ -17,10 +17,17 @@ private_code_requirement() {
 # Both flags are authenticated bundle resources. Ambiguous/ordinary bundles are
 # not accepted by this private installer path.
 private_bundle_profile() {
-  local app=$1 plain limine file
+  local app=$1 plain limine neo file
   plain=$(/usr/bin/plutil -extract OmarchyPrivatePlainTest raw -o - "$app/Contents/Info.plist" 2>/dev/null || true)
   limine=$(/usr/bin/plutil -extract OmarchyPrivateLimineTest raw -o - "$app/Contents/Info.plist" 2>/dev/null || true)
-  if [[ $plain == "true" && $limine != "true" ]]; then
+  neo=$(/usr/bin/plutil -extract OmarchyNeoHardwareTest raw -o - "$app/Contents/Info.plist" 2>/dev/null || true)
+  if [[ $neo == "true" && ( $plain == "true" || $limine == "true" ) ]]; then
+    echo 'A Neo hardware test cannot also be a private plain or Limine profile.' >&2
+    return 1
+  fi
+  if [[ $neo == "true" ]]; then
+    echo neo
+  elif [[ $plain == "true" && $limine != "true" ]]; then
     echo plain
   elif [[ $limine == "true" && $plain != "true" ]]; then
     for file in catalog.json catalog.json.sig; do

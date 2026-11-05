@@ -10,9 +10,13 @@ output=$2
 [[ $output == /* && ! -e $output && ! -L $output ]] || exit 64
 profile=$(private_bundle_profile "$app")
 package_identifier=$INSTALLER_APP_IDENTIFIER.private-m3-test.pkg
+preinstall_source="$root/Packaging/private-test/scripts/preinstall"
 if [[ $profile == "limine" ]]; then
   package_identifier=$INSTALLER_APP_IDENTIFIER.private-limine-test.pkg
   python3 "$root/Packaging/private-test/prepare-limine-assets.py" --verify-release "$app/Contents/Resources/Release" >/dev/null
+elif [[ $profile == "neo" ]]; then
+  package_identifier=$INSTALLER_APP_IDENTIFIER.neo-hardware-test.pkg
+  preinstall_source="$root/Packaging/neo-test/preinstall"
 fi
 [[ $(/usr/bin/plutil -extract OmarchyPrivateExactBuild raw -o - "$app/Contents/Info.plist") == "true" ]] || exit 1
 /usr/bin/codesign --verify --deep --strict "$app"
@@ -45,7 +49,7 @@ with open(sys.argv[1], 'wb') as output:
         'EnvironmentVariables': {'OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT': sys.argv[2]},
     }, output)
 PY
-/bin/bash "$root/Packaging/private-test/render-identity.sh" "$root/Packaging/private-test/scripts/preinstall" "$work/scripts/preinstall"
+/bin/bash "$root/Packaging/private-test/render-identity.sh" "$preinstall_source" "$work/scripts/preinstall"
 /bin/bash "$root/Packaging/private-test/render-identity.sh" "$root/Packaging/private-test/scripts/postinstall" "$work/postinstall.template"
 plist_digest=$(/usr/bin/shasum -a 256 "$plist")
 plist_digest=${plist_digest%% *}

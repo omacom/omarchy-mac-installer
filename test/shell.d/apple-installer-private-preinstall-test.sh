@@ -41,7 +41,7 @@ with tempfile.TemporaryDirectory() as work:
     for board in ('j433', 'j434', 'j504', 'j613', 'j615', 'j514s', 'j514c', 'j514m', 'j516s', 'j516c', 'j516m'):
         check(board, True)
         check(board.upper() + 'AP', True)
-    for board in ('j614s', 'j616s', 'j604', 'j773g', 'j313', 'j575d', 'unknown', ''):
+    for board in ('j614s', 'j616s', 'j604', 'j773g', 'j313', 'j575d', 'j700', 'unknown', ''):
         check(board, False)
         check(board + 'AP', False)
     check('j516s', False, '/Volumes/Other')
@@ -62,5 +62,5 @@ with tempfile.TemporaryDirectory() as work:
         check('j516s', False)
         assert path.is_symlink()
         path.unlink()
-print('PASS: all 11 M3 boards, AP normalization, other hardware/volume rejection and existing-state preservation, pre-rename app included')
+print('PASS: all 11 M3 boards, AP normalization, Neo and other hardware/volume rejection and existing-state preservation, pre-rename app included')
 PY

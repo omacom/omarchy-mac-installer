@@ -33,8 +33,11 @@ with tempfile.TemporaryDirectory() as work:
     (release / 'catalog.json.sig').write_bytes(b'x' * 64)
     check({'OmarchyPrivateLimineTest': True}, 'limine')
     check({'OmarchyPrivatePlainTest': True, 'OmarchyPrivateLimineTest': True}, None)
+    check({'OmarchyNeoHardwareTest': True}, 'neo')
+    check({'OmarchyNeoHardwareTest': True, 'OmarchyPrivatePlainTest': True}, None)
+    check({'OmarchyNeoHardwareTest': True, 'OmarchyPrivateLimineTest': True}, None)
     (release / 'catalog.json.sig').unlink()
     (release / 'catalog.json.sig').symlink_to(release / 'catalog.json')
     check({'OmarchyPrivateLimineTest': True}, None)
-print('PASS: separate plain/Limine package admission, conflicting flags and absent/unsafe sealed catalog rejection')
+print('PASS: separate plain/Limine/Neo package admission, conflicting flags and absent/unsafe sealed catalog rejection')
 PYTEST

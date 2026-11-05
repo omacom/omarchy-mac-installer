@@ -102,6 +102,8 @@ existing application bundle.
 
 For a local hardware test, first assemble an explicitly marked `OMARCHY_DEVELOPER_BUILD=1` app with its sealed developer catalog, then run `Packaging/build-developer-pkg.sh APP OUTPUT.pkg`. This verifies the app and embedded client requirement and creates an unsigned local package that installs the app and its helper through PackageKit. It requires the developer marker and does not use the production signing identities. This package is for local testing, not public distribution.
 
+An ad hoc MacBook Neo (`j700ap`) test uses a separate package, not the private M3 one. That M3 package still admits only its eleven boards. `OMARCHY_NEO_HARDWARE_TEST=1 Packaging/private-test/build-adhoc-app.sh` builds an ad hoc app without the private plain or Limine profile, and `build-tester-pkg.sh` then makes an unsigned package whose preinstall accepts only `j700ap` and whose helper is pinned to the built app and helper cdhashes. The commands, the existing-helper removal, and the per-item Open Anyway install are in `Packaging/neo-test/README.md`. Do not disable Gatekeeper. Production `SMJobBless` and Developer ID signing are unchanged.
+
 A developer build's helper blocks any older build, including a release: `SMJobBless` won't replace a helper with a lower build, and the app reports the service couldn't be set up. To go back to an older release on that Mac, remove the helper first: `sudo launchctl bootout system/org.omarchy.installer.helper`, then delete `/Library/PrivilegedHelperTools/org.omarchy.installer.helper` and `/Library/LaunchDaemons/org.omarchy.installer.helper.plist`.
 
 ## Release workflow

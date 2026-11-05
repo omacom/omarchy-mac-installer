@@ -9,8 +9,14 @@ release=$(cd "$1" && pwd -P)
 output=$2
 [[ $output == /* && ! -e $output && ! -L $output ]] || exit 64
 [[ ${OMARCHY_PRIVATE_PLAIN_TEST:-0} != "1" || ${OMARCHY_PRIVATE_LIMINE_TEST:-0} != "1" ]] || exit 64
+[[ ${OMARCHY_NEO_HARDWARE_TEST:-0} != "1" || ( ${OMARCHY_PRIVATE_PLAIN_TEST:-0} != "1" && ${OMARCHY_PRIVATE_LIMINE_TEST:-0} != "1" ) ]] || exit 64
 mkdir "$output"
-if [[ ${OMARCHY_PRIVATE_LIMINE_TEST:-0} == "1" ]]; then
+neo=0
+if [[ ${OMARCHY_NEO_HARDWARE_TEST:-0} == "1" ]]; then
+  neo=1
+  OMARCHY_PRIVATE_PLAIN_TEST=0 OMARCHY_PRIVATE_LIMINE_TEST=0 OMARCHY_APP_SIGNING_IDENTITY=- \
+    bash "$root/Packaging/build-app.sh" "$release" "$output"
+elif [[ ${OMARCHY_PRIVATE_LIMINE_TEST:-0} == "1" ]]; then
   OMARCHY_PRIVATE_PLAIN_TEST=0 OMARCHY_APP_SIGNING_IDENTITY=- \
     bash "$root/Packaging/build-app.sh" "$release" "$output"
 else
@@ -27,6 +33,9 @@ chmod u+w "$descriptor"
 /usr/bin/plutil -replace helper_code_signing_requirement -string "$helper_requirement" "$descriptor"
 chmod 444 "$descriptor"
 /usr/bin/plutil -insert OmarchyPrivateExactBuild -bool true "$app/Contents/Info.plist"
+if [[ $neo == "1" ]]; then
+  /usr/bin/plutil -insert OmarchyNeoHardwareTest -bool true "$app/Contents/Info.plist"
+fi
 # The external system daemon is generated only after the app is sealed. Never
 # leave a usable identifier-only registration path inside the signed bundle.
 /usr/bin/plutil -replace EnvironmentVariables.OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT \
