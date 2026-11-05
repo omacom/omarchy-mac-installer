@@ -134,7 +134,7 @@ public struct ClosedEngineProcessAdapter: Sendable {
       )
     }
     guard
-      case .admitted(let pinnedInstaller) = catalog.admission(
+      case .admitted(let admitted) = catalog.admission(
         for: transcript.deviceIdentifier
       )
     else {
@@ -144,6 +144,17 @@ public struct ClosedEngineProcessAdapter: Sendable {
     }
     guard let plan = transcript.plan else {
       throw ClosedEngineProcessError.planUnavailable
+    }
+    // A published catalog can predate experimental single-boot. That plan
+    // runs the engine pinned into this app; every other plan stays on the
+    // catalog's engine.
+    let pinnedInstaller: PinnedInstallerRecord
+    if ExperimentalReclaimEngine.isPinnedReclaimPlan(plan),
+      plan.engineDigest != admitted.engineDigest
+    {
+      pinnedInstaller = try ExperimentalReclaimEngine.pinnedInstaller(from: admitted)
+    } else {
+      pinnedInstaller = admitted
     }
     guard plan.deviceIdentifier == transcript.deviceIdentifier,
       pinnedInstaller.engineVersion == nil

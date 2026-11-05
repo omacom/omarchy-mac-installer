@@ -299,8 +299,6 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     // Sampled before the engine reads free space, so a download that moves on
     // during inspection only makes the reserve more cautious.
     let payloadBytesOnDisk = prefetch.bytesOnDisk(for: release.assets.payload)
-    let planningReserve = release.assets.planningReserveBytes(
-      payloadBytesOnDisk: payloadBytesOnDisk)
     let freshHost = try await Task.detached(priority: .userInitiated) {
       try AppleSiliconHostInspector().inspect()
     }.value
@@ -316,18 +314,32 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       signedInspection.validated.deviceIdentifier
         == host.identity.deviceIdentifier,
       signedInspection.validated.support == .supported,
-      let inventory = signedInspection.validated.inventory
+      signedInspection.validated.inventory != nil
     else {
       throw InstallerPlanPreparationError.unsupportedDevice(
         host.identity.deviceIdentifier
       )
     }
+    let (planningRelease, planningInspection) = try await Self.singleBootPlanningRelease(
+      layout: layout,
+      release: release,
+      catalogArchive: archive,
+      catalogInspection: signedInspection,
+      deviceIdentifier: host.identity.deviceIdentifier
+    )
+    guard let inventory = planningInspection.validated.inventory else {
+      throw InstallerPlanPreparationError.unsupportedDevice(
+        host.identity.deviceIdentifier
+      )
+    }
+    let planningReserve = planningRelease.assets.planningReserveBytes(
+      payloadBytesOnDisk: payloadBytesOnDisk)
 
     progress(AssetProgressUpdate(stage: .planning, rows: collector.rows()))
 
     // Existing installs are never replaced or joined: report them and let
     // the session refuse.
-    let existing = Self.existingInstalls(in: signedInspection.validated)
+    let existing = Self.existingInstalls(in: planningInspection.validated)
     if !existing.isEmpty {
       return .existingInstallChoice(existing)
     }
@@ -347,9 +359,9 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       .prepareExecution(
         InstallerPlanPreparationRequest(
           host: host,
-          release: release,
+          release: planningRelease,
           configuration: configuration,
-          inspectionTranscript: signedInspection.transcript,
+          inspectionTranscript: planningInspection.transcript,
           candidate: candidate,
           requestedLengthBytes: requestedLengthBytes,
           validationTime: validationTime,
@@ -686,6 +698,43 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       return reason
     }
     return engineFailure
+  }
+
+  /// The signed catalog's engine plans a release. Experimental single-boot is
+  /// not in that engine until a catalog publishes it, so a catalog inventory
+  /// with no reclaim candidate is read again with the engine pinned into this
+  /// app. Dual-boot never leaves the catalog engine.
+  private static func singleBootPlanningRelease(
+    layout: DiskInstallationLayout,
+    release: PreparedInstallerRelease,
+    catalogArchive: PinnedAsahiEngineArchive,
+    catalogInspection: EngineInspectionResult,
+    deviceIdentifier: String
+  ) async throws -> (PreparedInstallerRelease, EngineInspectionResult) {
+    guard layout == .singleBoot,
+      catalogInspection.validated.inventory?.candidates.contains(where: {
+        $0.kind == "reclaim"
+      }) != true
+    else {
+      return (release, catalogInspection)
+    }
+    let bundled = try ValidationEngineArtifactLocator().locate()
+    guard bundled.expectedDigest != catalogArchive.expectedDigest else {
+      return (release, catalogInspection)
+    }
+    let bundledInspection = try await EngineInspectionRunner().inspect(bundled)
+    guard bundledInspection.validated.deviceIdentifier == deviceIdentifier,
+      bundledInspection.validated.support == .supported,
+      bundledInspection.validated.inventory?.candidates.contains(where: {
+        $0.kind == "reclaim"
+      }) == true
+    else {
+      return (release, catalogInspection)
+    }
+    return (
+      try release.usingBundledReclaimEngine(bundled),
+      bundledInspection
+    )
   }
 
   static func planDisplay(

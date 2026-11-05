@@ -574,6 +574,65 @@ class PlannerTests(unittest.TestCase):
         self.assertIn("resize", kinds)
         self.assertNotIn("reclaim", kinds)
 
+    def test_neo_layout_reclaims_past_a_hidden_gap_and_skipped_indexes(self):
+        # MacBook Neo, Apple A18 Pro, macOS 27.2. diskutil list internal
+        # physical showed disk0s1, disk0s2 and disk0s7 only. The container
+        # ceiling and free space are the figures from that report. Partition
+        # indexes skip s3 through s6. The reader also inserts a free row
+        # before iBoot when that gap exceeds 16 MiB; diskutil list omits it.
+        macos_size = 245_054_767_104
+        free_bytes = 127_083_552_768
+        diskutil_minimum = 110_000_000_000
+        unit = 1024**2
+        leading = 32 * 1024**2
+        isc_size = 576_716_800
+        recovery_size = 5_368_664_064
+        isc_offset = 20_480 + leading
+        macos_offset = isc_offset + isc_size
+        recovery_offset = macos_offset + macos_size
+        macos = SimpleNamespace(
+            name="disk0s2", offset=macos_offset, size=macos_size,
+            free=False, type="Apple_APFS",
+        )
+        self.installer.dutil = SimpleNamespace(
+            get_disk_size=lambda _: recovery_offset + recovery_size + 4096
+        )
+        self.installer.resize_bounds = {
+            "total_bytes": macos_size,
+            "free_bytes": free_bytes,
+            "diskutil_minimum_bytes": diskutil_minimum,
+            "minimum_size_bytes": diskutil_minimum,
+            "available_bytes": macos_size - diskutil_minimum,
+        }
+        self.installer.parts = [
+            SimpleNamespace(
+                name="disk0", offset=20_480, size=leading,
+                free=True, type=None,
+            ),
+            SimpleNamespace(
+                name="disk0s1", offset=isc_offset, size=isc_size,
+                free=False, type="Apple_APFS_ISC",
+            ),
+            macos,
+            SimpleNamespace(
+                name="disk0s7", offset=recovery_offset, size=recovery_size,
+                free=False, type="Apple_APFS_Recovery",
+            ),
+        ]
+        inventory = collect_inventory(self.installer, [], [macos], 2 * 1024**3, unit)
+        reclaim = next(item for item in inventory["candidates"] if item["kind"] == "reclaim")
+        resize = next(item for item in inventory["candidates"] if item["kind"] == "resize")
+        aligned_diskutil = (diskutil_minimum + unit - 1) // unit * unit
+        self.assertEqual(reclaim["source_identifier"], "disk0s2")
+        self.assertEqual(reclaim["minimum_container_bytes"], aligned_diskutil)
+        self.assertGreater(
+            resize["minimum_container_bytes"], reclaim["minimum_container_bytes"]
+        )
+        self.assertGreater(
+            reclaim["recommended_install_bytes"],
+            macos_size - resize["minimum_container_bytes"],
+        )
+
     def _write(self, name, value):
         path = self.root / name
         path.write_text(

@@ -107,35 +107,40 @@ def _resize_offer(installer, part, bounds, floor, part_align):
 
 
 def _internal_disk_can_reclaim(installer, part):
-    """True when shrinking this container cannot touch iBoot or System Recovery.
+    """True when this container is the only one between iBoot and System Recovery.
 
-    Those two containers are the first and last partitions on an Apple Silicon
-    system disk. Deleting either strands the Mac on a DFU restore. Asahi's
-    whole-disk partition is for an external disk and removes both, so reclaim
-    never uses it. A foreign partition between the containers is refused too:
-    the free space from a shrink opens before that partition, and the Omarchy
-    root cannot grow backward into it.
+    Those two containers are the first and last real partitions on an Apple
+    Silicon system disk. Deleting either strands the Mac on a DFU restore.
+    Asahi's whole-disk partition is for an external disk and removes both, so
+    reclaim never uses it. A foreign partition between the containers is
+    refused too: the free space from a shrink opens before that partition, and
+    the Omarchy root cannot grow backward into it.
+
+    diskutil list hides empty space, and partition indexes are not contiguous
+    after one is deleted (disk0s2 then disk0s7 is a normal map). The engine's
+    partition reader inserts its own free row when a gap is larger than 16 MiB,
+    including a gap before iBoot. That row is not another container.
     """
     parts = list(getattr(installer, "parts", None) or [])
-    if len(parts) < 3 or getattr(part, "type", None) != "Apple_APFS":
+    if getattr(part, "type", None) != "Apple_APFS":
         return False
     ordered = sorted(parts, key=lambda item: (item.offset, item.name))
-    first = ordered[0]
-    if getattr(first, "free", False) or getattr(first, "type", None) != "Apple_APFS_ISC":
-        return False
     occupied = [item for item in ordered if not getattr(item, "free", False)]
-    if not occupied:
+    if len(occupied) < 3:
         return False
+    isc = occupied[0]
     recovery = occupied[-1]
+    if getattr(isc, "type", None) != "Apple_APFS_ISC":
+        return False
     if getattr(recovery, "type", None) != "Apple_APFS_Recovery":
         return False
     if not (
-        first.offset < part.offset
+        isc.offset < part.offset
         and part.offset + part.size <= recovery.offset
     ):
         return False
     kept = {
-        (first.name, first.offset),
+        (isc.name, isc.offset),
         (part.name, part.offset),
         (recovery.name, recovery.offset),
     }
