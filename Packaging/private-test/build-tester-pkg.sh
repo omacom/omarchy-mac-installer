@@ -37,18 +37,21 @@ mkdir -p "$work/root/Applications" "$work/root/Library/LaunchDaemons" "$work/roo
 /usr/bin/ditto "$app" "$work/root/Applications/$INSTALLER_APP_NAME.app"
 /usr/bin/install -m 755 "$helper" "$work/root/Library/PrivilegedHelperTools/$INSTALLER_HELPER_IDENTIFIER"
 plist="$work/root/Library/LaunchDaemons/$INSTALLER_HELPER_IDENTIFIER.plist"
-python3 - "$plist" "$app_requirement" "$INSTALLER_HELPER_IDENTIFIER" <<'PY'
-import plistlib
-import sys
-with open(sys.argv[1], 'wb') as output:
-    plistlib.dump({
-        'Label': sys.argv[3],
-        'Program': '/Library/PrivilegedHelperTools/' + sys.argv[3],
-        'MachServices': {sys.argv[3]: True},
-        'UserName': 'root',
-        'EnvironmentVariables': {'OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT': sys.argv[2]},
-    }, output)
-PY
+# An ad hoc helper has no Developer ID team to infer these from. Record the
+# signed decoder and Recovery template before the plist is hashed into
+# postinstall. The private M3 and Limine packages keep their previous plist.
+if [[ $profile == "neo" ]]; then
+  decoder="$app/Contents/Helpers/omarchy-restore-image"
+  template="$app/Contents/Resources/RecoveryTemplate/$INSTALLER_RECOVERY_APP_NAME.app"
+  [[ -f $decoder && ! -L $decoder && -d $template && ! -L $template ]] || exit 1
+  python3 "$root/Packaging/private-test/write-daemon-plist.py" \
+    "$plist" "$app_requirement" "$INSTALLER_HELPER_IDENTIFIER" \
+    "$(private_code_requirement "$decoder" "$INSTALLER_RESTORE_IMAGE_IDENTIFIER")" \
+    "cdhash H\"$(private_code_hash "$template")\""
+else
+  python3 "$root/Packaging/private-test/write-daemon-plist.py" \
+    "$plist" "$app_requirement" "$INSTALLER_HELPER_IDENTIFIER"
+fi
 /bin/bash "$root/Packaging/private-test/render-identity.sh" "$preinstall_source" "$work/scripts/preinstall"
 /bin/bash "$root/Packaging/private-test/render-identity.sh" "$root/Packaging/private-test/scripts/postinstall" "$work/postinstall.template"
 plist_digest=$(/usr/bin/shasum -a 256 "$plist")

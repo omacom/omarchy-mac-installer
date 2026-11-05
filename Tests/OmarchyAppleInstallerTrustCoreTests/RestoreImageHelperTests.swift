@@ -53,6 +53,27 @@
         ]), developerID)
     }
 
+    func testAnAdHocHelperNeedsExplicitDecoderAndTemplatePins() {
+      let hash = String(repeating: "a", count: 40)
+      let client =
+        "identifier \"\(InstallerProductIdentity.appIdentifier)\" and cdhash H\"\(hash)\""
+      let adHocHelper = [
+        InstallerProductIdentity.clientRequirementEnvironmentVariable: client
+      ]
+      // The Neo package's helper is this environment plus the two pins. Without
+      // them the decoder requirement is nil and execution fails as
+      // restoreImageUnavailable (bridged code 12).
+      XCTAssertNil(RestoreImageHelper.requirement(environment: adHocHelper))
+      XCTAssertNil(NativeRecoveryTemplate.requirement(environment: adHocHelper))
+      let decoder = RestoreImageHelper.adHocRequirement(codeHash: hash)
+      let template = "cdhash H\"\(hash)\""
+      var pinned = adHocHelper
+      pinned[RestoreImageHelper.requirementEnvironmentVariable] = decoder
+      pinned[RecoveryTemplateIdentity.requirementEnvironmentVariable] = template
+      XCTAssertEqual(RestoreImageHelper.requirement(environment: pinned), decoder)
+      XCTAssertEqual(NativeRecoveryTemplate.requirement(environment: pinned), template)
+    }
+
     func testAnAdHocClientHasNoDecoderIdentityWithoutAPin() {
       for client in [
         "identifier \"\(InstallerProductIdentity.appIdentifier)\"",
