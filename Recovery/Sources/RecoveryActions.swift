@@ -207,9 +207,8 @@ enum RecoveryActions {
               as? [String: Any]
           else { throw RecoveryOwnerError.noOwner }
           snapshots = RecoveryOwnerResolver.snapshotUUIDs(listing)
-          guard snapshots.contains(bootstrap.sourceSystemUUID) else {
-            throw RecoveryOwnerError.noOwner
-          }
+          try RecoveryOwnerResolver.verifySourceSystem(
+            bootstrap.sourceSystemUUID, actual: id.uppercased(), snapshots: snapshots)
         }
         let sourceDataUUID = try RecoveryAccountInstaller.pairedDataUUID(
           systemUUID: id.uppercased(), groupUUID: bootstrap.sourceGroupUUID)

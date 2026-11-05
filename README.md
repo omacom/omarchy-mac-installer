@@ -133,6 +133,7 @@ If a removal record is unfinished, the app will not install or remove again unti
 Common messages and what they mean:
 
 - "This Mac isn't supported yet": the Mac's model is not in the release's catalog. See [Supported Macs](#supported-macs).
+- "macOS changed after this installation started": macOS was updated between the macOS stage and Recovery, so Recovery can no longer verify the owner recorded by the first stage. Start up from macOS, choose **Installation → Remove Omarchy…**, then install again. Avoid macOS updates until Recovery has finished.
 - "Couldn't load" in the Release channel menu: no catalog is published for that channel, or the network failed. Choose **Check Channels Again**. "No Mac release yet" means a signed empty catalog is published.
 - "The encryption choice wasn't saved, so Omarchy will encrypt its disk at first boot": the installer could not write `omarchy/install.conf` to the EFI partition. Fixed for busy volumes in installer 2.3.12 ([#156](https://github.com/omacom/omarchy-mac-installer/pull/156)); see [EFI encryption handoff](docs/efi-encryption-handoff.md).
 - "Not enough free space": the download needs more room than is available. Free space on macOS and run **Check available space**.
