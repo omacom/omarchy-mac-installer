@@ -39,6 +39,36 @@ def team_requirement(identifier: str) -> str:
     return f'anchor apple generic and identifier "{identifier}" and certificate leaf[subject.OU] = "{TEAM}"'
 
 
+def macho(sections: dict[tuple[str, str], bytes] | None = None, libraries: tuple[str, ...] = ()) -> bytes:
+    """A minimal thin arm64 Mach-O: one LC_SEGMENT_64 holding the sections,
+    then one LC_LOAD_DYLIB per library."""
+    import struct
+    sections = sections or {}
+    commands = []
+    segment_size = 72 + 80 * len(sections)
+    dylib_sizes = [(24 + len(name) + 1 + 7) // 8 * 8 for name in libraries]
+    data_at = 32 + segment_size + sum(dylib_sizes)
+    entries, payload = b"", b""
+    for (segment, section), body in sections.items():
+        entries += struct.pack("<16s16sQQIIIIIIII", section.encode(), segment.encode(), 0, len(body),
+                               data_at + len(payload), 0, 0, 0, 0, 0, 0, 0)
+        payload += body
+    commands.append(struct.pack("<II16sQQQQiiII", 0x19, segment_size, b"__TEXT", 0, 0, 0, 0, 0, 0,
+                                len(sections), 0) + entries)
+    for name, size in zip(libraries, dylib_sizes):
+        commands.append(struct.pack("<IIIIII", 0xC, size, 24, 0, 0, 0) + name.encode().ljust(size - 24, b"\0"))
+    body = b"".join(commands)
+    header = struct.pack("<IiiIIIII", 0xFEEDFACF, 0x0100000C, 0, 2, len(commands), len(body), 0, 0)
+    return header + body + payload
+
+
+def blessed_helper(environment: dict[str, str] | None) -> bytes:
+    job = {"Label": "helper", "MachServices": {"helper": True}, "UserName": "root"}
+    if environment is not None:
+        job["EnvironmentVariables"] = environment
+    return macho({("__TEXT", "__launchd_plist"): plistlib.dumps(job, fmt=plistlib.FMT_XML)})
+
+
 class ReleaseGuardTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -64,7 +94,8 @@ class ReleaseGuardTest(unittest.TestCase):
             "EnvironmentVariables": {"OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT": team_requirement(APP_ID)},
         })
         (contents / "MacOS/OmarchyAppleInstallerApp").write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 64 + b"app code")
-        (contents / f"Library/LaunchServices/{HELPER_ID}").write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 64)
+        (contents / f"Library/LaunchServices/{HELPER_ID}").write_bytes(
+            blessed_helper({"OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT": team_requirement(APP_ID)}))
         (contents / "Helpers/omarchy-restore-image").write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * 64 + b"decoder")
         self.set_trust_root(trust_root or bytes(range(1, 33)))
         self.write_engine({"installer/main.py": b"print('engine')\n"})
@@ -132,6 +163,55 @@ class ReleaseGuardTest(unittest.TestCase):
     def test_public_app_can_bundle_its_native_recovery_template(self):
         self.recovery_template()
         self.assertEqual(self.findings(), [])
+
+    def test_a_blessed_helper_must_carry_the_client_requirement_in_its_embedded_job(self):
+        # 2.3.0 to 2.3.2: right in the package's daemon plist, missing from
+        # the job SMJobBless runs, so DMG installs could not stage Recovery.
+        helper = self.app / f"Contents/Library/LaunchServices/{HELPER_ID}"
+        for environment in (None, {}, {"OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT": f'identifier "{APP_ID}"'}):
+            helper.write_bytes(blessed_helper(environment))
+            self.assertRefused("embedded job does not pin the Developer ID client")
+
+    def test_a_helper_without_an_embedded_job_is_refused(self):
+        (self.app / f"Contents/Library/LaunchServices/{HELPER_ID}").write_bytes(macho())
+        self.assertRefused("no embedded __launchd_plist")
+        (self.app / f"Contents/Library/LaunchServices/{HELPER_ID}").unlink()
+        self.assertRefused("the helper, is missing")
+
+    def test_a_pinned_template_requirement_must_be_a_code_hash(self):
+        helper = self.app / f"Contents/Library/LaunchServices/{HELPER_ID}"
+        client = {"OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT": team_requirement(APP_ID)}
+        helper.write_bytes(blessed_helper({**client, "OMARCHY_RECOVERY_TEMPLATE_REQUIREMENT": 'cdhash H"' + "a" * 40 + '"'}))
+        self.assertEqual(self.findings(), [])
+        helper.write_bytes(blessed_helper({**client, "OMARCHY_RECOVERY_TEMPLATE_REQUIREMENT": "anchor apple"}))
+        self.assertRefused("Recovery-template requirement 'anchor apple' is malformed")
+
+    def test_a_fat_helper_is_read_slice_by_slice(self):
+        import struct
+        thin = blessed_helper({"OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT": team_requirement(APP_ID)})
+        fat = struct.pack(">II", 0xCAFEBABE, 1) + struct.pack(">IIIII", 0x0100000C, 0, 4096, len(thin), 12)
+        (self.app / f"Contents/Library/LaunchServices/{HELPER_ID}").write_bytes(fat.ljust(4096, b"\0") + thin)
+        self.assertEqual(self.findings(), [])
+
+    def test_the_recovery_template_may_not_link_cryptokit(self):
+        # #103: older M1/M2 Recovery stubs cannot load CryptoTokenKit.
+        app = self.recovery_template()
+        executable = app / "Contents/MacOS/OmarchyRecovery"
+        executable.write_bytes(macho(libraries=("/usr/lib/libSystem.B.dylib",)))
+        self.assertEqual(self.findings(), [])
+        for framework in ("CryptoKit", "CryptoTokenKit"):
+            executable.write_bytes(macho(libraries=(
+                "/usr/lib/libSystem.B.dylib", f"/System/Library/Frameworks/{framework}.framework/Versions/A/{framework}")))
+            self.assertRefused(f"the Recovery executable links {framework}")
+
+    def test_the_derived_requirements_match_the_helper(self):
+        # RestoreImageHelper.developerIDRequirement and RecoveryTemplateIdentity.developerIDRequirement.
+        swift = (GUARD.parents[2] / "Sources/OmarchyAppleInstaller/RecoveryAccountHandoff.swift").read_text()
+        self.assertIn(f'static let identifier = "{guard.RECOVERY_IDENTIFIER}"', swift)
+        for field in ("certificate 1[field.1.2.840.113635.100.6.2.6]",
+                      "certificate leaf[field.1.2.840.113635.100.6.1.13]"):
+            self.assertIn(field, guard.developer_id_requirement("x", TEAM))
+            self.assertIn(field, swift)
 
     def test_recovery_preview_or_foreign_bundle_is_rejected(self):
         app = self.recovery_template()
