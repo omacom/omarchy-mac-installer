@@ -27,9 +27,7 @@ struct ConfirmationSheet: View {
         Button(PlainLanguage.cancel, action: onCancel)
           .omarchySecondaryButton()
           .keyboardShortcut(.cancelAction)
-        Button(action, action: onConfirm)
-          .omarchyPrimaryButton()
-          .keyboardShortcut(.defaultAction)
+        MainActionButton(action, action: onConfirm)
       }
     }
     .padding(32)

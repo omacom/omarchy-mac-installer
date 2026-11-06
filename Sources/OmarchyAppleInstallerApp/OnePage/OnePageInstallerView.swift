@@ -23,6 +23,7 @@ struct OnePageInstallerView: View {
   /// what to tell the owner if that or the shutdown request fails.
   @State private var preparingShutdown = false
   @State private var shutdownFailure: String?
+  @FocusState private var acknowledgementFocused: Bool
   /// Which channel this Mac reads. Owned by the scene so the banner always
   /// names the channel the next preparation will actually fetch; `nil` when
   /// the bundle has no release descriptor to fetch from.
@@ -275,15 +276,14 @@ struct OnePageInstallerView: View {
       EmptyView()
 
     case .unsupported:
-      Button(PlainLanguage.checkAgain) { Task { await recheck() } }
-        .omarchySecondaryButton()
-        .disabled(session.isBusy)
+      MainActionButton(PlainLanguage.checkAgain, kind: .secondary, shortcut: nil) {
+        Task { await recheck() }
+      }
+      .disabled(session.isBusy)
 
     case .welcome:
-      Button(PlainLanguage.checkContinue) { Task { await session.continueToPlan() } }
-        .omarchyPrimaryButton()
+      MainActionButton(PlainLanguage.checkContinue) { Task { await session.continueToPlan() } }
         .disabled(session.isBusy)
-        .keyboardShortcut(.defaultAction)
 
     case .existingInstallRefused:
       if pendingRecoveryHandoff != nil {
@@ -298,13 +298,11 @@ struct OnePageInstallerView: View {
         }
         shutDownButton
       } else {
-        Button(PlainLanguage.closeInstaller) { NSApplication.shared.terminate(nil) }
-          .omarchyPrimaryButton()
-          .keyboardShortcut(.defaultAction)
+        MainActionButton(PlainLanguage.closeInstaller) { NSApplication.shared.terminate(nil) }
       }
 
     case .planReview:
-      Button(PlainLanguage.planInstall) {
+      MainActionButton(PlainLanguage.planInstall) {
         // Approve the exact plan and go straight to the password. If the
         // helper is not ready the page stays here and says so.
         session.approve()
@@ -312,18 +310,14 @@ struct OnePageInstallerView: View {
           session.presentInstallCredentials()
         }
       }
-      .omarchyPrimaryButton()
       .disabled(session.planInstallHold != nil)
-      .keyboardShortcut(.defaultAction)
 
     case .awaitingInstall:
       Button("Change size") { session.editPlan() }
         .omarchySecondaryButton()
         .disabled(!session.canEditPlan)
-      Button(PlainLanguage.planInstall) { session.presentInstallCredentials() }
-        .omarchyPrimaryButton()
+      MainActionButton(PlainLanguage.planInstall) { session.presentInstallCredentials() }
         .disabled(!session.canStartInstallation)
-        .keyboardShortcut(.defaultAction)
 
     case .installing:
       Text(PlainLanguage.installWarning)
@@ -334,33 +328,37 @@ struct OnePageInstallerView: View {
       shutDownButton
 
     case .done:
-      Button("Close") { NSApplication.shared.terminate(nil) }
-        .omarchySecondaryButton()
+      MainActionButton("Close", kind: .secondary, shortcut: nil) {
+        NSApplication.shared.terminate(nil)
+      }
 
     case .failed(let failure):
+      let hasPrimaryAction =
+        failure.retryRecoveryAvailable || failure.replanAvailable
+        || (failure.actionURL != nil && failure.actionTitle != nil)
       if session.canInspect {
-        Button("Check again") { Task { await recheck() } }
-          .omarchySecondaryButton()
+        if hasPrimaryAction {
+          Button("Check again") { Task { await recheck() } }
+            .omarchySecondaryButton()
+        } else {
+          MainActionButton("Check again", kind: .secondary, shortcut: nil) {
+            Task { await recheck() }
+          }
+        }
       }
       if failure.retryRecoveryAvailable {
-        Button(PlainLanguage.retry) { showsRecoveryRetryConfirmation = true }
-          .omarchyPrimaryButton()
+        MainActionButton(PlainLanguage.retry) { showsRecoveryRetryConfirmation = true }
           .disabled(!session.canRetryRecoveryAuthorization)
-          .keyboardShortcut(.defaultAction)
       } else if failure.replanAvailable {
-        Button(PlainLanguage.replanAction) {
+        MainActionButton(PlainLanguage.replanAction) {
           Task { await session.replanAfterEngineRefusal() }
         }
-        .omarchyPrimaryButton()
         .disabled(session.isBusy)
-        .keyboardShortcut(.defaultAction)
       } else if let url = failure.actionURL, let title = failure.actionTitle {
-        Button(title) {
+        MainActionButton(title) {
           if !session.isSimulation { NSWorkspace.shared.open(url) }
         }
         .disabled(session.isSimulation)
-        .omarchyPrimaryButton()
-        .keyboardShortcut(.defaultAction)
       }
     }
   }
@@ -472,6 +470,7 @@ struct OnePageInstallerView: View {
       .toggleStyle(.checkbox)
       .controlSize(.large)
       .tint(OmarchyTheme.accent)
+      .focusable(false)
       .accessibilityLabel(text)
       Text(text)
         .font(OmarchyTheme.heading)
@@ -480,9 +479,27 @@ struct OnePageInstallerView: View {
         .onTapGesture { session.setAcknowledged(!acknowledged) }
       Spacer(minLength: 0)
     }
+    .padding(4)
+    // The row takes focus as one control, as a checkbox alone only would with
+    // the macOS Keyboard navigation setting on. Space ticks it.
+    .focusable(!session.isBusy && !session.isEditingSize, interactions: .edit)
+    .focused($acknowledgementFocused)
+    .onKeyPress(.space) {
+      session.setAcknowledged(!acknowledged)
+      return .handled
+    }
     .disabled(session.isBusy || session.isEditingSize)
-    .padding(.horizontal, 4)
-    .padding(.top, 4)
+    .task(id: acknowledgementReadyForFocus) {
+      guard acknowledgementReadyForFocus != nil else { return }
+      try? await Task.sleep(for: .milliseconds(50))
+      if !Task.isCancelled { acknowledgementFocused = true }
+    }
+  }
+
+  /// Changes each time the tick becomes the next thing to do: when the plan
+  /// first shows, and after a size change clears it.
+  private var acknowledgementReadyForFocus: Int? {
+    session.isBusy || session.isEditingSize ? nil : session.planRevision
   }
 
   /// Every build but the private plain-install test encrypts the Omarchy
@@ -533,10 +550,9 @@ struct OnePageInstallerView: View {
 
   /// Shuts down straight away: the steps above already say to save work
   /// first, and macOS still asks about unsaved documents. With no
-  /// confirmation left, Return doesn't press it; only a click does.
+  /// confirmation left, Return doesn't press it; Command-Return or a click does.
   private var shutDownButton: some View {
-    Button(PlainLanguage.recoveryShutDown) { shutDown() }
-      .omarchyPrimaryButton()
+    MainActionButton(PlainLanguage.recoveryShutDown, shortcut: nil) { shutDown() }
       .disabled(preparingShutdown)
   }
 
@@ -686,7 +702,7 @@ private struct PrefetchStrip: View {
               Button(PlainLanguage.prefetchRetry, action: onRetry)
             }
           } else {
-            ProgressTrack(fraction: fraction, height: 10)
+            ProgressTrack(fraction: fraction, height: 18)
           }
         }
         .padding(.vertical, 2)

@@ -343,6 +343,71 @@ private struct OmarchyButtonBody: View {
   }
 }
 
+/// A key press with no button of its own on screen, such as Command-Return
+/// next to a button already bound to Return.
+struct HiddenShortcutButton: View {
+  let shortcut: KeyboardShortcut
+  let action: () -> Void
+
+  var body: some View {
+    Button("", action: action)
+      .keyboardShortcut(shortcut)
+      .buttonStyle(.plain)
+      .focusable(false)
+      .opacity(0)
+      .frame(width: 0, height: 0)
+      .accessibilityHidden(true)
+  }
+}
+
+/// The button for a screen's main action: Command-Return always presses it,
+/// whatever field has focus. `shortcut` is its other key, if any; a button
+/// that can't safely take Return passes nil.
+struct MainActionButton: View {
+  let title: String
+  var kind = OmarchyButtonStyle.Kind.primary
+  var role: ButtonRole?
+  var shortcut: KeyboardShortcut? = .defaultAction
+  let action: () -> Void
+
+  init(
+    _ title: String, kind: OmarchyButtonStyle.Kind = .primary, role: ButtonRole? = nil,
+    shortcut: KeyboardShortcut? = .defaultAction, action: @escaping () -> Void
+  ) {
+    self.title = title
+    self.kind = kind
+    self.role = role
+    self.shortcut = shortcut
+    self.action = action
+  }
+
+  var body: some View {
+    Button(title, role: role, action: action)
+      .buttonStyle(OmarchyButtonStyle(kind: kind))
+      .keyboardShortcut(shortcut)
+      .background {
+        HiddenShortcutButton(
+          shortcut: KeyboardShortcut(.return, modifiers: .command), action: action)
+      }
+  }
+}
+
+/// A message with each sentence on its own line and a gap between them.
+struct SentenceStack: View {
+  let text: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      ForEach(Array(PlainLanguage.sentences(text).enumerated()), id: \.offset) { _, sentence in
+        Text(sentence)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityElement(children: .combine)
+  }
+}
+
 extension View {
   func omarchyPrimaryButton() -> some View {
     buttonStyle(OmarchyButtonStyle(kind: .primary))
