@@ -5,7 +5,7 @@ set -euo pipefail
 target=$(/usr/sbin/sysctl -n hw.targettype | /usr/bin/tr '[:upper:]' '[:lower:]')
 target=${target%ap}
 case "$target" in
-  j433|j434|j504|j613|j615|j514s|j514c|j514m|j516s|j516c|j516m) ;;
+  j433|j434|j504|j613|j615|j514s|j514c|j514m|j516s|j516c|j516m|j575d) ;;
   *) echo "Private M3 package: unsupported hardware $target. No helper may be installed." >&2; exit 1 ;;
 esac
 version=$(/usr/bin/sw_vers -productVersion)

@@ -63,9 +63,10 @@ UPSTREAM_IPSWS = [
           "j514map", "j516sap", "j516cap", "j516map"], "14.8.3"),
 ]
 IPSW_VERSIONS = patched_ipsws() + UPSTREAM_IPSWS
-CHIP_MIN_VER = {0x8103: "11.0", 0x8112: "12.4", 0x8122: "14.8.3", 0x8140: "26.6"}
+CHIP_MIN_VER = {0x8103: "11.0", 0x8112: "12.4", 0x8122: "14.8.3", 0x8140: "26.6",
+                0x6032: "27.0.1"}
 DEVICE_MIN = {"j313ap": "11.0", "j413ap": "12.4", "j613ap": "14.8.3",
-              "j615ap": "14.8.3", "j700ap": "26.6"}
+              "j615ap": "14.8.3", "j700ap": "26.6", "j575dap": "27.0.1"}
 TODAY = ["13.5", "14.8.3", "26.6"]
 ON_26_6_2 = dict(sys_firmware="mBoot-18000.161.10", macos_ver="26.6.2",
                  sfr_full_ver="25.7.83.0.0,0")
@@ -92,9 +93,14 @@ def choose(sysinfo, device, supported_fw):
 
 
 class PatchedFirmwareTableTests(unittest.TestCase):
-    def test_the_airs_26_6_2_entry_follows_the_neos_26_6_entry(self):
-        neo, air = IPSW_VERSIONS[:2]
+    def test_the_studios_27_0_1_entry_leads_the_neos_26_6_entry(self):
+        ultra, neo, air = IPSW_VERSIONS[:3]
         self.assertEqual((neo.version, neo.devices), ("26.6", ["j700ap"]))
+        self.assertEqual(ultra, IPSW(
+            "27.0.1", "26.0", "mBoot-20457.1.29", "26.1.434.0.0,0", False,
+            ["j575dap"],
+            "https://updates.cdn-apple.com/2026FallFCS/59241290-5d51-4ca8-9df4-31624b9a4eac/"
+            "UniversalMac_27.0.1_26A434_Restore.ipsw"))
         self.assertEqual(air, IPSW(
             "26.6.2", "26.0", "mBoot-18000.161.10", "25.7.83.0.0,0", False,
             ["j613ap", "j615ap", "j700ap"],
@@ -132,6 +138,19 @@ class DefaultFirmwareTests(unittest.TestCase):
         sysinfo, device = mac("j613ap", 0x8122, sys_firmware="iBoot-11881.140.96",
                               macos_ver="15.6", sfr_full_ver="24.6.69.0.0,0")
         self.assertEqual(choose(sysinfo, device, ["26.6.2"]), (None, STUB_SIZE))
+
+    def test_the_m3_ultra_studio_takes_27_0_1_and_the_larger_stub(self):
+        sysinfo, device = mac("j575dap", 0x6032, sys_firmware="mBoot-20457.1.29",
+                              macos_ver="27.0.1", sfr_full_ver="26.1.434.0.0,0")
+        self.assertEqual(choose(sysinfo, device, ["13.5", "14.8.3", "26.6.2", "27.0.1"]),
+                         ("27.0.1", STUB_SIZE_MACOS26))
+
+    def test_the_m3_ultra_studio_is_offered_nothing_until_a_payload_names_27_0_1(self):
+        # Today's one image names 13.5, 14.8.3 and 26.6.2 only, so inspection
+        # and planning work but the install choice stays empty.
+        sysinfo, device = mac("j575dap", 0x6032, sys_firmware="mBoot-20457.1.29",
+                              macos_ver="27.0.1", sfr_full_ver="26.1.434.0.0,0")
+        self.assertEqual(choose(sysinfo, device, TODAY), (None, STUB_SIZE_MACOS26))
 
     def test_m1_and_m2_are_unchanged(self):
         for device_class, chip_id in (("j313ap", 0x8103), ("j413ap", 0x8112)):
@@ -226,6 +245,18 @@ class FirmwareRequirementTests(unittest.TestCase):
         with self.assertRaises(FirmwareRequirementError) as raised:
             require(sysinfo, device, ["13.5", "14.8.3"])
         self.assertEqual(str(raised.exception), "no installation firmware fits this Mac")
+
+    def test_the_m3_ultra_on_26_6_2_must_update_to_27_0_1(self):
+        sysinfo, device = mac("j575dap", 0x6032, sys_firmware="mBoot-18000.161.10",
+                              macos_ver="26.6.2", sfr_full_ver="25.7.83.0.0,0")
+        with self.assertRaises(FirmwareRequirementError) as raised:
+            require(sysinfo, device, self.EDGE + ["27.0.1"])
+        self.assertEqual(str(raised.exception), "system firmware is older than macOS 27.0.1")
+
+    def test_the_m3_ultra_on_27_0_1_passes(self):
+        sysinfo, device = mac("j575dap", 0x6032, sys_firmware="mBoot-20457.1.29",
+                              macos_ver="27.0.1", sfr_full_ver="26.1.434.0.0,0")
+        require(sysinfo, device, ["27.0.1"])
 
     def test_an_installable_mac_is_left_alone(self):
         for device_class, chip in (("j313ap", 0x8103), ("j413ap", 0x8112), ("j613ap", 0x8122)):

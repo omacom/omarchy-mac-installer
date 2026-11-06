@@ -103,9 +103,10 @@ class InspectionTest(unittest.TestCase):
         for check in CHECKS:
             self.assertEqual(report["checks"][check]["result"], "passed", (check, report["checks"][check]))
         self.assertEqual(report["result"], "passed")
-        self.assertEqual(report["m1n1_stage2"]["device_trees"], 36)
+        # The set's kernel carries every policy tree plus the legacy s8000-n66.
+        self.assertEqual(report["m1n1_stage2"]["device_trees"], len(fixtures.MODELS) + 1)
         self.assertEqual(report["supported_models"], sorted(fixtures.MODELS))
-        self.assertEqual(len(report["supported_models"]), 35)
+        self.assertEqual(len(report["supported_models"]), len(fixtures.MODELS))
         self.assertNotIn("hardware_profile", report)
         self.assertEqual(report["hardware_setup"], "build")
 
@@ -1067,7 +1068,7 @@ class ChannelImageInspectionTest(unittest.TestCase):
         self.assertEqual(report["runtime_sources"], {"omarchy-mac": fixtures.SOURCE, "omarchy-mac-boot": fixtures.SOURCE})
         self.assertNotIn("test image pin", report["checks"]["pacman-config"]["detail"])
         self.assertEqual(report["installed_versions"]["omarchy-dev"], fixtures.CHANNEL_VERSIONS["omarchy"])
-        self.assertEqual(len(report["supported_models"]), 35)
+        self.assertEqual(len(report["supported_models"]), len(fixtures.MODELS))
         self.assertFalse({"lane-channel", "install-receipt"} & set(report["checks"]), "edge inspects as it always has")
         self.assertNotIn("install_receipt", report)
 

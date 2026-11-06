@@ -109,7 +109,7 @@ class ChannelSetTest(unittest.TestCase):
         imported = inspection.Candidates(self.work / "set")
         report = {}
         inspection.check_supported_models(self.work, imported, report, fixtures.POLICY)
-        self.assertEqual(len(report["supported_models"]), 35)
+        self.assertEqual(len(report["supported_models"]), len(fixtures.MODELS))
         self.assertIn("t8140-j700", report["supported_models"])
         self.assertIn("t8122-j613", report["supported_models"])
 

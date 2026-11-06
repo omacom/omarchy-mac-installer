@@ -254,7 +254,7 @@ class CatalogGeneratorTests(unittest.TestCase):
 
     def test_refused_and_unknown_macs_are_rejected_with_a_reason(self) -> None:
         for identifier, fragment in (
-            ("apple,j575d", "no j575dap device or T6032 chip"),
+            ("apple,j575d", "apple,j575d is not in scripts/supported-models.json"),
             ("apple,j614s", "M4 and later"),
             ("apple,j604", "not in scripts/supported-models.json"),
         ):
@@ -268,8 +268,11 @@ class CatalogGeneratorTests(unittest.TestCase):
         self.assertTrue(set(M3_MACS) <= set(manifest["supported"]))
         self.assertIn("apple,j700", manifest["supported"])
         self.assertIn("apple,j700", manifest["untested"])
-        self.assertEqual(set(manifest["refused"]), {"apple,j575d", "apple,j614s"})
-        self.assertEqual(manifest["developer"], {})
+        self.assertEqual(set(manifest["refused"]), {"apple,j614s"})
+        self.assertEqual(
+            set(manifest["developer"]), {"apple,j575d"},
+            "the M3 Ultra Mac Studio stays a developer board until an image supports it",
+        )
         for template in sorted(MANIFEST.parent.glob("release-inputs*.template.json")):
             identifiers = json.loads(template.read_text())["device_identifiers"]
             self.assertEqual(
@@ -339,6 +342,32 @@ class CatalogGeneratorTests(unittest.TestCase):
 
     def test_developer_models_need_the_developer_flag(self) -> None:
         self.assertRejected(self.with_neo(), "unknown keys")
+
+    def test_the_m3_ultra_is_offered_only_by_a_developer_catalog(self) -> None:
+        studio = {
+            "payload_name": "studio-os-package.zip",
+            "metadata_name": "installer_data-studio.json",
+            "device_identifiers": ["apple,j575d"],
+        }
+        (self.assets / studio["metadata_name"]).write_bytes(b"studio-metadata" * 8)
+        content = b"studio-payload" * 64
+        (self.assets / studio["payload_name"]).write_bytes(content)
+        (self.assets / f"{studio['payload_name']}.part00").write_bytes(content[:300])
+        (self.assets / f"{studio['payload_name']}.part01").write_bytes(content[300:])
+        # A public catalog refuses the board outright.
+        document = json.loads(json.dumps(self.inputs))
+        document["device_identifiers"].append("apple,j575d")
+        self.assertRejected(document, "apple,j575d is not in scripts/supported-models.json")
+        # A developer build's sealed catalog offers it with its own payload.
+        document = json.loads(json.dumps(self.inputs))
+        document["developer_models"] = [studio]
+        result = self.generate(document, developer=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        models = json.loads((self.directory / "catalog.json").read_text())["models"]
+        studio_model = models[-1]
+        self.assertEqual(studio_model["deviceIdentifier"], "apple,j575d")
+        self.assertEqual(studio_model["payloadArtifact"]["fileName"], "studio-os-package.zip")
+        self.assertEqual(studio_model["metadataArtifact"]["fileName"], "installer_data-studio.json")
 
     def test_a_developer_group_takes_only_developer_boards(self) -> None:
         for identifier, fragment in (

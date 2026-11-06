@@ -35,7 +35,7 @@ The per-model names are in [`MacModelNames.swift`](Sources/OmarchyInstallerUXCor
 
 Not supported:
 
-- The M3 Ultra Mac Studio (`apple,j575d`): the pinned v0.9.2 engine cannot inspect or plan it.
+- The M3 Ultra Mac Studio (`apple,j575d`): the engine can inspect and plan it, but no Omarchy image supports it yet. Public catalogs refuse it; only a developer build's sealed catalog may add it for bring-up.
 - M4 and later, for example the MacBook Pro 14-inch M4 Pro (`apple,j614s`). Public builds keep these blocked until official support and physical qualification both exist.
 
 Untested: the M3 Macs and the MacBook Neo are marked untested in `supported-models.json`. According to [`docs/mac-release-pipeline.md`](docs/mac-release-pipeline.md#qualification-on-edge), the testing team qualifies them on real hardware on edge, after an edge release.
@@ -244,6 +244,7 @@ The Application Support line also frees any image the old app downloaded. A Mac 
 Firmware preparation needs HTTPS access to Apple's restore-image CDN (`updates.cdn-apple.com`) and, for AEA-encrypted inputs, Apple's public release-key service (`wkms-public.apple.com` or `fcs-keys-pub-prod.cdn-apple.com`). An offline Linux image bundle does not remove that Apple-input dependency. The helper requests only the admitted FCS key URL from the archive metadata; it sends no installation credentials. Range extraction checks the recipe, response extent, ciphertext authentication and resulting file hashes before publishing any firmware.
 
 The helper is built from the [Swift source in this repository](Engine/RestoreImage/README.md), ported from Eryk Wieliczko's MIT implementation. Its recorded source hashes, toolchain, two-build comparison and binary digest are checked alongside the engine source lock. It ships in the app at `Contents/Helpers/omarchy-restore-image`, signed by the app's release signing (Developer ID, hardened runtime, secure timestamp, no entitlements), not inside the engine archive. The privileged helper passes an install's engine a root-only copy whose signature satisfies the app team's requirement, and the engine refuses to run an install without one. The helper requires macOS 14 or newer; the installer app already requires macOS 15 or newer.
+
 
 ## License
 
