@@ -59,9 +59,10 @@ Build concurrency defaults to 10 workers so a 14-core Mac retains four cores for
 responsiveness. Override it with `OMARCHY_BUILD_JOBS`; the same value is exported
 as `CARGO_BUILD_JOBS` for nested Rust builds.
 
-The default signing identity is `-`, which creates an ad-hoc development bundle
-for local structural validation only. A named identity also requires its
-10-character team identifier:
+The default signing identity is `-`, which creates an ad-hoc signed bundle for local testing, including owner-authorized helper installation and recovery on supported models. Generate its `release.json` with `scripts/make-release-descriptor --adhoc`, using the official `Release/trust-root.ed25519.pub`. Keep the pinned engine and catalog trust root unchanged. Ad-hoc signing does not require `OMARCHY_DEVELOPER_BUILD=1`; that option is for a sealed developer catalog and changes host admission.
+A local build is not a notarized public release or proof of successful installation.
+
+A named identity also requires its 10-character team identifier:
 
 ```sh
 OMARCHY_APP_SIGNING_IDENTITY="Apple Development: Name (TEAMID)" \
@@ -79,7 +80,11 @@ OMARCHY_NOTARY_PROFILE="omarchy-notary" \
 Packaging/notarize-app.sh "/absolute/path/Omarchy Installer.app"
 ```
 
-The app installs its own helper with `SMJobBless` the first time the person authorizes an install, using the password they typed; ad hoc builds leave the declaration out and still need the installer package. After notarization, package the download:
+With a real signing identity, the app installs its helper through `SMJobBless` after owner authorization. Ad-hoc builds omit the `SMJobBless` declaration and use `AdHocInstallerHelperBlesser` instead: after administrator authorization, it copies the bundled helper into `/Library/PrivilegedHelperTools` and registers its launchd job. The helper and accepted app are pinned to their exact code hashes; the Recovery template and restore-image decoder are also pinned. A separate installer package is not required.
+
+For interrupted-install recovery, **Check Installation** ensures the matching helper is installed before discovering the saved journal; **Resume Installation** is a separate action. See [the recovery guide](../Development/InterruptedResume.md).
+
+After notarization, package the download:
 
 ```sh
 Packaging/make-download-zip.sh "/absolute/path/Omarchy Installer.app" /absolute/path/Omarchy-Installer.zip

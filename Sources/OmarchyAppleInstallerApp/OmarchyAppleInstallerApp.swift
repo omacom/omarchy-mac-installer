@@ -70,6 +70,8 @@ struct OmarchyAppleInstallerApp: App {
   /// the URLs already signed into this build; changing it restarts the check so
   /// nothing planned against one channel is installed from the other.
   @State private var liveSession: InstallerSession?
+  @State private var showsResume = false
+  @State private var resumeDismissed = false
   @State private var showsRemoval = false
   @State private var removalInProgress = false
   @State private var removalNeedsReview = false
@@ -107,7 +109,11 @@ struct OmarchyAppleInstallerApp: App {
   private var liveContent: some View {
     OnePageInstallerView(
       environment: InstallerEnvironmentFactory.make(), channel: channel,
-      onSessionAvailable: rememberSession)
+      onSessionAvailable: rememberSession, automaticResumeAllowed: !resumeDismissed,
+      onInterruptedResumeDetected: {
+        guard !showsRemoval, !removalInProgress, !resumeDismissed else { return }
+        showsResume = true
+      })
   }
 
   private func rememberSession(_ session: InstallerSession) {
@@ -128,6 +134,17 @@ struct OmarchyAppleInstallerApp: App {
                 "Check the removal record and disk layout before changing any disks."))
 
           }
+        } else if showsResume, let channel {
+          OmarchyResumePage(
+            onBusyChanged: { busy in
+              removalInProgress = busy
+              InstallerApplicationDelegate.removalInProgress = busy
+            },
+            onClose: {
+              showsResume = false
+              resumeDismissed = true
+              generation = UUID()
+            }, encrypt: liveSession?.allowsEncryption ?? true, lane: channel.rawValue)
         } else {
           installerContent
         }
@@ -208,8 +225,15 @@ struct OmarchyAppleInstallerApp: App {
         }
       #endif
       CommandMenu("Installation") {
+        Button("Resume Interrupted Installation…") { showsResume = true }
+          .disabled(
+            isSimulation || channel == nil || showsResume || showsRemoval || removalInProgress
+              || liveSession?.canOpenInterruptedResume != true)
+
         Button("Remove Omarchy…") { showsRemoval = true }
-          .disabled(removalNeedsReview || showsRemoval || liveSession?.canOpenRemoval != true)
+          .disabled(
+            showsResume || removalNeedsReview || showsRemoval || liveSession?.canOpenRemoval != true
+          )
         if liveSession?.recoveryAccountDeferred == true {
           Button(
             liveSession?.recoveryAccountStarted == true
@@ -234,14 +258,16 @@ struct OmarchyAppleInstallerApp: App {
                 option, selected: channel, availability: availability))
           }
           .disabled(
-            removalNeedsReview || showsRemoval || liveSession?.canChangeChannel != true
+            removalNeedsReview || showsResume || showsRemoval
+              || liveSession?.canChangeChannel != true
               || isSimulation || channel == nil)
           Divider()
           Button(PlainLanguage.channelMenuCheckAgain) {
             Task { await liveSession?.refreshChannelAvailability() }
           }
           .disabled(
-            removalNeedsReview || showsRemoval || liveSession?.canChangeChannel != true
+            removalNeedsReview || showsResume || showsRemoval
+              || liveSession?.canChangeChannel != true
               || isSimulation || channel == nil)
         }
       }

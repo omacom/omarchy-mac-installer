@@ -18,7 +18,7 @@ import sys
 import tempfile
 import zipfile
 import zlib
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import asahi_firmware
 import osinstall
@@ -1224,6 +1224,7 @@ class AsahiStage1Adapter:
         recovery_manifest=None,
         recovery_requirement=None,
         authorized_owner=None,
+        resume_engine_digest=None,
     ):
         self.installer = installer
         self.metadata_path = metadata_path
@@ -1239,6 +1240,7 @@ class AsahiStage1Adapter:
         self.recovery_manifest = recovery_manifest
         self.recovery_requirement = recovery_requirement
         self.authorized_owner = authorized_owner
+        self.resume_engine_digest = resume_engine_digest
         self.source_bootstrap = None
         self.template = None
         self.osins = None
@@ -1585,6 +1587,236 @@ class AsahiStage1Adapter:
             self.installer.dutil.mount(self.osins.efi_part.name)
         )
 
+    def validate_interrupted_staging(self, plan, target_evidence, previous=None):
+        """Read back the original target before granting a narrow staging retry."""
+        self._require_preflight()
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", self.resume_engine_digest or "") is None:
+            raise AsahiAdapterError("replacement engine identity is missing")
+        if not self.native_recovery_gui or self.use_helper_recovery:
+            raise AsahiAdapterError("this payload does not use the released native Recovery path")
+        self._parse_checkpoint_evidence(target_evidence, {
+            "plan_digest", "partition_identifier", "offset_bytes", "size_bytes", "uuid"})
+        self._refresh_parts()
+        self.target_part = self._find_prepared_target(plan)
+        self.installer.part = self.target_part
+        if self._target_evidence(plan) != target_evidence:
+            raise AsahiAdapterError("prepared target identity changed")
+        volumes = self.target_part.container.get("Volumes", [])
+        if (len(volumes) != 4 or sorted(tuple(v["Roles"]) for v in volumes)
+                != [("Data",), ("Preboot",), ("Recovery",), ("System",)]):
+            raise AsahiAdapterError("resume target is not the original APFS stub")
+        self.installer.ins.check_volume(self.target_part)
+        self.installer.ins.get_paths()
+        if self.installer.ins.osi.vgid == self.installer.cur_os.vgid:
+            raise AsahiAdapterError("resume target is the running macOS installation")
+        end = plan.offset_bytes + plan.length_bytes
+        physical = sorted((p for p in self.installer.parts if not p.free
+                           and self.target_part.offset + self.target_part.size <= p.offset < end),
+                          key=lambda p: p.offset)
+        if len(physical) != 3:
+            raise AsahiAdapterError("resume partition count changed")
+        remaining = plan.length_bytes - self.stub_size - self.osins.min_size
+        previous_end = self.target_part.offset + self.target_part.size
+        for template, part in zip(self.template["partitions"], physical, strict=True):
+            size = self.osins.align(osinstall.psize(template["size"]))
+            if template.get("expand", False):
+                size += remaining
+            expected_type = "EFI" if template["type"] == "EFI" else "Linux Filesystem"
+            if (part.type != expected_type or part.size != size
+                    or not 0 <= part.offset - previous_end < self.osins.PART_ALIGNMENT
+                    or part.offset + part.size > end
+                    or VOLUME_GROUP_PATTERN.fullmatch(part.uuid or "") is None):
+                raise AsahiAdapterError("resume partition geometry changed")
+            previous_end = part.offset + part.size
+        if end - previous_end >= self.osins.PART_ALIGNMENT:
+            raise AsahiAdapterError("resume extent is incomplete")
+        self.osins.part_info = physical
+        self.osins.efi_part = physical[0]
+        esp = self.installer.dutil.mount(physical[0].name)
+        omarchy_recovery.validate_source(
+            Path(esp) / omarchy_recovery.PAYLOAD_DIRECTORY / omarchy_recovery.APP_NAME,
+            Path(esp) / omarchy_recovery.PAYLOAD_DIRECTORY / omarchy_recovery.MANIFEST_NAME)
+        self._verify_copied_tree(ESP_SOURCE, physical[0])
+        if previous is None:
+            self._verify_installed_file(self.template["icon"], self.installer.ins.icon_path)
+        receipts = {}
+        for template, part in zip(self.template["partitions"], physical, strict=True):
+            if image := template.get("image"):
+                size, digest = self._verify_raw_image(image, part)
+                receipts[image] = {
+                    "partition_identifier": part.name, "partition_uuid": part.uuid.lower(),
+                    "partition_size_bytes": part.size, "installed_bytes": size,
+                    "content_sha256": digest, "verification": "raw-prefix-sha256",
+                }
+        bound = {
+            "format": "native-recovery-resume-v1", "plan_digest": plan.plan_digest,
+            "replacement_engine_digest": self.resume_engine_digest,
+            "target": json.loads(target_evidence), "volume_group": self.installer.ins.osi.vgid,
+            "owner": self.authorized_owner,
+            "partitions": [{"identifier": p.name, "uuid": p.uuid.lower(), "type": p.type,
+                            "offset": p.offset, "size": p.size} for p in physical],
+            "image_receipts": receipts,
+        }
+        encoded = json.dumps(bound, sort_keys=True, separators=(",", ":")).encode()
+        if previous is not None:
+            if previous != encoded:
+                from omarchy_resume import PREVIOUS_RESUME_ENGINES
+                old = json.loads(previous)
+                if old.get("replacement_engine_digest") not in PREVIOUS_RESUME_ENGINES:
+                    raise AsahiAdapterError("previously bound resume target changed")
+                old["replacement_engine_digest"] = self.resume_engine_digest
+                if json.dumps(old, sort_keys=True, separators=(",", ":")).encode() != encoded:
+                    raise AsahiAdapterError("previously bound resume target changed")
+        else:
+            system = Path(self.installer.ins.osi.system)
+            if any((system / name).exists() or (system / name).is_symlink() for name in (
+                    omarchy_recovery.APP_NAME, omarchy_recovery.INSTALL_DATA_DIRECTORY,
+                    ".omarchy-recovery-publication.json")):
+                raise AsahiAdapterError("existing Recovery staging needs separate reconciliation")
+            # The old checkpoint binds the APFS partition only. Its installed
+            # boot object must prove which EFI belongs to it before any write.
+            expected = self._resume_boot_object(physical[0].uuid)
+            actual = Path(self.installer.ins.boot_obj_path)
+            if (actual.is_symlink() or not actual.is_file()
+                    or actual.stat().st_size != len(expected) or actual.read_bytes() != expected):
+                raise AsahiAdapterError("stub boot object does not bind this EFI partition")
+        self.osins.image_receipts = receipts
+        self._resume_binding = encoded
+        return encoded
+
+    def _resume_boot_object(self, esp_uuid):
+        import m1n1
+        with tempfile.TemporaryDirectory(prefix="resume-boot-") as directory:
+            target = os.path.join(directory, "boot.bin")
+            m1n1.build(os.path.join("boot", self.template["boot_object"]), target, [
+                "chosen.asahi,efi-system-partition=" + esp_uuid.lower(),
+                "chainload=" + esp_uuid.lower() + ";" + self.template["next_object"],
+            ])
+            install_board_stage1(
+                self.installer.sysinfo.device_class, self.os_firmware, self.osins.pkg.read,
+                esp_uuid, target, self.template["next_object"], common_allowed=self.common_stage1)
+            return Path(target).read_bytes()
+
+    def resume_interrupted_staging(self, plan, binding):
+        """Rebuild the verified stub, preserving GPT and Linux image contents."""
+        if getattr(self, "_resume_binding", None) != binding:
+            raise AsahiAdapterError("resume target was not validated")
+        if not getattr(self, "_resume_protected", False):
+            raise AsahiAdapterError("resume stub write boundary is not protected")
+        return self._rebuild_interrupted_staging(plan)
+
+    @contextlib.contextmanager
+    def protect_resume(self, plan):
+        import omarchy_resume
+        self.installer.ins.load_identity()
+        osi = self.installer.ins.osi
+        volumes = {v["Roles"][0]: v for v in self.target_part.container["Volumes"]}
+        paths = {"System": osi.system, "Data": osi.data,
+                 "Preboot": osi.preboot, "Recovery": osi.recovery}
+        for role, path in paths.items():
+            info = self.installer.dutil.get("info", "-plist", path)
+            if info.get("VolumeUUID", "").upper() != volumes[role]["APFSVolumeUUID"].upper():
+                raise AsahiAdapterError("stub mount does not match the bound container")
+        restore = PurePosixPath(self.installer.ins.bootcaches["bless2"]["RestoreBundlePath"])
+        if restore.is_absolute() or ".." in restore.parts:
+            raise AsahiAdapterError("unsafe restore bundle path")
+        framework = PurePosixPath(osi.vgid) / restore / "Bootability/BootabilityBrain.framework"
+        framework_links = {str(framework / name): target for name, target
+                           in omarchy_resume.BOOTABILITY_FRAMEWORK_LINKS.items()}
+        trees = [
+            (osi.system, ["usr", "System", "Finish Installation.app", ".IAPhysicalMedia",
+                          "IAPhysicalMedia-disabled.plist", ".VolumeIcon.icns", "Aurora",
+                          omarchy_recovery.APP_NAME, ".omarchy-recovery-publication.json",
+                          restore.parts[0]],
+             {str(restore): str(Path(osi.preboot) / osi.vgid / restore)}),
+            (osi.data, ["private"], {}),
+            (osi.preboot, [osi.vgid], framework_links),
+            (osi.recovery, [osi.vgid], {}),
+        ]
+        with omarchy_resume.protected_stub_trees(trees):
+            self._resume_protected = True
+            try:
+                yield
+            finally:
+                self._resume_protected = False
+
+    def _rebuild_interrupted_staging(self, plan):
+        # Only the bound target's legacy setup app is replaced. Upstream's
+        # install_files uses copytree and cannot overwrite this existing tree.
+        legacy = Path(self.installer.ins.osi.system) / "Finish Installation.app"
+        if legacy.is_symlink():
+            raise AsahiAdapterError("legacy Recovery app is a symbolic link")
+        if legacy.exists():
+            shutil.rmtree(legacy)
+        # Opening an existing decmpfs-compressed file for writing can first
+        # expand its old contents and exhaust the small shared APFS stub.
+        # The sealed, validated target tree permits replacing this exact file.
+        recovery_image = (Path(self.installer.ins.osi.recovery) / self.installer.ins.osi.vgid
+                          / "usr/standalone/firmware/arm64eBaseSystem.dmg")
+        recovery_image.unlink(missing_ok=True)
+        self.installer.ins.install_files(self.installer.cur_os)
+        self.osins.extract_file(self.template["icon"], self.installer.ins.icon_path)
+        with tempfile.TemporaryDirectory(prefix="resume-firmware-") as directory:
+            snapshot = Path(directory)
+            vendorfw = snapshot / "vendorfw"
+            vendorfw.mkdir()
+            firmware = asahi_firmware.core.FWPackage(str(vendorfw))
+            self.installer.ins.collect_firmware(firmware)
+            firmware.close()
+            esp = Path(self.installer.dutil.mount(self.osins.efi_part.name))
+            for name in (*omarchy_recovery.VENDOR_FIRMWARE, omarchy_recovery.OPTIONAL_VENDOR_FIRMWARE):
+                source = snapshot / name
+                target = esp / name
+                components = PurePosixPath(name).parts
+                if (esp.is_symlink() or target.is_symlink()
+                        or any(esp.joinpath(*components[:n]).is_symlink()
+                               for n in range(1, len(components)))):
+                    raise AsahiAdapterError("unsafe firmware publication path")
+                if name == omarchy_recovery.OPTIONAL_VENDOR_FIRMWARE and not source.exists():
+                    target.unlink(missing_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                omarchy_recovery._atomic_bytes(target, source.read_bytes(), 0o644)
+            omarchy_recovery._atomic_bytes(
+                self.installer.ins.boot_obj_path, self._resume_boot_object(self.osins.efi_part.uuid), 0o644)
+            # Preflight read back this board's already filtered EFI layout.
+            # First-install filtering cannot be replayed after its source
+            # board-specific files have been renamed or removed.
+            layout = esp_board_layout(self.installer.sysinfo.device_class, self._esp_members(),
+                                      common_allowed=self.common_stage1)
+            stage2_member = next(name for name, target in layout.items() if target == "m1n1/boot.bin")
+            (snapshot / "m1n1").mkdir()
+            (snapshot / "m1n1/boot.bin").write_bytes(self.osins.pkg.read(stage2_member))
+            prefix = "esp/" + omarchy_recovery.PAYLOAD_DIRECTORY + "/"
+            manifest = self.osins.pkg.read(prefix + omarchy_recovery.MANIFEST_NAME)
+            manifest_path = snapshot / omarchy_recovery.MANIFEST_NAME
+            manifest_path.write_bytes(manifest)
+            app = snapshot / omarchy_recovery.APP_NAME
+            for name in json.loads(manifest)["files"]:
+                target = app / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(self.osins.pkg.read(prefix + omarchy_recovery.APP_NAME + "/" + name))
+            (app / "Contents/MacOS/OmarchyRecovery").chmod(0o755)
+            omarchy_recovery.stage(
+                self.installer.ins, self.osins.efi_part.uuid, str(esp),
+                app_source=app, manifest_path=manifest_path, payload_root=snapshot,
+                source_os=self.installer.cur_os, authorized_owner=self.authorized_owner)
+        for template, part in zip(self.template["partitions"], self.osins.part_info, strict=True):
+            if template.get("copy_installer_data", False):
+                target = Path(self.installer.dutil.mount(part.name)) / "asahi"
+                if target.is_symlink():
+                    raise AsahiAdapterError("unsafe installer-data path")
+                target.mkdir(exist_ok=True)
+                self.installer.ins.collect_installer_data(str(target))
+                # A truthful receipt lets removal identify recovered installs;
+                # it never claims these partitions were newly created.
+                members = [self.target_part, *self.osins.part_info]
+                receipt = [{"uuid": p.uuid.upper(), "type": p.type} for p in members]
+                logging.info("Verified existing partitions: %s",
+                             json.dumps({"format": 1, "partitions": receipt}, sort_keys=True))
+                shutil.copy("installer.log", target / "installer.log")
+        return self._installed_evidence(plan)
+
     def validate_installed_checkpoint(
         self,
         plan,
@@ -1701,6 +1933,7 @@ class AsahiStage1Adapter:
             None,
         )
         self.installer.ins.check_volume(self.target_part)
+        self.installer.ins.get_paths()
         if self._installed_evidence(plan, recorded=recorded) != installed_evidence:
             raise AsahiAdapterError("installed content checkpoint changed")
 

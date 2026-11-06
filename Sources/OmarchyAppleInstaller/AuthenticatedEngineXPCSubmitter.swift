@@ -42,6 +42,13 @@
     /// never answer it.
     func removalFinalization(ticket: String, reply: @escaping @Sendable (String) -> Void)
 
+    func prepareInterruptedResume(reply: @escaping @Sendable (Data?, NSError?) -> Void)
+
+    func resumeInterruptedInstall(
+      ticket: String, metadata: FileHandle, payload: FileHandle, installConf: Data,
+      machineOwner: String, password: Data,
+      reply: @escaping @Sendable (Data?, NSError?) -> Void)
+
     func submit(
       packageDirectory: FileHandle,
       operation: String,
@@ -336,6 +343,61 @@
         }
       }
       return version.isEmpty ? nil : version
+    }
+
+    public func prepareInterruptedResume() async throws -> InterruptedInstallResumeReply {
+      try await interruptedRequest { proxy, reply in proxy.prepareInterruptedResume(reply: reply) }
+    }
+
+    public func resumeInterruptedInstall(
+      ticket: InterruptedInstallResumeTicket, metadata: FileHandle, payload: FileHandle,
+      conf: InstallConf, authorization: MachineOwnerAuthorization
+    ) async throws -> InterruptedInstallResumeReply {
+      try await interruptedRequest { proxy, reply in
+        proxy.resumeInterruptedInstall(
+          ticket: ticket.id.uuidString, metadata: metadata,
+          payload: payload, installConf: conf.serializedData,
+          machineOwner: authorization.username, password: authorization.password, reply: reply)
+      }
+    }
+
+    private func interruptedRequest(
+      _ send: (any ClosedEngineXPCService, @escaping @Sendable (Data?, NSError?) -> Void) -> Void
+    ) async throws -> InterruptedInstallResumeReply {
+      do { try await ping() } catch { throw EngineXPCSubmissionError.notSubmitted }
+      let connection = makeConnection()
+      let handle = SendableXPCConnection(connection)
+      let data: Data = try await withCheckedThrowingContinuation { continuation in
+        let gate = EngineXPCReplyGate(continuation: continuation)
+        connection.interruptionHandler = {
+          gate.resume(throwing: EngineXPCSubmissionError.connectionFailed)
+        }
+        connection.invalidationHandler = {
+          gate.resume(throwing: EngineXPCSubmissionError.connectionFailed)
+        }
+        connection.activate()
+        guard
+          let proxy = connection.remoteObjectProxyWithErrorHandler({ _ in
+            gate.resume(throwing: EngineXPCSubmissionError.connectionFailed)
+            handle.invalidate()
+          }) as? ClosedEngineXPCService
+        else {
+          gate.resume(throwing: EngineXPCSubmissionError.notSubmitted)
+          handle.invalidate()
+          return
+        }
+        send(proxy) { response, error in
+          defer { handle.invalidate() }
+          if let error {
+            gate.resume(throwing: EngineXPCErrorBridge.submissionError(error))
+          } else if let response {
+            gate.resume(returning: response)
+          } else {
+            gate.resume(throwing: EngineXPCSubmissionError.emptyResponse)
+          }
+        }
+      }
+      return try JSONDecoder().decode(InterruptedInstallResumeReply.self, from: data)
     }
 
     public func removal(

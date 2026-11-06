@@ -146,6 +146,8 @@
     public nonisolated var isRetiring: Bool { retirement.isSet }
     private var completedInstallPlan: CompletedEngineInstallPlan?
     private var installConfConsumed = false
+    private var interruptedResume:
+      (record: SavedInterruptedInstall, expires: ContinuousClock.Instant)?
     private var recoveryAccountTargets: [String: (CompletedRecoveryInstallation, Date)] = [:]
     private var removalPlan:
       (ticket: OmarchyRemovalTicket, plan: OmarchyRemovalPlan, expires: Date)?
@@ -485,6 +487,106 @@
       return result
     }
 
+    public func prepareInterruptedResume() throws -> InterruptedInstallResumeReply {
+      guard !isRetiring else { throw ClosedEngineHelperError.retiring }
+      try work.beginJob()
+      defer { work.endJob() }
+      try settleEarlierRemovals(in: workingDirectory)
+      interruptedResume = nil
+      guard let record = try SavedInterruptedInstall.discover(in: workingDirectory) else {
+        return InterruptedInstallResumeReply(
+          message: "No supported interrupted installation was found.")
+      }
+      interruptedResume = (record, ContinuousClock.now.advanced(by: .seconds(300)))
+      return InterruptedInstallResumeReply(
+        ticket: record.ticket,
+        automaticResumeAvailable: !record.engineCompleted,
+        message:
+          "Saved installation found. Choose Resume Installation to verify its partitions and installed images before rebuilding startup files."
+      )
+    }
+
+    public func resumeInterruptedInstall(
+      ticket: UUID, metadata: FileHandle, payload: FileHandle, document: Data,
+      authorization: MachineOwnerAuthorization, clientBundle: URL?
+    ) async throws -> InterruptedInstallResumeReply {
+      guard !isRetiring else { throw ClosedEngineHelperError.retiring }
+      try work.beginJob()
+      defer { work.endJob() }
+      try settleEarlierRemovals(in: workingDirectory)
+      try credentialValidator.validate(authorization)
+      try removalAdminValidator(authorization)
+      guard let pending = interruptedResume, pending.record.ticket.id == ticket,
+        ContinuousClock.now < pending.expires, let clientBundle,
+        let bundle = Bundle(url: clientBundle)
+      else {
+        throw InterruptedResumeFailure("The resume approval expired. Check the installation again.")
+      }
+      interruptedResume = nil
+      let saved = pending.record
+      let current = try SavedInterruptedInstall.privateData(
+        saved.journal,
+        maximum: Int(PinnedAsahiEngineExecutor.maximumTranscriptBytes))
+      guard SavedInterruptedInstall.digest(current) == saved.journalDigest else {
+        throw InterruptedResumeFailure(
+          "The saved installation changed. Check it again before resuming.")
+      }
+      let conf = try InstallConf.parse(document)
+      let inputs = workingDirectory.appendingPathComponent(
+        "interrupted-resume-" + UUID().uuidString)
+      try FileManager.default.createDirectory(
+        at: inputs, withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o700])
+      defer { try? FileManager.default.removeItem(at: inputs) }
+      try SavedInterruptedInstall.snapshot(
+        metadata,
+        to: inputs.appendingPathComponent("installer_data.json"), maximum: 1 << 20,
+        expectedDigest: saved.plan.metadataDigest)
+      try SavedInterruptedInstall.snapshot(
+        payload,
+        to: SavedInterruptedInstall.payloadSnapshotURL(in: inputs), maximum: 16 << 30,
+        expectedDigest: saved.plan.payloadDigest)
+      let result: Data
+      do {
+        result = try await Task.detached {
+          try PinnedAsahiEngineExecutor().resumeInterrupted(
+            saved, inputs: inputs,
+            clientBundle: bundle, authorization: authorization)
+        }.value
+      } catch {
+        if case .engineFailed(let report) = error as? PinnedAsahiEngineExecutionError {
+          EngineFailureDiagnosticsStore.write(
+            report, operation: "resume-interrupted-install", in: workingDirectory)
+        }
+        throw error
+      }
+      let transcript = try AppleInstallerTrustCore().validateEngineTranscript(result)
+      guard transcript.deviceIdentifier == saved.plan.deviceIdentifier,
+        transcript.plan?.planDigest == saved.plan.planDigest,
+        transcript.support == .supported, transcript.completion == .awaitingRecovery
+      else { throw ClosedEngineHelperError.transcriptPlanMismatch }
+      let disks = espDisks
+      let state = workingDirectory
+      do {
+        try await Task.detached {
+          try InstallConfESPMountWriter(disks: disks, workingDirectory: state).write(
+            conf,
+            storeIdentifier: saved.plan.storeIdentifier, offsetBytes: saved.plan.offsetBytes,
+            lengthBytes: saved.plan.lengthBytes)
+        }.value
+      } catch {
+        return InterruptedInstallResumeReply(
+          message:
+            "Recovery staging finished, but the encryption choice or EFI unmount could not be confirmed. Keep this Mac in macOS and reopen Resume to retry the final handoff."
+        )
+      }
+      return InterruptedInstallResumeReply(
+        completed: true,
+        message:
+          "Installation is ready for final setup in Recovery. Shut down, then hold the power button until startup options appear and select Omarchy."
+      )
+    }
+
     public func writeInstallConf(
       document: Data,
       storeIdentifier: String,
@@ -597,6 +699,47 @@
 
     public func helperVersion(reply: @escaping @Sendable (String) -> Void) {
       reply(server.isRetiring ? "" : version)
+    }
+
+    public func prepareInterruptedResume(reply: @escaping @Sendable (Data?, NSError?) -> Void) {
+      let server = server
+      Task {
+        do { reply(try JSONEncoder().encode(await server.prepareInterruptedResume()), nil) } catch {
+          reply(nil, error as NSError)
+        }
+      }
+    }
+
+    public func resumeInterruptedInstall(
+      ticket: String, metadata: FileHandle, payload: FileHandle, installConf: Data,
+      machineOwner: String, password: Data,
+      reply: @escaping @Sendable (Data?, NSError?) -> Void
+    ) {
+      let clientBundle = clientRequirement.flatMap { requirement in
+        NSXPCConnection.current().flatMap {
+          RecoveryAccountHandoff.clientBundle(pid: $0.processIdentifier, requirement: requirement)
+        }
+      }
+      let server = server
+      Task {
+        do {
+          guard let identifier = UUID(uuidString: ticket) else {
+            throw ClosedEngineHelperError.invalidOperation
+          }
+          let authorization = try MachineOwnerAuthorization(
+            username: machineOwner, password: password)
+          let result = try await server.resumeInterruptedInstall(
+            ticket: identifier,
+            metadata: metadata, payload: payload, document: installConf,
+            authorization: authorization, clientBundle: clientBundle)
+          reply(try JSONEncoder().encode(result), nil)
+        } catch let error as InterruptedResumeFailure {
+          reply(
+            try? JSONEncoder().encode(InterruptedInstallResumeReply(message: error.message)), nil)
+        } catch {
+          reply(nil, EngineXPCErrorBridge.serviceError(for: error))
+        }
+      }
     }
 
     public func recoveryAccount(

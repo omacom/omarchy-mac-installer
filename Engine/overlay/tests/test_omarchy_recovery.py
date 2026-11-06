@@ -376,6 +376,25 @@ class RecoveryTests(unittest.TestCase):
                 recovery.app_inventory(self.app)
             link.unlink()
 
+    def test_private_resume_inputs_do_not_promote_mutable_efi_payloads(self):
+        private = self.root / "private-inputs"
+        (private / "m1n1").mkdir(parents=True)
+        (private / "m1n1/boot.bin").write_bytes(b"verified private stage2")
+        for name in recovery.VENDOR_FIRMWARE:
+            path = private / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(("verified private " + name).encode())
+        optional = self.esp / recovery.OPTIONAL_VENDOR_FIRMWARE
+        optional.parent.mkdir(parents=True)
+        optional.write_bytes(b"unverified firmware on mutable EFI")
+        (self.esp / recovery.STAGE2_PATH).write_bytes(b"unverified replacement stage2")
+        recovery.stage(self.installer, ESP, str(self.esp), run=self.fake_run, payload_root=private)
+        installed = self.system / recovery.INSTALL_DATA_DIRECTORY / "AuraPayloads"
+        self.assertEqual((installed / "raw/boot.bin").read_bytes(), b"verified private stage2")
+        self.assertFalse((installed / recovery.OPTIONAL_VENDOR_FIRMWARE).exists())
+        self.assertEqual((installed / "vendorfw/firmware.tar").read_bytes(),
+                         (private / "vendorfw/firmware.tar").read_bytes())
+
     def test_required_firmware_missing_empty_or_oversized_is_rejected(self):
         for name in recovery.VENDOR_FIRMWARE:
             path = self.esp / name

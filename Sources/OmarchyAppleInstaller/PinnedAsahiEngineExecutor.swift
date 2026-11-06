@@ -155,6 +155,45 @@
       )
     }
 
+    func resumeInterrupted(
+      _ saved: SavedInterruptedInstall, inputs: URL, clientBundle: Bundle,
+      authorization: MachineOwnerAuthorization
+    ) throws -> Data {
+      guard effectiveUserID() == 0, let restoreImageRequirement else {
+        throw PinnedAsahiEngineExecutionError.privilegeRequired
+      }
+      let archive = try ValidationEngineArtifactLocator().locate(in: clientBundle)
+      let archiveSnapshot = inputs.appendingPathComponent("engine.tar.gz")
+      let source = try FileHandle(forReadingFrom: archive.fileURL)
+      defer { try? source.close() }
+      try SavedInterruptedInstall.snapshot(
+        source, to: archiveSnapshot, maximum: Self.maximumArchiveBytes,
+        expectedDigest: archive.expectedDigest)
+      let decoder = inputs.appendingPathComponent("omarchy-restore-image")
+      let decoderSource = try FileHandle(
+        forReadingFrom:
+          clientBundle.bundleURL.appendingPathComponent("Contents/Helpers/omarchy-restore-image"))
+      defer { try? decoderSource.close() }
+      try SavedInterruptedInstall.snapshot(decoderSource, to: decoder, maximum: 64 << 20)
+      try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: decoder.path)
+      try verifyRestoreImage(decoder, restoreImageRequirement)
+      return try run(
+        archive: archiveSnapshot, expectedDigest: archive.expectedDigest,
+        expectedSizeBytes: archive.expectedSizeBytes,
+        executionParent: inputs, journal: saved.journal,
+        additionalEnvironment: [
+          "OMARCHY_ENGINE_MODE": "resume-interrupted-install",
+          "OMARCHY_RESUME_ENGINE_DIGEST": archive.expectedDigest,
+          "OMARCHY_ENGINE_METADATA": inputs.appendingPathComponent("installer_data.json").path,
+          "OMARCHY_ENGINE_PAYLOAD": try SavedInterruptedInstall.payloadSnapshotURL(in: inputs).path,
+          "OMARCHY_MACHINE_OWNER": authorization.username,
+          RestoreImageHelper.pathEnvironmentVariable: decoder.path,
+          RestoreImageHelper.requirementEnvironmentVariable: restoreImageRequirement,
+          "DISTRO": "Omarchy", "DISTRO_DOCS": "https://omarchy.org",
+          "OMARCHY_INSTALLER_NAME": InstallerProductIdentity.appName,
+        ], standardInput: authorization.password + Data([10]), secrets: [authorization.password])
+    }
+
     public func inspect(
       _ archive: PinnedAsahiEngineArchive,
       repairManifestURL: URL? = nil,

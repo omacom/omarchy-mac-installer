@@ -23,7 +23,7 @@
 
     // MARK: Screen A2 — Existing install
 
-    public static let existingInstallHeadline = "Omarchy is already installed"
+    public static let existingInstallHeadline = "Existing Omarchy installation found"
     public static let setUpRecoveryAccount = "Set Up Recovery Password…"
     public static let recoveryAccountDeferredNote =
       "Optional: you can set up a recovery password that lets you change Omarchy’s startup settings without your macOS password. To set one up, select Installation → Set Up Recovery Password… from the menu bar."
