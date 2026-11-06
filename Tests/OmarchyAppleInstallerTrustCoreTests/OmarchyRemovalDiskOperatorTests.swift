@@ -14,23 +14,21 @@
       }
     }
 
-    func testOlderInstallIsPlannedEndToEndFromDiskutilAndFilesReadInPlace() throws {
+    func testOlderInstallIsPlannedEndToEndFromDiskutilWithTheStubReadInPlace() throws {
       let model = F.alarm()
       let fake = FakeDiskutil(model)
-      let esp = try temporaryDirectory()
+      let files = F.files(for: F.alarmInstall, in: model)
+      fake.espFiles = files
       let stub = try temporaryDirectory()
-      defer {
-        try? FileManager.default.removeItem(at: esp)
-        try? FileManager.default.removeItem(at: stub)
-      }
-      try write(F.files(for: F.alarmInstall, in: model), esp: esp, stub: stub)
-      fake.mountPoints = ["disk0s4": esp.path, "disk4s2": stub.path]
+      defer { try? FileManager.default.removeItem(at: stub) }
+      try write(files, esp: nil, stub: stub)
+      fake.mountPoints = ["disk4s2": stub.path]
       let plan = try OmarchyRemovalPlan(disks: fake.makeOperator())
       XCTAssertEqual(plan.installation?.name, "Asahi Alarm Minimal")
       XCTAssertEqual(plan.reclaimBytes, 32_800_505_856)
       XCTAssertTrue(
         fake.log.allSatisfy {
-          $0[0] == "info" || $0[0] == "list"
+          $0[0] == "info" || $0[0] == "list" || $0[0] == "openFAT"
             || ($0[0] == "apfs" && ["list", "listVolumeGroups"].contains($0[1]))
         }, "\(fake.log)")
     }
@@ -77,6 +75,52 @@
       let opened = try XCTUnwrap(fake.log.firstIndex { $0.first == "openFAT" })
       XCTAssertEqual(fake.log[opened - 1], ["info", "-plist", "disk0s4"], "checked before")
       XCTAssertEqual(fake.log[opened + 1], ["info", "-plist", "disk0s4"], "and after it is read")
+    }
+
+    /// On the M2 Max (macOS 27.0, 2026-10-06) the EFI partition was still
+    /// mounted through FSKit's msdos module from a backup. Removal read it in
+    /// place, then `diskutil eraseVolume` force-unmounted it, the module lost
+    /// its device mid-flush (EIO), and `mount` and `diskutil list` hung until
+    /// fskit_agent was killed. A mounted EFI partition is now refused before
+    /// anything is erased, at review and again when removal starts.
+    func testMountedEFIPartitionIsRefusedBeforeAnythingIsErased() throws {
+      let model = F.alarm()
+      let files = F.files(for: F.alarmInstall, in: model)
+      let esp = try temporaryDirectory()
+      defer { try? FileManager.default.removeItem(at: esp) }
+      try write(files, esp: esp, stub: nil)
+      func makeFake() -> FakeDiskutil {
+        let fake = FakeDiskutil(model)
+        fake.espFiles = files
+        fake.onMount = { _, path in
+          try self.write(files, esp: nil, stub: URL(fileURLWithPath: path))
+        }
+        return fake
+      }
+      func assertRefused(_ error: any Error, _ fake: FakeDiskutil) {
+        let message = (error as? RemovalFailure)?.message ?? ""
+        XCTAssertTrue(message.contains("disk0s4 is mounted at \(esp.path)"), message)
+        XCTAssertTrue(message.contains("Restart your Mac"), message)
+        XCTAssertFalse(
+          fake.log.contains {
+            $0[0] == "openFAT" || $0.contains("deleteContainer")
+              || ($0.last == "disk0s4" && $0[0] != "info")
+          }, "only diskutil info touched disk0s4 and nothing was deleted: \(fake.log)")
+      }
+
+      let atReview = makeFake()
+      atReview.mountPoints = ["disk0s4": esp.path]
+      XCTAssertThrowsError(try OmarchyRemovalPlan(disks: atReview.makeOperator())) {
+        assertRefused($0, atReview)
+      }
+
+      let afterReview = makeFake()
+      let plan = try OmarchyRemovalPlan(disks: afterReview.makeOperator())
+      afterReview.mountPoints["disk0s4"] = esp.path
+      afterReview.log.removeAll()
+      XCTAssertThrowsError(
+        try OmarchyRemovalExecutor(disks: afterReview.makeOperator()).execute(plan) { _ in }
+      ) { assertRefused($0, afterReview) }
     }
 
     func testUnreadableEFIPartitionOrStubRefusesWithoutMountingTheEFIPartition() throws {
