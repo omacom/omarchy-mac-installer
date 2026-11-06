@@ -63,9 +63,10 @@ UPSTREAM_IPSWS = [
           "j514map", "j516sap", "j516cap", "j516map"], "14.8.3"),
 ]
 IPSW_VERSIONS = patched_ipsws() + UPSTREAM_IPSWS
-CHIP_MIN_VER = {0x8103: "11.0", 0x8112: "12.4", 0x8122: "14.8.3", 0x8140: "26.6"}
+CHIP_MIN_VER = {0x8103: "11.0", 0x8112: "12.4", 0x8122: "14.8.3", 0x8132: "26.6.2",
+                0x8140: "26.6"}
 DEVICE_MIN = {"j313ap": "11.0", "j413ap": "12.4", "j613ap": "14.8.3",
-              "j615ap": "14.8.3", "j700ap": "26.6"}
+              "j615ap": "14.8.3", "j700ap": "26.6", "j713ap": "26.6.2"}
 TODAY = ["13.5", "14.8.3", "26.6"]
 ON_26_6_2 = dict(sys_firmware="mBoot-18000.161.10", macos_ver="26.6.2",
                  sfr_full_ver="25.7.83.0.0,0")
@@ -97,7 +98,7 @@ class PatchedFirmwareTableTests(unittest.TestCase):
         self.assertEqual((neo.version, neo.devices), ("26.6", ["j700ap"]))
         self.assertEqual(air, IPSW(
             "26.6.2", "26.0", "mBoot-18000.161.10", "25.7.83.0.0,0", False,
-            ["j613ap", "j615ap", "j700ap"],
+            ["j613ap", "j615ap", "j700ap", "j713ap"],
             "https://updates.cdn-apple.com/2026SummerFCS/fullrestores/140-75212/"
             "A2A24B94-1FC1-45A3-93F7-C51B02AF1F4D/UniversalMac_26.6.2_25G83_Restore.ipsw"))
 
@@ -184,6 +185,33 @@ def require(sysinfo, device, supported_fw):
     minver, avail = available_ipsws(IPSW_VERSIONS, CHIP_MIN_VER, sysinfo, device,
                                     supported_fw, False, split_ver)
     require_available(minver, avail, split_ver)
+
+
+class M4AirFirmwareTests(unittest.TestCase):
+    """The 13-inch M4 Air (j713ap, T8132) installs only 26.6.2 OS firmware."""
+
+    def test_an_m4_air_offered_26_6_2_takes_it_and_the_larger_stub(self):
+        sysinfo, device = mac("j713ap", 0x8132)
+        self.assertEqual(choose(sysinfo, device, ["26.6.2"]),
+                         ("26.6.2", STUB_SIZE_MACOS26))
+
+    def test_an_m4_air_has_no_firmware_in_todays_metadata(self):
+        # 26.6 is the Neo's; the M3 Airs' 14.8.3 is below the T8132 floor.
+        sysinfo, device = mac("j713ap", 0x8132)
+        self.assertEqual(choose(sysinfo, device, TODAY), (None, STUB_SIZE_MACOS26))
+
+    def test_an_m4_air_whose_firmware_predates_26_6_2_cannot_take_it(self):
+        sysinfo, device = mac("j713ap", 0x8132, sys_firmware="mBoot-18000.120.36",
+                              macos_ver="26.5.1", sfr_full_ver="25.6.80.0.0,0")
+        self.assertEqual(choose(sysinfo, device, ["26.6.2"]), (None, STUB_SIZE_MACOS26))
+
+    def test_the_m4_air_floor_names_26_6_2_when_nothing_fits(self):
+        sysinfo, device = mac("j713ap", 0x8132, sys_firmware="mBoot-18000.120.36",
+                              macos_ver="26.5.1", sfr_full_ver="25.6.80.0.0,0")
+        minver, avail = available_ipsws(IPSW_VERSIONS, CHIP_MIN_VER, sysinfo, device,
+                                        ["26.6.2"], False, split_ver)
+        with self.assertRaisesRegex(FirmwareRequirementError, "older than macOS 26.6.2"):
+            require_available(minver, avail, split_ver)
 
 
 class FirmwareRequirementTests(unittest.TestCase):

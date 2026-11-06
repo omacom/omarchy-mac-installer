@@ -101,6 +101,19 @@ class CatalogGeneratorTests(unittest.TestCase):
         document["developer_models"] = [neo]
         return document
 
+    def with_m4_air(self) -> dict:
+        """The inputs plus a developer group for the M4 Air, a board no channel catalog carries."""
+        document = json.loads(json.dumps(self.inputs))
+        air = {
+            "payload_name": "j713-os-package.zip",
+            "metadata_name": "installer_data-j713.json",
+            "device_identifiers": ["apple,j713"],
+        }
+        (self.assets / air["metadata_name"]).write_bytes(b"j713-metadata" * 8)
+        (self.assets / air["payload_name"]).write_bytes(b"j713-payload" * 64)
+        document["developer_models"] = [air]
+        return document
+
     def assertRejected(self, document: dict, fragment: str, developer: bool = False) -> None:
         result = self.generate(document, developer=developer)
         self.assertNotEqual(result.returncode, 0, result.stdout)
@@ -269,7 +282,7 @@ class CatalogGeneratorTests(unittest.TestCase):
         self.assertIn("apple,j700", manifest["supported"])
         self.assertIn("apple,j700", manifest["untested"])
         self.assertEqual(set(manifest["refused"]), {"apple,j575d", "apple,j614s"})
-        self.assertEqual(manifest["developer"], {})
+        self.assertEqual(set(manifest["developer"]), {"apple,j713"})
         for template in sorted(MANIFEST.parent.glob("release-inputs*.template.json")):
             identifiers = json.loads(template.read_text())["device_identifiers"]
             self.assertEqual(
@@ -336,6 +349,27 @@ class CatalogGeneratorTests(unittest.TestCase):
         self.assertEqual(neo["engineArtifact"], main["engineArtifact"])
         neo_digest = hashlib.sha256((self.assets / "neo-os-package.zip").read_bytes()).hexdigest()
         self.assertEqual(neo["payloadDigest"], f"sha256:{neo_digest}")
+
+    def test_a_developer_catalog_adds_the_m4_air_with_its_own_image(self) -> None:
+        result = self.generate(self.with_m4_air(), developer=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        models = json.loads((self.directory / "catalog.json").read_text())["models"]
+        self.assertEqual(
+            [m["deviceIdentifier"] for m in models],
+            self.inputs["device_identifiers"] + ["apple,j713"],
+        )
+        main, air = models[0], models[-1]
+        self.assertEqual(main["payloadArtifact"]["fileName"], self.inputs["payload_name"])
+        self.assertEqual(air["payloadArtifact"]["fileName"], "j713-os-package.zip")
+        self.assertEqual(air["metadataArtifact"]["fileName"], "installer_data-j713.json")
+        self.assertEqual(air["engineArtifact"], main["engineArtifact"])
+        air_digest = hashlib.sha256((self.assets / "j713-os-package.zip").read_bytes()).hexdigest()
+        self.assertEqual(air["payloadDigest"], f"sha256:{air_digest}")
+
+    def test_a_channel_catalog_never_carries_the_m4_air(self) -> None:
+        document = json.loads(json.dumps(self.inputs))
+        document["device_identifiers"].append("apple,j713")
+        self.assertRejected(document, "apple,j713 is not in scripts/supported-models.json")
 
     def test_developer_models_need_the_developer_flag(self) -> None:
         self.assertRejected(self.with_neo(), "unknown keys")
