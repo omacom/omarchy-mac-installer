@@ -22,6 +22,20 @@ The helper keeps the verified root descriptor open while creating and opening th
 
 Every file and directory descriptor closes before the normal unmount attempt. If EFI is still busy, the helper reports the existing `.unconfirmed(encrypt:)` outcome after saving the document. The saved opt-out message therefore remains available for `encrypt=0`. Mount-directory cleanup uses only `rmdir`; it never recursively deletes a mounted filesystem's contents. No force unmount is used.
 
+## Busy unmount after saving on the M3 Pro
+
+Installer 2.3.13 (build 122) completed the macOS stage on the same M3 Pro on 2026-11-02, still on macOS 27.0 (26A428). The engine recorded `outcome=awaiting_recovery` at 15:47:29. At 15:47:30 the helper saved `omarchy/install.conf` (`encrypt=1`, `lane=rc`) into the existing `/Volumes/EFI - OMARC` mount, read it back, then tried the normal unmount twice. Both attempts failed with status `0x10` (`EBUSY`) and dissenter code `49168`, so the app showed “Encryption was recorded, but the installer could not confirm the disk was unmounted.”
+
+Spotlight was not holding the volume through its index this time. In the unified log its server, `mds`, approved both unmounts, closed the store (“Final Store Closed on Volume”) and finished its approval callback before the kernel unmount ran. It then logged “Unmount canceled. All stores already closed. Schedule disk … remount” and reopened the index. Ten minutes later a manual `diskutil unmount disk0s4` failed the same way. `lsof -f` and `fuser -c` then named only `mds` and `mds_stores`, and `mds` kept two read-only descriptors on the volume root through every attempt. Disabling indexing with `mdutil -i off` did not release them.
+
+Restarting the server with `launchctl kickstart -k system/com.apple.metadata.mds` did: the next normal unmount succeeded at once. The fresh server then released the volume normally in five further mount and unmount cycles, with indexing on and off. The old server's records explain why it did not: during the engine run, at 15:46:44, it handled an unmount for another device, created disk record `0x75531b00f0` for it, and later reused that record for the new EFI mount. Apple's source is not available, so this is the most likely mechanism rather than a proven one.
+
+A disposable FAT32 image on the same Mac did not reproduce the stuck server. Spotlight indexed the image, yet normal unmounts succeeded after the helper's exact write sequence and after each variant without the rename, directory syncs or readback. The write itself does not keep the volume busy.
+
+## Spotlight restart before the second unmount
+
+`DiskutilInstallConfESPOperator.unmount` keeps the normal `diskutil unmount`. When it is refused, the helper restarts Spotlight's server once and repeats the same normal unmount. launchd starts the server again immediately and its indexes are kept, so the cost is a brief Spotlight restart on a path that previously ended with the warning. A volume that is still busy afterwards keeps the saved-but-unconfirmed result. Nothing is forced.
+
 ## Validation boundary
 
 The busy-mount regression must fail on the unmodified source and pass with this fix. Focused Swift coverage also checks wrong mounts, read-only mounts, atomic replacement, post-write unmount failure for both encryption choices, temporary-file cleanup, symlink rejection, pinned-directory behavior after path replacement and descriptor closure before unmount.
