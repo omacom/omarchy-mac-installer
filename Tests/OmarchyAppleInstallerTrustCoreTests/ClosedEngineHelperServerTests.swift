@@ -371,6 +371,168 @@
       XCTAssertTrue(try importedEntries(in: fixture.destination).isEmpty)
     }
 
+    // MARK: A second Omarchy-like installation is refused before anything is written
+
+    private func gateServer(
+      _ fixture: HelperServerFixture, snapshot: RemovalSnapshot,
+      executor: RecordingHandoffExecutor
+    ) -> ClosedEngineHelperServer {
+      ClosedEngineHelperServer(
+        workingDirectory: fixture.destination, executor: executor,
+        credentialValidator: AcceptingMachineOwnerCredentialValidator(),
+        removalDisks: SnapshotRemovalDisks(layout: snapshot), removalAdminValidator: { _ in })
+    }
+
+    func testInstallIsRefusedWhileAnOmarchyLikeStubIsOnTheDisk() async throws {
+      let fixture = try makeFixture()
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let source = try openDirectory(fixture.source)
+      defer { try? source.close() }
+      let executor = RecordingHandoffExecutor(result: fixture.transcript)
+      let server = gateServer(
+        fixture, snapshot: OmarchyRemovalForeignStubTests.foreignStubAsFound, executor: executor)
+      await assertThrowsErrorAsync(
+        try await server.submit(
+          packageDirectory: source, authorization: try machineOwnerAuthorization())
+      ) {
+        XCTAssertEqual($0 as? ClosedEngineHelperError, .existingOmarchyLikeInstall)
+      }
+      let executions = await executor.executionCount
+      XCTAssertEqual(executions, 0, "the engine must not start")
+    }
+
+    /// A whole installation of this app is an Omarchy-like stub too: installs are never joined.
+    func testInstallIsRefusedBesideAWholeInstallationOfThisApp() async throws {
+      let fixture = try makeFixture()
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let source = try openDirectory(fixture.source)
+      defer { try? source.close() }
+      let executor = RecordingHandoffExecutor(result: fixture.transcript)
+      let server = gateServer(fixture, snapshot: RemovalFixtures.neoMacos26(), executor: executor)
+      await assertThrowsErrorAsync(
+        try await server.submit(
+          packageDirectory: source, authorization: try machineOwnerAuthorization())
+      ) {
+        XCTAssertEqual($0 as? ClosedEngineHelperError, .existingOmarchyLikeInstall)
+      }
+      let executions = await executor.executionCount
+      XCTAssertEqual(executions, 0)
+    }
+
+    func testInstallProceedsWhenTheDiskLayoutCannotBeRead() async throws {
+      let fixture = try makeFixture()
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let source = try openDirectory(fixture.source)
+      defer { try? source.close() }
+      let executor = RecordingHandoffExecutor(result: fixture.transcript)
+      let server = ClosedEngineHelperServer(
+        workingDirectory: fixture.destination, executor: executor,
+        credentialValidator: AcceptingMachineOwnerCredentialValidator(),
+        removalDisks: UnreadableRemovalDisks(), removalAdminValidator: { _ in })
+      _ = try await server.submit(
+        packageDirectory: source, authorization: try machineOwnerAuthorization())
+      let executions = await executor.executionCount
+      XCTAssertEqual(executions, 1, "the gate steps aside; the engine's own checks decide")
+    }
+
+    func testInstallProceedsOnADiskWithNoOmarchyLikeStub() async throws {
+      let fixture = try makeFixture()
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let source = try openDirectory(fixture.source)
+      defer { try? source.close() }
+      let executor = RecordingHandoffExecutor(result: fixture.transcript)
+      let clean = RemovalFixtures.snapshot(
+        macOSSize: OmarchyRemovalForeignStubTests.macOSBytes, [.free(32_800_505_856)])
+      let server = gateServer(fixture, snapshot: clean, executor: executor)
+      _ = try await server.submit(
+        packageDirectory: source, authorization: try machineOwnerAuthorization())
+      let executions = await executor.executionCount
+      XCTAssertEqual(executions, 1)
+    }
+
+    func testARetryOfRecoveryAuthorizationIsNotGated() async throws {
+      let fixture = try makeFixture()
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let source = try openDirectory(fixture.source)
+      defer { try? source.close() }
+      let executor = RecordingHandoffExecutor(result: fixture.transcript)
+      let server = gateServer(
+        fixture, snapshot: OmarchyRemovalForeignStubTests.foreignStubAsFound, executor: executor)
+      _ = try await server.submit(
+        packageDirectory: source, authorization: try machineOwnerAuthorization(),
+        operation: .retryRecoveryAuthorization)
+      let executions = await executor.executionCount
+      XCTAssertEqual(executions, 1, "the install being finished is on the disk by then")
+    }
+
+    /// Writes the run's journal the way the executor does: owner-only, one record per line.
+    private func writeJournal(_ lines: [String], fixture: HelperServerFixture) throws {
+      let journal = try XCTUnwrap(
+        EngineJournalLocator.journalURL(
+          workingDirectory: fixture.destination,
+          bindingDigest: digest(Data("binding".utf8))))
+      try FileManager.default.createDirectory(
+        at: journal.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try Data(lines.map { $0 + "\n" }.joined().utf8).write(to: journal)
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o600], ofItemAtPath: journal.path)
+    }
+
+    /// What the engine writes before it touches the disk: sequence 1, 2, 3, read-only.
+    private static let readOnlyRecords = [
+      #"{"schema_version":1,"sequence":1,"type":"inspection","payload":{}}"#,
+      #"{"schema_version":1,"sequence":2,"type":"inventory","payload":{}}"#,
+      #"{"schema_version":1,"sequence":3,"type":"plan","payload":{}}"#,
+    ]
+    private static let eventRecord =
+      #"{"schema_version":1,"sequence":4,"type":"event","payload":{"name":"apfs_preparation_started"}}"#
+    private static let gappedRecords =
+      readOnlyRecords + [#"{"schema_version":1,"sequence":9,"type":"event","payload":{}}"#]
+
+    func testAJournalThatRecordsAMutationResumesInsteadOfBeingRefused() async throws {
+      let fixture = try makeFixture()
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      let source = try openDirectory(fixture.source)
+      defer { try? source.close() }
+      try writeJournal(Self.readOnlyRecords + [Self.eventRecord], fixture: fixture)
+      let executor = RecordingHandoffExecutor(result: fixture.transcript)
+      let server = gateServer(
+        fixture, snapshot: OmarchyRemovalForeignStubTests.foreignStubAsFound, executor: executor)
+      _ = try await server.submit(
+        packageDirectory: source, authorization: try machineOwnerAuthorization())
+      let executions = await executor.executionCount
+      XCTAssertEqual(executions, 1, "its own half-made group must not stop its resumption")
+    }
+
+    func testAnEmptyPlanOnlyOrInvalidJournalDoesNotExemptTheGate() async throws {
+      let cases: [(name: String, lines: [String])] = [
+        ("empty", []),
+        ("read-only records only", Self.readOnlyRecords),
+        ("not json", ["not a journal"]),
+        ("unknown record type", [#"{"schema_version":1,"sequence":1,"type":"x","payload":{}}"#]),
+        ("a gap in the sequence", Self.gappedRecords),
+      ]
+      for journalCase in cases {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let source = try openDirectory(fixture.source)
+        defer { try? source.close() }
+        try writeJournal(journalCase.lines, fixture: fixture)
+        let executor = RecordingHandoffExecutor(result: fixture.transcript)
+        let server = gateServer(
+          fixture, snapshot: OmarchyRemovalForeignStubTests.foreignStubAsFound, executor: executor)
+        await assertThrowsErrorAsync(
+          try await server.submit(
+            packageDirectory: source, authorization: try machineOwnerAuthorization())
+        ) {
+          XCTAssertEqual(
+            $0 as? ClosedEngineHelperError, .existingOmarchyLikeInstall, journalCase.name)
+        }
+        let executions = await executor.executionCount
+        XCTAssertEqual(executions, 0, journalCase.name)
+      }
+    }
+
     func testWriteInstallConfRejectsRequestsBeforeACompletedPlan() async throws {
       let fixture = try makeFixture()
       defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -760,6 +922,39 @@
         containers: []
       )
     }
+    func evidence(for installation: RemovalInstallation, disk: String) throws -> RemovalEvidence {
+      throw RemovalFailure(message: "unused")
+    }
+    func startup(_ snapshot: RemovalSnapshot) throws -> RemovalStartup { .unknown }
+    func setMacOSStartup(
+      _ snapshot: RemovalSnapshot, nextOnly: Bool, authorization: MachineOwnerAuthorization
+    ) throws {}
+    func growLimit(_ macOS: RemovalPartition, disk: String) throws -> UInt64 { 0 }
+    func deleteContainer(_ stub: RemovalPartition, disk: String) throws {}
+    func erasePartition(_ partition: RemovalPartition, disk: String) throws {}
+    func growContainer(_ macOS: RemovalPartition, disk: String) throws {}
+  }
+
+  /// Reports a given disk to the install gate; nothing else is ever called.
+  private struct SnapshotRemovalDisks: RemovalDiskOperating {
+    let layout: RemovalSnapshot
+    func snapshot() throws -> RemovalSnapshot { layout }
+    func evidence(for installation: RemovalInstallation, disk: String) throws -> RemovalEvidence {
+      throw RemovalFailure(message: "unused")
+    }
+    func startup(_ snapshot: RemovalSnapshot) throws -> RemovalStartup { .unknown }
+    func setMacOSStartup(
+      _ snapshot: RemovalSnapshot, nextOnly: Bool, authorization: MachineOwnerAuthorization
+    ) throws {}
+    func growLimit(_ macOS: RemovalPartition, disk: String) throws -> UInt64 { 0 }
+    func deleteContainer(_ stub: RemovalPartition, disk: String) throws {}
+    func erasePartition(_ partition: RemovalPartition, disk: String) throws {}
+    func growContainer(_ macOS: RemovalPartition, disk: String) throws {}
+  }
+
+  /// A disk the removal reader cannot describe, as on a Mac with an unexpected layout.
+  private struct UnreadableRemovalDisks: RemovalDiskOperating {
+    func snapshot() throws -> RemovalSnapshot { throw RemovalFailure(message: "unreadable") }
     func evidence(for installation: RemovalInstallation, disk: String) throws -> RemovalEvidence {
       throw RemovalFailure(message: "unused")
     }

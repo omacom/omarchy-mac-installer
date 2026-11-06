@@ -430,6 +430,22 @@
       }
     }
 
+    func testAnInstallRefusedBesideAnotherInstallationSaysWhyAndHowToRecover() {
+      let helperError = ClosedEngineHelperError.existingOmarchyLikeInstall
+      let bridged = helperError as NSError
+      // Directly, and over XPC where the app sees the helper's error by domain and code.
+      for error in [
+        helperError as any Error,
+        EngineXPCSubmissionError.helperRejected(domain: bridged.domain, code: bridged.code),
+      ] {
+        let failure = PlainLanguage.failure(for: error)
+        XCTAssertEqual(
+          failure.headline, PlainLanguage.existingOmarchyLikeInstallHeadline, "\(error)")
+        XCTAssertTrue(failure.plainDetail.contains("nothing was changed"), failure.plainDetail)
+        XCTAssertTrue(failure.remedy?.contains("Remove Omarchy") == true, "\(error)")
+      }
+    }
+
     func testAnOutdatedInstallerOffersTheDownloadItNeeds() {
       let url = URL(
         string: "https://downloads.example.com/installer/stable/Installer.pkg"

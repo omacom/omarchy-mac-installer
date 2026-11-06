@@ -99,6 +99,14 @@
       }
     }
 
+    /// The startup containers on this disk that removal takes for an Omarchy
+    /// installation's, by the same test it applies, whether or not the rest of
+    /// their group is whole. An install made beside one leaves a layout that
+    /// removal refuses, so the installer asks for these before it writes.
+    static func omarchyLikeStubs(in snapshot: RemovalSnapshot) -> [RemovalPartition] {
+      snapshot.partitions.filter { classify($0, snapshot) == .stub }
+    }
+
     /// Unallocated space ≥ 1 GiB that sits behind a partition, so macOS can't grow into it.
     static func strandedFreeSpace(middle: [RemovalPartition], recovery: RemovalPartition)
       -> (bytes: UInt64, behind: [RemovalPartition])?

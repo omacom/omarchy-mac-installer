@@ -1,6 +1,7 @@
 #if os(macOS)
   import Foundation
   import Darwin
+  import OSLog
   import RecoveryAccountCore
 
   public enum EngineHandoffOperation: String, Equatable, Sendable {
@@ -44,6 +45,18 @@
     /// size would find them complete and skip installing, so nothing is
     /// installed until setting them aside works; each request tries again.
     case earlierInstallRecordUncleared
+    /// The disk already has an Omarchy-like installation. A second one would
+    /// leave a layout that removal refuses, so nothing is installed.
+    case existingOmarchyLikeInstall
+  }
+
+  extension ClosedEngineHelperError {
+    /// Over XPC the app sees only a domain and a code. Whether they name
+    /// `existingOmarchyLikeInstall`, which the helper raises before it writes anything.
+    public static func isExistingOmarchyLikeInstall(domain: String, code: Int) -> Bool {
+      let refused = ClosedEngineHelperError.existingOmarchyLikeInstall as NSError
+      return domain == refused.domain && code == refused.code
+    }
   }
 
   /// Whether the helper is idle, working on a job, or held for replacement by
@@ -128,6 +141,8 @@
 
   public actor ClosedEngineHelperServer {
     private static let explicitlyUnsupportedDevices = ["apple,j614s"]
+    private static let logger = Logger(
+      subsystem: InstallerProductIdentity.appIdentifier, category: "helper")
 
     private let workingDirectory: URL
     private let credentialValidator: any MachineOwnerCredentialValidating
@@ -369,6 +384,71 @@
       return .finalized
     }
 
+    /// A fresh install is refused while the disk already carries an Omarchy-like
+    /// startup container: a second group would leave a layout removal refuses.
+    /// A run whose own journal records a disk-mutation intent is a resumption, and
+    /// the group it finds is its own half-made one, so it goes on. An empty,
+    /// plan-only or unreadable journal proves nothing was begun, so it does not
+    /// exempt. A disk read that fails here is logged and the gate steps aside; the
+    /// engine's own checks decide, as they did before this gate.
+    private func refuseAnotherOmarchyLikeInstall(for package: ImportedEngineHandoffPackage) throws {
+      if let journal = EngineJournalLocator.journalURL(
+        workingDirectory: workingDirectory, bindingDigest: package.bindingDigest),
+        Self.journalRecordsMutationIntent(journal)
+      {
+        return
+      }
+      let snapshot: RemovalSnapshot
+      do {
+        snapshot = try removalDisks.snapshot()
+      } catch {
+        Self.logger.error(
+          "install gate skipped: the disk layout could not be read: \(error.localizedDescription, privacy: .public)"
+        )
+        return
+      }
+      if !RemovalLayout.omarchyLikeStubs(in: snapshot).isEmpty {
+        throw ClosedEngineHelperError.existingOmarchyLikeInstall
+      }
+    }
+
+    /// Whether a run's journal (named by its binding digest) is a valid, owner-only file of
+    /// whole records, none unknown, with at least one event, checkpoint or completion: the
+    /// engine appends these before it touches the disk. Anything else says nothing.
+    static func journalRecordsMutationIntent(_ journal: URL) -> Bool {
+      let descriptor = Darwin.open(journal.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+      guard descriptor >= 0 else { return false }
+      defer { Darwin.close(descriptor) }
+      var status = stat()
+      guard fstat(descriptor, &status) == 0,
+        (status.st_mode & S_IFMT) == S_IFREG, status.st_mode & 0o077 == 0,
+        status.st_uid == geteuid(), status.st_size > 0,
+        status.st_size <= PinnedAsahiEngineExecutor.maximumTranscriptBytes
+      else { return false }
+      let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+      guard let data = try? handle.readToEnd(), data.count == Int(status.st_size),
+        data.last == 0x0A
+      else { return false }
+      let known: Set<String> = [
+        "inspection", "inventory", "plan", "event", "checkpoint", "completion",
+      ]
+      var expectedSequence = 1
+      var intent = false
+      for line in data.split(separator: 0x0A, omittingEmptySubsequences: true) {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(line)),
+          let record = object as? [String: Any],
+          Set(record.keys) == ["schema_version", "sequence", "type", "payload"],
+          record["schema_version"] as? Int == 1,
+          record["payload"] is [String: Any],
+          let type = record["type"] as? String, known.contains(type),
+          record["sequence"] as? Int == expectedSequence
+        else { return false }
+        expectedSequence += 1
+        if ["event", "checkpoint", "completion"].contains(type) { intent = true }
+      }
+      return intent
+    }
+
     /// `progress` is optional and advisory: when a connected app exports the
     /// journal callback, the helper tails the run's journal and forwards whole
     /// lines. Passing nil reproduces the previous behavior exactly.
@@ -410,6 +490,10 @@
         throw ClosedEngineHelperError.unsupportedDevice(
           package.deviceIdentifier
         )
+      }
+
+      if operation == .install {
+        try refuseAnotherOmarchyLikeInstall(for: package)
       }
 
       var tailer: EngineJournalTailer?
