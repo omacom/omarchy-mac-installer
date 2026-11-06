@@ -129,6 +129,22 @@ public struct InstallerAllocationRecommendation:
     )
   }
 
+  /// Reinstalling over the existing Omarchy at `sourceIdentifier`: the
+  /// engine's replace candidate at its exact length. The engine erases that
+  /// install and reuses its extent, so macOS is not resized.
+  public init(replacing sourceIdentifier: String, in inventory: ValidatedEngineInventory) throws {
+    let matches = inventory.candidates.filter {
+      $0.kind == "replace" && $0.sourceIdentifier == sourceIdentifier
+    }
+    guard matches.count == 1, let match = matches.first else {
+      throw InstallerAllocationRecommendationError.noEligibleCandidate
+    }
+    candidate = match
+    minimumBytes = match.lengthBytes
+    maximumBytes = match.lengthBytes
+    requestedLengthBytes = match.lengthBytes
+  }
+
   /// The free or resize candidate that comes closest to the install minimum,
   /// measured the way the ranking above admits candidates. Nil when the
   /// inventory offers no such candidate at all.
