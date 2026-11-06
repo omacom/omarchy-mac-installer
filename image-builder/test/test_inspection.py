@@ -140,6 +140,23 @@ class InspectionTest(unittest.TestCase):
                 (self.root / rel).write_bytes(data)
                 self.assertFails("installed-boot-payloads", "J700 Stage")
 
+    def test_the_authenticated_macho_bundle_must_match_when_present(self):
+        for rel, data in (("boot/efi/macho/aura-boot.macho", b"another macho stage 1"),
+                          ("boot/efi/macho/aura-stage2.pkg", b"another macho stage 2"),
+                          ("boot/efi/macho/nv-config", b"x1n1.nv2=1\n")):
+            with self.subTest(rel=rel):
+                self.setUp()
+                (self.root / rel).write_bytes(data)
+                if rel.endswith("nv-config"):
+                    self.assertFails("installed-boot-payloads", "does not match the authenticated Mach-O")
+                else:
+                    self.assertFails("installed-boot-payloads", "does not match the authenticated Mach-O")
+
+    def test_an_authenticated_macho_bundle_cannot_be_partial(self):
+        self.setUp()
+        (self.root / "boot/efi/macho/aura-stage2.pkg").unlink()
+        self.assertFails("installed-boot-payloads", "does not match the authenticated Mach-O")
+
     def test_speakerguardd_starts_only_for_the_j700_and_speakersafetyd_skips_it(self):
         self.assertIn("starts only for AppleJ700", self.inspect()["checks"]["speaker-routing"]["detail"])
 

@@ -513,9 +513,11 @@ def read_board_stage1(board, read_member, next_object="m1n1/boot.bin"):
 
 def install_board_stage1(
     device_class, os_firmware, read_member, esp_uuid, boot_object, next_object="m1n1/boot.bin",
-    *, common_allowed=False,
+    *, common_allowed=False, macho=False,
 ):
-    """Use the common image when supplied, with legacy image compatibility."""
+    """Install the board's Stage 1, or the Neo's authenticated Mach-O object."""
+    if macho and device_class != "j700ap":
+        raise AsahiAdapterError("Mach-O Stage 1 is supported only on the MacBook Neo")
     try:
         common_image = read_member(COMMON_STAGE1.member)
     except KeyError:
@@ -523,15 +525,30 @@ def install_board_stage1(
     use_common = common_allowed and common_image is not None
     board = COMMON_STAGE1 if use_common else board_stage1(device_class, os_firmware)
     if board is None:
-        return
+        return None
     image = common_image if use_common else read_board_stage1(board, read_member, next_object)
     filled = fill_aurora_stage1(image, esp_uuid.lower(), next_object, board.window_ms)
+    if macho:
+        try:
+            macho_image = read_member(MACHO_STAGE1)
+        except KeyError as error:
+            raise AsahiAdapterError(f"this image has no {MACHO_STAGE1}") from error
+        if not macho_image:
+            raise AsahiAdapterError(f"this image has an empty {MACHO_STAGE1}")
+        with open(boot_object, "wb") as fd:
+            fd.write(macho_image)
+        return filled
     with open(boot_object, "wb") as fd:
         fd.write(filled)
+    return filled
 
 
 ESP_SOURCE = "esp"
 ESP_STAGE2 = "esp/m1n1/boot.bin"
+MACHO_STAGE1 = "esp/macho/aura-boot.macho"
+MACHO_STAGE2 = "esp/macho/aura-stage2.pkg"
+MACHO_NV_CONFIG = "esp/macho/nv-config"
+MACHO_MEMBERS = frozenset((MACHO_STAGE1, MACHO_STAGE2, MACHO_NV_CONFIG))
 
 # Boards whose Stage 2 is not the image's generic m1n1/boot.bin. One image
 # carries every board's prebuilt Stage 2: on its own board the file replaces
@@ -540,9 +557,21 @@ ESP_STAGE2 = "esp/m1n1/boot.bin"
 BOARD_STAGE2 = {"j700ap": "esp/m1n1/boot-j700.bin"}
 
 
+def macho_bundle_present(device_class, members):
+    """Validate and select the optional Neo-only Mach-O bundle."""
+    present = set(members) & MACHO_MEMBERS
+    if present and present != MACHO_MEMBERS:
+        missing = ", ".join(sorted(MACHO_MEMBERS - present))
+        raise AsahiAdapterError(f"Mach-O bundle is incomplete; missing {missing}")
+    if present and device_class != "j700ap":
+        return False
+    return bool(present)
+
+
 def esp_board_layout(device_class, members, *, common_allowed=False):
     """Each payload ESP member's path on this board's ESP; absent ones are not installed."""
     members = set(members)
+    macho = macho_bundle_present(device_class, members)
     common = common_allowed and COMMON_STAGE1.member in members
     if common and ESP_STAGE2 not in members:
         raise AsahiAdapterError(f"this common image has no {ESP_STAGE2}")
@@ -561,7 +590,8 @@ def esp_board_layout(device_class, members, *, common_allowed=False):
         elif (member == COMMON_STAGE1.member and not common
               or member in BOARD_STAGE2.values()
               or (common and member in {board.member for board in BOARD_STAGE1.values()})
-              or (own is not None and member == ESP_STAGE2)):
+              or (own is not None and member == ESP_STAGE2)
+              or (member in MACHO_MEMBERS and not macho)):
             continue
         else:
             layout[member] = member[len(prefix):]
@@ -1338,6 +1368,7 @@ class AsahiStage1Adapter:
         if board is not None:
             read_board_stage1(board, self.osins.pkg.read, self.template["next_object"])
         device_class = self.installer.sysinfo.device_class
+        self.macho_bundle = macho_bundle_present(device_class, esp_members)
         esp_board_layout(device_class, esp_members, common_allowed=self.common_stage1)
         stage2 = ESP_STAGE2 if self.common_stage1 else BOARD_STAGE2.get(device_class)
         if stage2 is not None and self.osins.pkg.getinfo(stage2).file_size <= 0:
@@ -1500,7 +1531,7 @@ class AsahiStage1Adapter:
             self.osins.firmware_package = firmware_package
 
         self.osins.install(self.installer.ins)
-        install_board_stage1(
+        raw_stage1 = install_board_stage1(
             self.installer.sysinfo.device_class,
             self.os_firmware,
             self.osins.pkg.read,
@@ -1508,6 +1539,7 @@ class AsahiStage1Adapter:
             self.installer.ins.boot_obj_path,
             self.template.get("next_object", "m1n1/boot.bin"),
             common_allowed=self.common_stage1,
+            macho=self.macho_bundle,
         )
         install_esp_board_layout(
             self.installer.sysinfo.device_class,
@@ -1516,6 +1548,9 @@ class AsahiStage1Adapter:
             common_allowed=self.common_stage1,
         )
         if self.native_recovery_gui:
+            recovery_kwargs = {}
+            if raw_stage1 is not None:
+                recovery_kwargs["raw_stage1"] = raw_stage1
             omarchy_recovery.stage(
                 self.installer.ins, self.osins.efi_part.uuid,
                 self.installer.dutil.mount(self.osins.efi_part.name),
@@ -1525,6 +1560,7 @@ class AsahiStage1Adapter:
                 requirement=self.recovery_requirement if self.use_helper_recovery else None,
                 authorized_owner=self.authorized_owner if self.use_helper_recovery else None,
                 expected_bootstrap=self.source_bootstrap if self.use_helper_recovery else None,
+                **recovery_kwargs,
             )
         for target in self.osins.idata_targets:
             self.installer.ins.collect_installer_data(target)
@@ -2109,6 +2145,16 @@ class AsahiStage1Adapter:
             members[member.filename] = member
         if not required.issubset(members):
             raise AsahiAdapterError("incomplete Omarchy full-OS payload")
+        macho_members = set(members) & MACHO_MEMBERS
+        if macho_members and macho_members != MACHO_MEMBERS:
+            raise AsahiAdapterError("Mach-O startup bundle is incomplete")
+        for name in macho_members:
+            if members[name].file_size <= 0:
+                raise AsahiAdapterError(f"empty Omarchy payload member {name}")
+        if MACHO_NV_CONFIG in macho_members and self.osins.pkg.read(MACHO_NV_CONFIG) not in (
+            b"x1n1.nv2=0\n", b"x1n1.nv2=1\n",
+        ):
+            raise AsahiAdapterError("Mach-O NV configuration has an invalid value")
         recovery_manifest = (
             "esp/" + omarchy_recovery.PAYLOAD_DIRECTORY + "/" + omarchy_recovery.MANIFEST_NAME
         )

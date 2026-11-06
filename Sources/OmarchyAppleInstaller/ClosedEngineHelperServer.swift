@@ -202,11 +202,19 @@
       defer { work.endJob() }
       let directory = workingDirectory
       if action == "inspect" {
-        guard
-          let completed = try await Task.detached(operation: {
-            try RecoveryAccountHandoff.discover(in: directory)
-          }).value
-        else { return RecoveryAccountReply() }
+        let choices = try await Task.detached(operation: {
+          try RecoveryAccountHandoff.discoverAll(
+            in: directory, binding: ticket.isEmpty ? nil : ticket)
+        }).value
+        guard !choices.isEmpty else { return RecoveryAccountReply() }
+        if choices.count > 1 && ticket.isEmpty {
+          return RecoveryAccountReply(
+            choices: choices.map {
+              RecoveryAccountChoice(
+                binding: $0.binding, target: $0.target, accountDeferred: $0.accountDeferred)
+            })
+        }
+        guard let completed = choices.first else { return RecoveryAccountReply() }
         let id = UUID().uuidString
         recoveryAccountTargets = recoveryAccountTargets.filter { $0.value.1 > Date() }
         recoveryAccountTargets[id] = (completed, Date().addingTimeInterval(1800))

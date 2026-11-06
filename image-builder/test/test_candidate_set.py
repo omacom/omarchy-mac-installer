@@ -262,6 +262,39 @@ class CandidateSetTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "is not in omarchy-mac-boot"):
             self.verify(directory, receipt)
 
+    def test_macho_bundle_is_optional_but_all_or_nothing(self):
+        contents = fixtures.default_contents()
+        contents["m1n1-aurora"].update({
+            "usr/share/m1n1-aurora/macho/aura-boot.macho": b"macho stage 1",
+            "usr/share/m1n1-aurora/macho/aura-stage2.pkg": b"macho stage 2",
+            "usr/share/m1n1-aurora/macho/nv-config": b"x1n1.nv2=0\n",
+        })
+        directory, receipt = self.variant(contents=contents)
+        summary = self.verify(directory, receipt)
+        self.assertEqual(summary["packages"][next(i for i, p in enumerate(summary["packages"])
+                                                    if p["name"] == "m1n1-aurora")]["name"],
+                         "m1n1-aurora")
+        # Each snapshot uses an exclusive output directory. Retire the
+        # successful baseline before constructing the partial-bundle cases.
+        if (self.work / "output").exists():
+            (self.work / "output").chmod(0o700)
+            shutil.rmtree(self.work / "output")
+        for missing in ("aura-boot.macho", "aura-stage2.pkg", "nv-config"):
+            partial = fixtures.default_contents()
+            partial["m1n1-aurora"].update({
+                "usr/share/m1n1-aurora/macho/aura-boot.macho": b"macho stage 1",
+                "usr/share/m1n1-aurora/macho/aura-stage2.pkg": b"macho stage 2",
+                "usr/share/m1n1-aurora/macho/nv-config": b"x1n1.nv2=0\n",
+            })
+            del partial["m1n1-aurora"]["usr/share/m1n1-aurora/macho/" + missing]
+            directory = self.work / ("partial-" + missing)
+            receipt = fixtures.make_set(directory, self.signer, contents=partial)
+            with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, "Mach-O bundle is incomplete"):
+                self.verify(directory, receipt)
+            if (self.work / "output").exists():
+                (self.work / "output").chmod(0o700)
+                shutil.rmtree(self.work / "output")
+
     def test_runtime_package_from_another_commit(self):
         contents = fixtures.default_contents()
         contents["omarchy-mac"]["usr/share/omarchy-mac/source-revision"] = ("c" * 40 + "\n").encode()

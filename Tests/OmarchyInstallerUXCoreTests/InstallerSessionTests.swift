@@ -126,6 +126,61 @@
       }
     }
 
+    func testDeferredRecoveryAccountDoesNotBlockASeparateInstallation() async {
+      let environment = MockInstallerEnvironment()
+      let target = RecoveryAccountTarget(
+        volumeName: "Omarchy", systemUUID: "11111111-1111-4111-8111-111111111111",
+        dataUUID: "22222222-2222-4222-8222-222222222222",
+        groupUUID: "33333333-3333-4333-8333-333333333333",
+        prebootUUID: "44444444-4444-4444-8444-444444444444")
+      environment.accountReply = RecoveryAccountReply(
+        ticket: "bound-ticket", target: target, accountDeferred: true)
+      let session = InstallerSession(environment: environment)
+
+      await session.inspect()
+
+      guard case .welcome = session.phase else {
+        return XCTFail("A separate install extent must remain available")
+      }
+      XCTAssertTrue(session.canSetUpRecoveryAccount)
+      session.setUpRecoveryAccount()
+      XCTAssertTrue(session.showsRecoveryAccountSetup)
+      session.cancelRecoveryAccountSetup()
+      await session.continueToPlan()
+      guard case .planPrepared = session.phase else {
+        return XCTFail("The new installation plan was blocked by the deferred account")
+      }
+    }
+
+    func testMultipleDeferredAccountsRequireAndAcceptAnExplicitTarget() async throws {
+      let environment = MockInstallerEnvironment()
+      let first = RecoveryAccountTarget(
+        volumeName: "Omarchy One", systemUUID: "11111111-1111-4111-8111-111111111111",
+        dataUUID: "22222222-2222-4222-8222-222222222222",
+        groupUUID: "33333333-3333-4333-8333-333333333333",
+        prebootUUID: "44444444-4444-4444-8444-444444444444")
+      let second = RecoveryAccountTarget(
+        volumeName: "Omarchy Two", systemUUID: "55555555-5555-4555-8555-555555555555",
+        dataUUID: "66666666-6666-4666-8666-666666666666",
+        groupUUID: "77777777-7777-4777-8777-777777777777",
+        prebootUUID: "88888888-8888-4888-8888-888888888888")
+      environment.accountReply = RecoveryAccountReply(
+        choices: [
+          RecoveryAccountChoice(binding: "one", target: first, accountDeferred: true),
+          RecoveryAccountChoice(binding: "two", target: second, accountDeferred: true),
+        ])
+      let session = InstallerSession(environment: environment)
+
+      await session.inspect()
+
+      XCTAssertTrue(session.needsRecoveryAccountChoice)
+      try await session.chooseRecoveryAccount(binding: "two")
+      XCTAssertFalse(session.needsRecoveryAccountChoice)
+      XCTAssertEqual(session.recoveryAccount?.target, second)
+      XCTAssertTrue(session.recoveryAccountDeferred)
+      XCTAssertTrue(session.canSetUpRecoveryAccount)
+    }
+
     func testAStartedRecoveryAccountResumesAndItsStepsShutDown() async throws {
       let environment = MockInstallerEnvironment()
       environment.host = HostDisplay(
@@ -1741,8 +1796,13 @@
       if handoffFails { throw AccountSetupFailure("fixture failure") }
       return handoffOverride ?? accountReply!
     }
-    func inspectRecoveryAccount() async throws -> RecoveryAccountReply? {
+    func inspectRecoveryAccount(binding: String? = nil) async throws -> RecoveryAccountReply? {
       accountCalls.append("inspect")
+      if let binding, let choice = accountReply?.choices?.first(where: { $0.binding == binding }) {
+        return RecoveryAccountReply(
+          ticket: "selected-(binding)", target: choice.target,
+          accountDeferred: choice.accountDeferred)
+      }
       return accountReply
     }
     func prepareRecoveryAccount(ticket: String, username: String, password: Data) async throws

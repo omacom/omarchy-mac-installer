@@ -2,7 +2,7 @@
 """Stage the native Recovery app against the actual newly created volumes.
 
 The app template is an authenticated engine input and is copied unchanged.
-Per-install config and raw payloads live beside it on the stub volume, after
+Per-install config and authenticated startup payloads live beside it on the stub volume, after
 stage 1 and the ESP have been finalized and before autolaunch is selected.
 No machine UUID, administrator name, credential or calibration is compiled in.
 """
@@ -24,7 +24,14 @@ APP_NAME = "Omarchy Installer.app"
 INSTALL_DATA_DIRECTORY = "Aurora/Recovery/InstallData"
 PAYLOAD_DIRECTORY = "aurora/recovery"
 MANIFEST_NAME = "omarchy-recovery-app.json"
+RAW_STAGE1_PATH = "raw/aura-raw.bin"
+RAW_STAGE2_PATH = "raw/boot.bin"
 STAGE2_PATH = "m1n1/boot.bin"
+MACHO_STAGE1_PATH = "macho/aura-boot.macho"
+MACHO_STAGE2_PATH = "macho/aura-stage2.pkg"
+MACHO_NV_CONFIG_PATH = "macho/nv-config"
+MACHO_ESP_STAGE2_PATH = "m1n1/aura-stage2.pkg"
+MACHO_ESP_NV_CONFIG_PATH = "m1n1/nv-config"
 VENDOR_FIRMWARE = ("vendorfw/firmware.tar", "vendorfw/firmware.cpio", "vendorfw/manifest.txt")
 OPTIONAL_VENDOR_FIRMWARE = "vendorfw/u-boot/asmedia/asm2214a-apple.bin"
 UUID_PATTERN = re.compile(r"[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}\Z")
@@ -185,7 +192,8 @@ def source_bootstrap(dutil, source_os, authorized_owner=None, target_group=None)
                  "sourceGroupUUID": source_group, "ownerUUIDs": [selected]}
 
 
-def target_config(installer, esp_uuid, esp_root, source_os=None, authorized_owner=None, expected_bootstrap=None):
+def target_config(installer, esp_uuid, esp_root, source_os=None, authorized_owner=None,
+                  expected_bootstrap=None, boot_mode="raw", stage2_path=STAGE2_PATH):
     osi = installer.osi
     system = Path(osi.system)
     info = installer.dutil.get("info", "-plist", str(system))
@@ -211,7 +219,7 @@ def target_config(installer, esp_uuid, esp_root, source_os=None, authorized_owne
     return {
         "schema": 2, "volumeName": name, "systemUUID": identifier(info.get("VolumeUUID")),
         "groupUUID": group, "prebootUUID": preboot_uuid, "espUUID": esp_uuid,
-        "bootMode": "raw", "stage2Path": STAGE2_PATH, "bootstrap": bootstrap,
+        "bootMode": boot_mode, "stage2Path": stage2_path, "bootstrap": bootstrap,
         "allowCustomBootArguments": getattr(getattr(installer, "sysinfo", None), "device_class", "") == "j700ap",
     }
 
@@ -308,9 +316,17 @@ def _payload(path, maximum=256 << 20):
     return path.read_bytes()
 
 
+def _optional_payload(path, maximum=256 << 20):
+    path = Path(path)
+    if not os.path.lexists(path):
+        return None
+    return _payload(path, maximum)
+
+
 def stage(installer, esp_uuid, esp_root, app_source=None,
           manifest_path=None, run=subprocess.run, source_os=None,
-          requirement=None, authorized_owner=None, expected_bootstrap=None):
+          requirement=None, authorized_owner=None, expected_bootstrap=None,
+          raw_stage1=None):
     """Called after OS/ESP installation and common stage-1 target patching.
 
     Preserve upstream's Finish Installation resource paths for resume checks;
@@ -321,11 +337,37 @@ def stage(installer, esp_uuid, esp_root, app_source=None,
     app_source = Path(app_source) if app_source is not None else template_root / APP_NAME
     manifest_path = Path(manifest_path) if manifest_path is not None else template_root / MANIFEST_NAME
     template = validate_source(app_source, manifest_path, run, requirement=requirement)
-    config = target_config(installer, esp_uuid, esp_root, source_os, authorized_owner, expected_bootstrap)
     system = Path(installer.osi.system)
     esp_root = Path(esp_root)
-    stage1 = _payload(installer.boot_obj_path)
+    if raw_stage1 is None:
+        stage1 = _payload(installer.boot_obj_path)
+    else:
+        if not isinstance(raw_stage1, bytes) or not 0 < len(raw_stage1) <= 256 << 20:
+            raise RecoveryError("finalized raw Stage 1 has an invalid size")
+        stage1 = raw_stage1
     stage2 = _payload(esp_root / STAGE2_PATH)
+    macho_stage1 = _optional_payload(esp_root / MACHO_STAGE1_PATH)
+    macho_stage2 = _optional_payload(esp_root / MACHO_STAGE2_PATH)
+    macho_nv = _optional_payload(esp_root / MACHO_NV_CONFIG_PATH, 4096)
+    macho_paths_present = any(
+        os.path.lexists(esp_root / path)
+        for path in (MACHO_STAGE1_PATH, MACHO_STAGE2_PATH, MACHO_NV_CONFIG_PATH)
+    )
+    if macho_paths_present and (macho_stage1 is None or macho_stage2 is None):
+        raise RecoveryError("Mach-O startup bundle is incomplete")
+    if macho_nv is not None and macho_nv not in (b"x1n1.nv2=0\n", b"x1n1.nv2=1\n"):
+        raise RecoveryError("Mach-O NV configuration has an invalid value")
+    macho_ready = macho_stage1 is not None and macho_stage2 is not None
+    if macho_ready and macho_nv is None:
+        # NV2 is deliberately off by default, but always stage an explicit
+        # config so the post-install aurora-nv2 command has a durable target.
+        macho_nv = b"x1n1.nv2=0\n"
+    boot_mode = "macho" if macho_ready else "raw"
+    config_stage2 = MACHO_ESP_STAGE2_PATH if macho_ready else STAGE2_PATH
+    config = target_config(
+        installer, esp_uuid, esp_root, source_os, authorized_owner, expected_bootstrap,
+        boot_mode=boot_mode, stage2_path=config_stage2,
+    )
     # Copy only this installation's finalized package. Never put these
     # per-device inputs in the distributable application template.
     firmware = {
@@ -354,11 +396,21 @@ def stage(installer, esp_uuid, esp_root, app_source=None,
         'resources=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
         'exec "$resources/../../../Omarchy Installer.app/Contents/MacOS/OmarchyRecovery" "$@"\n'
     )
-    files = {"raw/aura-raw.bin": stage1, "raw/boot.bin": stage2, **firmware}
+    files = {RAW_STAGE1_PATH: stage1, RAW_STAGE2_PATH: stage2, **firmware}
+    modes = {"raw": {"espPath": STAGE2_PATH}}
+    if macho_ready:
+        files[MACHO_STAGE1_PATH] = macho_stage1
+        files[MACHO_STAGE2_PATH] = macho_stage2
+        modes["macho"] = {"espPath": MACHO_ESP_STAGE2_PATH}
+        if macho_nv is not None:
+            files[MACHO_NV_CONFIG_PATH] = macho_nv
+            modes["macho"]["nvConfigPath"] = MACHO_ESP_NV_CONFIG_PATH
+            _atomic_bytes(esp_root / MACHO_ESP_NV_CONFIG_PATH, macho_nv)
+        _atomic_bytes(esp_root / MACHO_ESP_STAGE2_PATH, macho_stage2)
     install_data = _install_data_root(system)
     payload_manifest = {
-        "schema": 2, "defaultMode": "raw", "nestedVirtualization": False,
-        "modes": {"raw": {"espPath": STAGE2_PATH}},
+        "schema": 2, "defaultMode": boot_mode, "nestedVirtualization": False,
+        "modes": modes,
         "vendorFirmware": sorted(firmware),
         "files": {name: {"sha256": digest(data), "bytes": len(data)} for name, data in files.items()},
     }

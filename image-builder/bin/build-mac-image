@@ -1345,6 +1345,30 @@ stage_board_boot_payloads() {
   mkdir -p "$target/boot/efi/aurora" "$target/boot/efi/m1n1"
   install -m 0644 "$stage1" "$target/boot/efi/aurora/stage1-j700.bin"
   install -m 0644 "$stage2" "$target/boot/efi/m1n1/boot-j700.bin"
+
+  # The SPTM Mach-O bundle is an optional m1n1-aurora package contract.  Keep
+  # it beside the raw payload on the image so the native Recovery handoff can
+  # select it for the Neo; the engine drops it on every other board.
+  local macho_root="$target/usr/share/m1n1-aurora/macho"
+  local macho_stage1="$macho_root/aura-boot.macho"
+  local macho_stage2="$macho_root/aura-stage2.pkg"
+  local macho_nv="$macho_root/nv-config"
+  if [[ -e $macho_root || -L $macho_root ]]; then
+    [[ -d $macho_root && ! -L $macho_root ]] ||
+      fail "m1n1-aurora Mach-O directory is not a real directory"
+    for file in "$macho_stage1" "$macho_stage2" "$macho_nv"; do
+      [[ -f $file && ! -L $file && -s $file ]] ||
+        fail "m1n1-aurora Mach-O bundle is incomplete: ${file##*/}"
+    done
+    if ! cmp -s "$macho_nv" <(printf 'x1n1.nv2=0\n') \
+      && ! cmp -s "$macho_nv" <(printf 'x1n1.nv2=1\n'); then
+      fail "m1n1-aurora Mach-O NV configuration is invalid"
+    fi
+    mkdir -p "$target/boot/efi/macho"
+    install -m 0644 "$macho_stage1" "$target/boot/efi/macho/aura-boot.macho"
+    install -m 0644 "$macho_stage2" "$target/boot/efi/macho/aura-stage2.pkg"
+    install -m 0644 "$macho_nv" "$target/boot/efi/macho/nv-config"
+  fi
 }
 
 # Repository names in pacman configuration FILE, in its order.

@@ -13,7 +13,7 @@ import Foundation
     let config = try InstallConfiguration.decode(JSONSerialization.data(withJSONObject: value))
     precondition(config.volumeName == "Omarchy Test" && config.bootMode == "raw")
     for (key, bad) in [
-      ("schema", 1), ("schema", true), ("bootMode", "macho"),
+      ("schema", 1), ("schema", true), ("bootMode", "unknown"),
       ("stage2Path", "../boot.bin"), ("systemUUID", "disk0s1"),
       ("espUUID", "00000000-0000-0000-0000-000000000000"),
       ("volumeName", "../macOS"), ("volumeName", "bad\nname"), ("volumeName", ""),
@@ -27,6 +27,17 @@ import Foundation
         preconditionFailure("accepted invalid \(key)")
       } catch {}
     }
+    var macho = value
+    macho["bootMode"] = "macho"
+    macho["stage2Path"] = "m1n1/aura-stage2.pkg"
+    let machoConfig = try InstallConfiguration.decode(JSONSerialization.data(withJSONObject: macho))
+    precondition(machoConfig.bootMode == "macho")
+    var badMacho = macho
+    badMacho["stage2Path"] = "m1n1/boot.bin"
+    do {
+      _ = try InstallConfiguration.decode(JSONSerialization.data(withJSONObject: badMacho))
+      preconditionFailure("accepted raw stage2 path for Mach-O mode")
+    } catch {}
     precondition(config.allowCustomBootArguments == nil)
     for allowed in [false, true] {
       var scoped = value
@@ -61,6 +72,6 @@ import Foundation
         preconditionFailure("accepted invalid bootstrap \(key)")
       } catch {}
     }
-    print("PASS strict per-install configuration, raw-only mode, IDs, paths and missing fields")
+    print("PASS strict per-install configuration, raw/Mach-O modes, IDs, paths and missing fields")
   }
 }

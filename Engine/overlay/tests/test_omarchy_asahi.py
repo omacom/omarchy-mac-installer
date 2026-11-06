@@ -123,6 +123,7 @@ from omarchy_asahi import (  # noqa: E402
     fill_aurora_stage1,
     install_board_stage1,
     install_esp_board_layout,
+    macho_bundle_present,
     stub_installer,
     verify_default_boot,
 )
@@ -1972,6 +1973,28 @@ class BoardStage1Tests(unittest.TestCase):
             self.assertIn(b";m1n1/boot.bin", data)
             self.assertIn(self.UUID.encode(), data)
 
+    def test_a_neo_uses_the_macho_stage1_as_the_installed_boot_object(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = self.write_generic(root)
+            macho = b"authenticated Neo Mach-O stage 1"
+            package = {
+                "esp/aurora/stage1-j700.bin": j700_stage1(),
+                "esp/macho/aura-boot.macho": macho,
+            }
+            install_board_stage1("j700ap", "26.6.2", package.__getitem__, self.UUID, str(target), macho=True)
+            self.assertEqual(target.read_bytes(), macho)
+
+    def test_macho_stage1_is_refused_for_non_neo_or_when_missing(self):
+        with tempfile.TemporaryDirectory() as root:
+            target = self.write_generic(root)
+            with self.assertRaisesRegex(AsahiAdapterError, "only on the MacBook Neo"):
+                install_board_stage1("j613ap", "26.6.2", {}.__getitem__, self.UUID, str(target), macho=True)
+            self.assertEqual(target.read_bytes(), b"asahi stage 1")
+            package = {"esp/aurora/stage1-j700.bin": j700_stage1()}
+            with self.assertRaisesRegex(AsahiAdapterError, "aura-boot.macho"):
+                install_board_stage1("j700ap", "26.6.2", package.__getitem__, self.UUID, str(target), macho=True)
+            self.assertEqual(target.read_bytes(), b"asahi stage 1")
+
     def test_a_13_inch_m3_air_on_26_6_2_gets_the_filled_j613_stage1(self):
         import struct as _struct
         with tempfile.TemporaryDirectory() as root:
@@ -2068,6 +2091,11 @@ class EspBoardLayoutTests(unittest.TestCase):
         "esp/m1n1/boot.bin",
         "esp/m1n1/boot-j700.bin",
     ]
+    MACHO = [
+        "esp/macho/aura-boot.macho",
+        "esp/macho/aura-stage2.pkg",
+        "esp/macho/nv-config",
+    ]
 
     def test_common_image_uses_identical_layout_on_all_boards(self):
         members = ["esp/aurora/stage1.bin", "esp/m1n1/boot.bin", "esp/EFI/BOOT/BOOTAA64.EFI"]
@@ -2107,6 +2135,24 @@ class EspBoardLayoutTests(unittest.TestCase):
                     "esp/EFI/BOOT/BOOTAA64.EFI": "EFI/BOOT/BOOTAA64.EFI",
                     "esp/m1n1/boot.bin": "m1n1/boot.bin",
                 })
+
+    def test_a_complete_macho_bundle_is_kept_only_on_the_neo(self):
+        members = self.MEMBERS + self.MACHO
+        neo = esp_board_layout("j700ap", members)
+        self.assertEqual({name: neo[name] for name in self.MACHO},
+                         {name: name[4:] for name in self.MACHO})
+        for board in ("j613ap", "j314s"):
+            with self.subTest(board=board):
+                layout = esp_board_layout(board, members)
+                self.assertTrue(set(self.MACHO).isdisjoint(layout))
+
+    def test_a_partial_macho_bundle_is_refused_before_layout(self):
+        with self.assertRaisesRegex(AsahiAdapterError, "Mach-O bundle is incomplete"):
+            esp_board_layout("j700ap", self.MEMBERS + self.MACHO[:2])
+
+    def test_macho_bundle_presence_is_board_gated(self):
+        self.assertTrue(macho_bundle_present("j700ap", self.MACHO))
+        self.assertFalse(macho_bundle_present("j314s", self.MACHO))
 
     def test_a_neo_payload_without_its_stage2_is_refused(self):
         with self.assertRaisesRegex(AsahiAdapterError, "no esp/m1n1/boot-j700.bin for the MacBook Neo"):

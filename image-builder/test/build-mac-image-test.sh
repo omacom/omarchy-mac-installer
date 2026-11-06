@@ -1037,9 +1037,16 @@ fi
   printf 'authenticated raw Stage 1' >"$target/usr/share/m1n1-aurora/stage1/m1n1-raw.bin"
   printf 'legacy installer copy' >"$target/usr/share/aura/stage1/aura-raw.bin"
   printf 'assembled Stage 2' >"$target/boot/efi/m1n1/boot.bin"
+  mkdir -p "$target/usr/share/m1n1-aurora/macho"
+  printf 'authenticated Neo Mach-O Stage 1' >"$target/usr/share/m1n1-aurora/macho/aura-boot.macho"
+  printf 'authenticated Neo Mach-O Stage 2' >"$target/usr/share/m1n1-aurora/macho/aura-stage2.pkg"
+  printf 'x1n1.nv2=0\n' >"$target/usr/share/m1n1-aurora/macho/nv-config"
   stage_board_boot_payloads
   cmp "$target/usr/share/m1n1-aurora/stage1/m1n1-raw.bin" "$target/boot/efi/aurora/stage1-j700.bin" || exit 1
   cmp "$target/boot/efi/m1n1/boot.bin" "$target/boot/efi/m1n1/boot-j700.bin" || exit 1
+  cmp "$target/usr/share/m1n1-aurora/macho/aura-boot.macho" "$target/boot/efi/macho/aura-boot.macho" || exit 1
+  cmp "$target/usr/share/m1n1-aurora/macho/aura-stage2.pkg" "$target/boot/efi/macho/aura-stage2.pkg" || exit 1
+  cmp "$target/usr/share/m1n1-aurora/macho/nv-config" "$target/boot/efi/macho/nv-config" || exit 1
   rm "$target/usr/share/m1n1-aurora/stage1/m1n1-raw.bin"
   if (fail() { builder_fail "$@"; }; stage_board_boot_payloads) >/dev/null 2>&1; then
     exit 1

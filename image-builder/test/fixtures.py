@@ -122,9 +122,13 @@ def default_contents(layout: str | None = None) -> dict[str, dict[str, bytes]]:
         },
         "linux-aurora-headers": {f"usr/lib/modules/{RELEASE}/build/Makefile": b"# headers\n",
                                  f"usr/lib/modules/{RELEASE}/source": "build"},
-        # Like omacom/omarchy-pkgs#1513: Stage 2, the raw Stage 1 and its legacy installer copy.
+        # Like the published package: Stage 2, raw Stage 1, and the complete
+        # optional Neo Mach-O bundle plus its legacy installer copy.
         "m1n1-aurora": {"usr/lib/asahi-boot/m1n1.bin": b"m1n1 stage 2 payload",
                         "usr/share/m1n1-aurora/stage1/m1n1-raw.bin": raw_stage1(),
+                        "usr/share/m1n1-aurora/macho/aura-boot.macho": b"macho stage 1",
+                        "usr/share/m1n1-aurora/macho/aura-stage2.pkg": b"macho stage 2",
+                        "usr/share/m1n1-aurora/macho/nv-config": b"x1n1.nv2=0\n",
                         "usr/share/aura/stage1/aura-raw.bin": raw_stage1()},
         # Like the published package: U-Boot only, its device trees come from the kernel.
         "uboot-aurora": {"usr/lib/asahi-boot/u-boot-nodtb.bin": b"u-boot for apple silicon" * 8},
@@ -586,6 +590,12 @@ def make_root(root: Path, candidates: Path, layout: str | None = None, lane: str
     write(root, "boot/efi/m1n1/boot.bin", stage2)
     write(root, "boot/efi/m1n1/boot-j700.bin", stage2)
     write(root, "boot/efi/aurora/stage1-j700.bin", member("m1n1-aurora", "usr/share/m1n1-aurora/stage1/m1n1-raw.bin"))
+    for destination, source in (
+        ("boot/efi/macho/aura-boot.macho", "usr/share/m1n1-aurora/macho/aura-boot.macho"),
+        ("boot/efi/macho/aura-stage2.pkg", "usr/share/m1n1-aurora/macho/aura-stage2.pkg"),
+        ("boot/efi/macho/nv-config", "usr/share/m1n1-aurora/macho/nv-config"),
+    ):
+        write(root, destination, member("m1n1-aurora", source))
     write(root, "etc/m1n1.conf", "# m1n1 options\nchosen.asahi,efi-system-partition=EFI\nunknown=ignored\n")
     loader = pe_image({".text": b"Limine loader"})
     write(root, "usr/share/limine/BOOTAA64.EFI", loader)

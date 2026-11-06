@@ -12,16 +12,35 @@
     /// Recovery finished the installation and only the optional recovery
     /// account was skipped, so the handoff offers that account alone.
     public let accountDeferred: Bool?
+    /// More than one completed installation may be present.  The helper never
+    /// guesses in that case; the installer must choose a binding and inspect
+    /// again before it receives a handoff ticket.
+    public let choices: [RecoveryAccountChoice]?
 
     public init(
       ticket: String? = nil, target: RecoveryAccountTarget? = nil,
       record: RecoveryAccountRecord? = nil, message: String? = nil,
-      accountDeferred: Bool? = nil
+      accountDeferred: Bool? = nil, choices: [RecoveryAccountChoice]? = nil
     ) {
       self.ticket = ticket
       self.target = target
       self.record = record
       self.message = message
+      self.accountDeferred = accountDeferred
+      self.choices = choices
+    }
+  }
+
+  public struct RecoveryAccountChoice: Codable, Equatable, Sendable, Identifiable {
+    public let binding: String
+    public let target: RecoveryAccountTarget
+    public let accountDeferred: Bool
+
+    public var id: String { binding }
+
+    public init(binding: String, target: RecoveryAccountTarget, accountDeferred: Bool) {
+      self.binding = binding
+      self.target = target
       self.accountDeferred = accountDeferred
     }
   }
@@ -404,12 +423,12 @@
       return (group.uppercased(), esp.uppercased())
     }
 
-    static func discover(in workingDirectory: URL, binding: String? = nil) throws
-      -> CompletedRecoveryInstallation?
+    static func discoverAll(in workingDirectory: URL, binding: String? = nil) throws
+      -> [CompletedRecoveryInstallation]
     {
       let directory = workingDirectory.appendingPathComponent(
         "execution-journals", isDirectory: true)
-      guard FileManager.default.fileExists(atPath: directory.path) else { return nil }
+      guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
       let files = try FileManager.default.contentsOfDirectory(
         at: directory, includingPropertiesForKeys: nil
       ).filter {
@@ -458,6 +477,13 @@
           continue
         }
       }
+      return found
+    }
+
+    static func discover(in workingDirectory: URL, binding: String? = nil) throws
+      -> CompletedRecoveryInstallation?
+    {
+      let found = try discoverAll(in: workingDirectory, binding: binding)
       // Historical completed journals may name the same still-live target.
       let identities = Set(found.map { $0.target.systemUUID + ":" + $0.espUUID })
       guard identities.count <= 1 else {

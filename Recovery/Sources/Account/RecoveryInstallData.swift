@@ -98,11 +98,20 @@ public enum RecoveryInstallData {
       value["schema"] as? Int == 2,
       let files = value["files"] as? [String: [String: Any]]
     else { throw AccountSetupFailure("The old Recovery payload manifest is invalid.") }
-    let required: Set<String> = [
+    let rawRequired: Set<String> = [
       "raw/aura-raw.bin", "raw/boot.bin", "vendorfw/firmware.tar",
       "vendorfw/firmware.cpio", "vendorfw/manifest.txt",
     ]
-    let allowed = required.union(["vendorfw/u-boot/asmedia/asm2214a-apple.bin"])
+    let macho = Set(["macho/aura-boot.macho", "macho/aura-stage2.pkg", "macho/nv-config"])
+    let allowed = rawRequired.union(macho).union(["vendorfw/u-boot/asmedia/asm2214a-apple.bin"])
+    let configObject = (try? JSONSerialization.jsonObject(with: config)) as? [String: Any]
+    let bootMode = configObject?["bootMode"] as? String
+    var required = rawRequired
+    if bootMode == "macho" {
+      required.formUnion([
+        "macho/aura-boot.macho", "macho/aura-stage2.pkg", "macho/nv-config",
+      ])
+    }
     guard required.isSubset(of: files.keys), Set(files.keys).isSubset(of: allowed) else {
       throw AccountSetupFailure("The old Recovery payload inventory is invalid.")
     }

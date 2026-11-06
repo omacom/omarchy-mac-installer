@@ -77,6 +77,11 @@ limine = _load("apple_limine", "apple_limine.py")
 installed_system = _load("verify_installed_system", "verify_installed_system.py")
 # The raw Stage 1 the engine enrolls on a MacBook Neo.
 STAGE1 = "usr/share/m1n1-aurora/stage1/m1n1-raw.bin"
+MACHO_ESP = {
+    "boot/efi/macho/aura-boot.macho": "usr/share/m1n1-aurora/macho/aura-boot.macho",
+    "boot/efi/macho/aura-stage2.pkg": "usr/share/m1n1-aurora/macho/aura-stage2.pkg",
+    "boot/efi/macho/nv-config": "usr/share/m1n1-aurora/macho/nv-config",
+}
 test_image_pin = _load("test_image_pin", "test_image_pin.py")
 channel_set = _load("channel_set", "channel_set.py")
 
@@ -304,6 +309,27 @@ def check_installed_payloads(root: Path, candidates: Candidates) -> str:
     require(stage2.is_file() and not stage2.is_symlink()
             and stage2.read_bytes() == (root / "boot/efi/m1n1/boot.bin").read_bytes(),
             "the J700 Stage 2 does not match the inspected common bundle")
+    macho_source = [source for source in MACHO_ESP.values()
+                    if source in candidates.listing(candidates.boot_owners[STAGE1])]
+    require(not macho_source or len(macho_source) == len(MACHO_ESP),
+            "the authenticated Mach-O bundle is incomplete")
+    for installed_path, source_path in MACHO_ESP.items():
+        installed = root / installed_path
+        if source_path not in macho_source:
+            require(not installed.exists() and not installed.is_symlink(),
+                    f"/{installed_path} is present without an authenticated Mach-O bundle")
+            continue
+        expected = candidates.member(candidates.boot_owners[STAGE1], source_path)
+        require(expected, f"the authenticated Mach-O member /{source_path} is empty")
+        if source_path.endswith("/nv-config"):
+            require(expected in (b"x1n1.nv2=0\n", b"x1n1.nv2=1\n"),
+                    "the authenticated Mach-O NV configuration is invalid")
+        require(installed.is_file() and not installed.is_symlink()
+                and installed.read_bytes() == expected,
+                f"/{installed_path} does not match the authenticated Mach-O bundle")
+    if macho_source:
+        return (f"m1n1, U-Boot, the kernel, {len(candidates.dtbs())} device trees and "
+                "the Neo Mach-O bundle match the set's archives")
     return f"m1n1, U-Boot, the kernel and {len(candidates.dtbs())} device trees match the set's archives"
 
 

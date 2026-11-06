@@ -320,7 +320,12 @@ final class InstallerModel {
   }
 
   private var installationTask: Task<Void, Never>?
-  var bootSelection: BootSelection { BootSelection() }
+  var bootSelection: BootSelection {
+    guard let config = try? RecoveryActions.configuration.get(),
+      let mode = AuraBootMode(rawValue: config.bootMode)
+    else { return BootSelection() }
+    return BootSelection(machoEnabled: mode == .macho, nestedVirtualization: false)
+  }
 
   var steps: [String] {
     recoveryInterface

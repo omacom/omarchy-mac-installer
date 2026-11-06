@@ -153,6 +153,58 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse((app / "Contents/Resources/AuraPayloads").exists())
         self.assertTrue(all("--verify" in command for command in self.commands))
 
+    def test_stages_complete_macho_bundle_when_present(self):
+        macho = self.esp / "macho"
+        macho.mkdir()
+        (macho / "aura-boot.macho").write_bytes(b"macho stage1")
+        (macho / "aura-stage2.pkg").write_bytes(b"macho stage2")
+        (macho / "nv-config").write_bytes(b"x1n1.nv2=0\n")
+        result = self.stage()
+        config = result["configuration"]
+        self.assertEqual(config["bootMode"], "macho")
+        self.assertEqual(config["stage2Path"], "m1n1/aura-stage2.pkg")
+        payloads = self.system / recovery.INSTALL_DATA_DIRECTORY / "AuraPayloads"
+        self.assertEqual((payloads / "macho/aura-boot.macho").read_bytes(), b"macho stage1")
+        self.assertEqual((payloads / "macho/aura-stage2.pkg").read_bytes(), b"macho stage2")
+        manifest = json.loads((payloads / "manifest.json").read_text())
+        self.assertEqual(manifest["defaultMode"], "macho")
+        self.assertEqual(manifest["modes"]["macho"]["espPath"], "m1n1/aura-stage2.pkg")
+        self.assertEqual(manifest["modes"]["macho"]["nvConfigPath"], "m1n1/nv-config")
+        self.assertEqual((self.esp / "m1n1/aura-stage2.pkg").read_bytes(), b"macho stage2")
+        self.assertEqual((self.esp / "m1n1/nv-config").read_bytes(), b"x1n1.nv2=0\n")
+
+    def test_macho_mode_keeps_the_raw_stage1_repair_baseline_separate(self):
+        raw = b"raw Neo stage 1"
+        self.boot.write_bytes(b"installed Mach-O stage 1")
+        macho = self.esp / "macho"
+        macho.mkdir()
+        (macho / "aura-boot.macho").write_bytes(b"macho stage 1")
+        (macho / "aura-stage2.pkg").write_bytes(b"macho stage 2")
+        result = recovery.stage(self.installer, ESP, str(self.esp), run=self.fake_run, raw_stage1=raw)
+        payloads = self.system / recovery.INSTALL_DATA_DIRECTORY / "AuraPayloads"
+        self.assertEqual((payloads / "raw/aura-raw.bin").read_bytes(), b"raw Neo stage 1")
+        self.assertEqual(result["configuration"]["bootMode"], "macho")
+
+    def test_stages_nv2_off_config_when_macho_bundle_omits_one(self):
+        macho = self.esp / "macho"
+        macho.mkdir()
+        (macho / "aura-boot.macho").write_bytes(b"macho stage1")
+        (macho / "aura-stage2.pkg").write_bytes(b"macho stage2")
+        result = self.stage()
+        self.assertEqual(result["configuration"]["bootMode"], "macho")
+        self.assertEqual((self.esp / "m1n1/nv-config").read_bytes(), b"x1n1.nv2=0\n")
+        payloads = self.system / recovery.INSTALL_DATA_DIRECTORY / "AuraPayloads"
+        manifest = json.loads((payloads / "manifest.json").read_text())
+        self.assertEqual(manifest["modes"]["macho"]["nvConfigPath"], "m1n1/nv-config")
+        self.assertEqual((payloads / "macho/nv-config").read_bytes(), b"x1n1.nv2=0\n")
+
+    def test_rejects_partial_macho_bundle(self):
+        macho = self.esp / "macho"
+        macho.mkdir()
+        (macho / "aura-boot.macho").write_bytes(b"macho stage1")
+        with self.assertRaisesRegex(recovery.RecoveryError, "incomplete"):
+            self.stage()
+
     def test_neo_configuration_explicitly_allows_custom_boot_arguments(self):
         self.installer.sysinfo = SimpleNamespace(device_class="j700ap")
         result = self.stage()

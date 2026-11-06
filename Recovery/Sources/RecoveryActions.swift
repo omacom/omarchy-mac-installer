@@ -349,8 +349,11 @@ enum RecoveryActions {
     }
     let config = try configuration.get()
     try check(
-      selection.mode == .raw && !selection.nestedVirtualization,
-      "This installation includes raw boot mode only.")
+      selection.mode.rawValue == config.bootMode,
+      "The selected boot mode does not match this installation’s staged startup bundle.")
+    try check(
+      !selection.nestedVirtualization || selection.mode == .macho,
+      "Nested virtualization requires Mach-O boot mode.")
     try RecoveryOwnerResolver.verify(owner, current: resolveOwner())
     progress(0.05, "Verifying the installation files")
     let m = try manifest()
@@ -660,7 +663,10 @@ enum RecoveryActions {
       hasPendingInstallation: FileManager.default.fileExists(atPath: pendingInstallation.path),
       verifyBundle: {
         let config = try configuration.get()
-        let expected = try asset("raw/boot.bin", manifest: manifest())
+        guard let mode = AuraBootMode(rawValue: config.bootMode) else {
+          throw InstallConfigurationError.invalid
+        }
+        let expected = try asset(mode.stage2Path, manifest: manifest())
         let target = try esp().appendingPathComponent(config.stage2Path)
         try check(
           try Data(contentsOf: target) == expected,
@@ -677,7 +683,10 @@ enum RecoveryActions {
     try recoveryOnly()
     let record = try installed()
     let config = try configuration.get()
-    let expected = try asset("raw/boot.bin", manifest: manifest())
+    guard let mode = AuraBootMode(rawValue: config.bootMode) else {
+      throw InstallConfigurationError.invalid
+    }
+    let expected = try asset(mode.stage2Path, manifest: manifest())
     let target = try esp().appendingPathComponent(config.stage2Path)
     try check(
       try Data(contentsOf: target) == expected,
@@ -757,7 +766,8 @@ extension RecoveryActions {
       let record = try installed()
       guard let name = record["mode"] as? String, let mode = AuraBootMode(rawValue: name),
         let path = record["stage2Path"] as? String,
-        path == RecoveryBaseline.stage2Path, path == (try configuration.get()).stage2Path
+        path == (try configuration.get()).stage2Path,
+        path == (mode == .macho ? "m1n1/aura-stage2.pkg" : RecoveryBaseline.stage2Path)
       else {
         throw RecoveryFailure(message: "The installed boot mode is not recorded.")
       }
@@ -770,12 +780,43 @@ extension RecoveryActions {
         manifest: m, root: payloadRoot())
       files[path] = bytes
       let destination = try esp()
+      var auxiliaryPaths = Set<String>()
+      if mode == .macho {
+        // The NV2 switch is intentionally user-controlled.  Repair must put
+        // back a missing or malformed config, while retaining a valid choice
+        // made with `aurora-nv2 on|off`.
+        guard let modes = m["modes"] as? [String: [String: Any]],
+          let nvPath = modes["macho"]?["nvConfigPath"] as? String,
+          relative(nvPath)
+        else {
+          throw RecoveryFailure(
+            message: "This native bundle does not provide an NV configuration path.")
+        }
+        let baselineNV = try asset("macho/nv-config", manifest: m)
+        let off = Data("x1n1.nv2=0\n".utf8)
+        let on = Data("x1n1.nv2=1\n".utf8)
+        try check(
+          baselineNV == off || baselineNV == on,
+          "The recovery NV configuration is invalid.")
+        let nvTarget = try RecoveryBaseline.path(nvPath, beneath: destination)
+        let current =
+          FileManager.default.fileExists(atPath: nvTarget.path)
+          ? try RecoveryBaseline.read(nvTarget, maximum: 4096)
+          : nil
+        if current != off && current != on {
+          files[nvPath] = baselineNV
+          auxiliaryPaths.insert(nvPath)
+        }
+      }
       let backup = state.appendingPathComponent("recover-" + UUID().uuidString + ".before")
-      try RecoveryBaseline.restore(files: files, root: destination, backup: backup) {
+      try RecoveryBaseline.restore(
+        files: files, root: destination, backup: backup, startupStage2Path: path,
+        startupAuxiliaryPaths: auxiliaryPaths
+      ) {
         try atomic($0, to: $1)
       }
       print("Stage 2 and device firmware restored.")
-    case ["nv", "on"], ["nv", "off"]:
+    case ["nv", "on"], ["nv", "off"], ["nv2", "on"], ["nv2", "off"]:
       let record = try installed()
       try check(
         record["mode"] as? String == "macho", "Nested virtualization requires Mach-O boot mode.")
@@ -786,13 +827,21 @@ extension RecoveryActions {
         throw RecoveryFailure(
           message: "This native bundle does not provide an NV configuration path.")
       }
-      let target = try esp().appendingPathComponent(path)
+      // Validate every ESP path component before reading or replacing the
+      // user-controlled NV2 switch. This keeps the command bound to the
+      // authenticated manifest path even when an ESP contains a symlink.
+      let target = try RecoveryBaseline.path(path, beneath: esp())
       let enabled = arguments[1] == "on"
       let previous = try Data(contentsOf: target)
       try check(
         previous == Data("x1n1.nv2=0\n".utf8) || previous == Data("x1n1.nv2=1\n".utf8),
         "Unexpected NV configuration; it was left unchanged.")
-      try atomic(previous, to: state.appendingPathComponent("nv-" + UUID().uuidString + ".before"))
+      // Keep the legacy `nv` backup namespace stable while giving the explicit
+      // `nv2` spelling its own records for easier diagnosis.
+      try atomic(
+        previous,
+        to: state.appendingPathComponent(arguments[0] + "-" + UUID().uuidString + ".before")
+      )
       try atomic(Data("x1n1.nv2=\(enabled ? 1 : 0)\n".utf8), to: target)
       print("Nested virtualization \(enabled ? "enabled" : "disabled") for the next boot.")
     case ["debug", "on"], ["debug", "off"], ["proxy", "on"], ["proxy", "off"]:
@@ -806,7 +855,7 @@ extension RecoveryActions {
       print("Aura \(arguments[0]) \(arguments[1]) for the next boot.")
     default:
       throw RecoveryFailure(
-        message: "Usage: aura [recover | nv on/off | debug on/off | proxy on/off]")
+        message: "Usage: aura [recover | nv on/off | nv2 on/off | debug on/off | proxy on/off]")
     }
   }
   static func installCommand() throws {
@@ -824,6 +873,11 @@ extension RecoveryActions {
     let persistent = volume.appendingPathComponent("aura")
     try atomic(Data(script.utf8), to: persistent)
     try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: persistent.path)
+    let nv2Script =
+      "#!/bin/sh\nset -eu\nif [ \"$#\" -ne 1 ] || { [ \"$1\" != on ] && [ \"$1\" != off ]; }; then\n  echo \"usage: aurora-nv2 on|off\" >&2\n  exit 2\nfi\nexec \(command) --aura-command nv2 \"$1\"\n"
+    let nv2Persistent = volume.appendingPathComponent("aurora-nv2")
+    try atomic(Data(nv2Script.utf8), to: nv2Persistent)
+    try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: nv2Persistent.path)
     // Recovery's root can be read-only. Try its conventional local bin,
     // then install into its writable home and initialize new shell sessions.
     let local = URL(fileURLWithPath: "/usr/local/bin")
@@ -833,7 +887,15 @@ extension RecoveryActions {
       if !fm.fileExists(atPath: link.path) {
         try fm.createSymbolicLink(at: link, withDestinationURL: persistent)
       }
-      if (try? fm.destinationOfSymbolicLink(atPath: link.path)) == persistent.path { return }
+      let nv2Link = local.appendingPathComponent("aurora-nv2")
+      if !fm.fileExists(atPath: nv2Link.path) {
+        try fm.createSymbolicLink(at: nv2Link, withDestinationURL: nv2Persistent)
+      }
+      if (try? fm.destinationOfSymbolicLink(atPath: link.path)) == persistent.path
+        && (try? fm.destinationOfSymbolicLink(atPath: nv2Link.path)) == nv2Persistent.path
+      {
+        return
+      }
     } catch {}
     let home = URL(fileURLWithPath: NSHomeDirectory())
     let bin = home.appendingPathComponent("bin")
@@ -842,9 +904,14 @@ extension RecoveryActions {
     if !fm.fileExists(atPath: link.path) {
       try fm.createSymbolicLink(at: link, withDestinationURL: persistent)
     }
+    let nv2Link = bin.appendingPathComponent("aurora-nv2")
+    if !fm.fileExists(atPath: nv2Link.path) {
+      try fm.createSymbolicLink(at: nv2Link, withDestinationURL: nv2Persistent)
+    }
     try check(
-      (try? fm.destinationOfSymbolicLink(atPath: link.path)) == persistent.path,
-      "An existing aura command was left unchanged.")
+      (try? fm.destinationOfSymbolicLink(atPath: link.path)) == persistent.path
+        && (try? fm.destinationOfSymbolicLink(atPath: nv2Link.path)) == nv2Persistent.path,
+      "An existing Aurora command was left unchanged.")
     let line = "\n# Aurora Recovery command\nexport PATH=\"$HOME/bin:$PATH\"\n"
     for name in [".zprofile", ".zshrc", ".bash_profile", ".profile"] {
       let file = home.appendingPathComponent(name)

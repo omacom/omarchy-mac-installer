@@ -19,6 +19,7 @@ enum RecoveryBaseline {
 
   static func limit(_ name: String) -> Int {
     if name == "vendorfw/manifest.txt" { return 1 << 20 }
+    if name == "macho/nv-config" || name == "m1n1/nv-config" { return 4096 }
     return name == optionalVendorPath ? 16 << 20 : 256 << 20
   }
 
@@ -109,12 +110,27 @@ enum RecoveryBaseline {
   // attempted file in rollback because a writer can fail after replacing it.
   static func restore(
     files: [String: Data], root: URL, backup: URL,
+    startupStage2Path: String = RecoveryBaseline.stage2Path,
+    startupAuxiliaryPaths: Set<String> = [],
     write: (Data, URL) throws -> Void
   ) throws {
-    let required = Set([stage2Path] + vendorPaths)
+    let required = Set([startupStage2Path] + vendorPaths)
+    let allowedAuxiliary =
+      startupAuxiliaryPaths
+      .filter { !$0.isEmpty && !$0.contains("\0") }
+    guard
+      allowedAuxiliary.allSatisfy({
+        $0.split(separator: "/", omittingEmptySubsequences: false).allSatisfy {
+          !$0.isEmpty && $0 != "." && $0 != ".."
+        }
+      })
+    else {
+      throw RecoveryBaselineFailure(message: "Invalid recovery auxiliary file path.")
+    }
     let names = files.keys.sorted()
+    let allowed = required.union([optionalVendorPath]).union(allowedAuxiliary)
     guard required.isSubset(of: Set(names)),
-      Set(names).isSubset(of: required.union([optionalVendorPath]))
+      Set(names).isSubset(of: allowed)
     else {
       throw RecoveryBaselineFailure(
         message: "Recovery may restore only Stage 2 and its device firmware package.")

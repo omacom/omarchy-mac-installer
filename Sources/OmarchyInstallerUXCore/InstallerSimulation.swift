@@ -128,7 +128,8 @@
     ) async throws {}
     public func cancel() { lock.withLock { cancelled = true } }
 
-    public func inspectRecoveryAccount() async throws -> RecoveryAccountReply? {
+    public func inspectRecoveryAccount(binding: String? = nil) async throws -> RecoveryAccountReply?
+    {
       guard [.skippedRecoveryAccount, .startedRecoveryAccount].contains(scenario) else {
         return nil
       }

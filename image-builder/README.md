@@ -174,3 +174,21 @@ The zip's own sha256 cannot be here, since root.img holds this file. To map a re
 Every image requires the authenticated edge candidates `aurora-audio`, `alsa-ucm-conf-aurora`, `speakerguardd`, and `omarchy-aurora-firmware`. Their recipes and firmware ordering assets live in `omacom/omarchy-pkgs` (PR #1101); this repository does not rebuild private copies. Support packages retain signature, archive digest, source, and metadata checks; only this category accepts architecture `any`. Missing support fails before package transactions. Boot payload owners are the canonical `m1n1-aurora` and `uboot-aurora` packages.
 
 `omarchy-aurora-firmware` currently requires a systemd initramfs and rejects unsupported busybox hook sets at build time. Its canonical package also contains regulatory.db admission and rate-limited unsupported-country fallback. `m1n1-aurora` records its own qualification (omacom/omarchy-pkgs#1513): an edge build reaches the testing team unqualified, and rc or stable promotion waits for its hardware matrix (matched Stage 1 and Stage 2, and each retained Stage 1 under the new Stage 2); this installer does not bypass that gate.
+
+### Mach-O producer boundary
+
+The optional Neo Mach-O bundle is produced only from a built `m1n1-macho`
+checkout. After building the real outputs with
+`make -C m1n1-macho build/m1n1.macho build/m1n1-sptm-stage2.pkg`, run:
+
+```sh
+python3 image-builder/tools/build-m1n1-aurora-macho.py \
+  m1n1-macho package-staging-root --nv2 off
+```
+
+The producer refuses missing, empty, symlinked, or malformed inputs. It writes
+`usr/share/m1n1-aurora/macho/aura-boot.macho`, `aura-stage2.pkg`, and the
+explicit `nv-config` member below the staging root. The authenticated package
+recipe must install those files as members of `m1n1-aurora`; the image builder
+then copies them to the Neo ESP. This tool does not build m1n1-macho, sign
+packages, or claim hardware qualification.

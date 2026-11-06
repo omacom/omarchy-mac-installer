@@ -74,6 +74,15 @@ REQUIRED_OWNERS = {
     'usr/share/libalpm/scripts/limine-apple-gate': 'limine-mkinitcpio-hook',
     'usr/share/omarchy/default/limine/limine.conf': 'omarchy-settings',
 }
+# The Neo's SPTM/Mach-O boot bundle is carried by the same authenticated
+# m1n1-aurora archive.  It is optional while older candidate sets remain
+# installable, but when present all three members must be present and owned by
+# that package.  The image builder and engine then gate the bundle to J700.
+MACHO_OWNERS = {
+    'usr/share/m1n1-aurora/macho/aura-boot.macho': 'm1n1-aurora',
+    'usr/share/m1n1-aurora/macho/aura-stage2.pkg': 'm1n1-aurora',
+    'usr/share/m1n1-aurora/macho/nv-config': 'm1n1-aurora',
+}
 # A package the set took from an Omarchy channel's aarch64 repository, by its own file name.
 CHANNEL_URL = re.compile(r'https://pkgs\.omarchy\.org/(edge|rc|stable)/aarch64/([^/]+)')
 BAD_STATUS = re.compile(r'\b(BADSIG|ERRSIG|REVKEYSIG|EXPKEYSIG|EXPSIG|KEYREVOKED|KEYEXPIRED|SIGEXPIRED)\b')
@@ -228,6 +237,12 @@ def verify_payloads(payloads, policy):
             owners[path] = name
     for path, owner in REQUIRED_OWNERS.items():
         require(owners.get(path) == owner, f'{path} is not in {owner}')
+    macho_present = {path for path in MACHO_OWNERS if path in owners}
+    require(not macho_present or macho_present == set(MACHO_OWNERS),
+            'm1n1-aurora Mach-O bundle is incomplete')
+    for path, owner in MACHO_OWNERS.items():
+        if path in owners:
+            require(owners[path] == owner, f'{path} is not in {owner}')
     kernels = [p for p in payloads.get('linux-aurora', ()) if PurePosixPath(p).match('usr/lib/modules/*/vmlinuz')]
     require(len(kernels) == 1, 'linux-aurora does not carry one kernel')
     release = PurePosixPath(kernels[0]).parts[3]

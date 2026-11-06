@@ -522,7 +522,7 @@
   /// replays a recorded journal. Neither ever hands a credential back.
   public protocol InstallerEnvironment: Sendable {
     var isSimulation: Bool { get }
-    func inspectRecoveryAccount() async throws -> RecoveryAccountReply?
+    func inspectRecoveryAccount(binding: String?) async throws -> RecoveryAccountReply?
     func prepareRecoveryHandoff(ticket: String) async throws -> RecoveryAccountReply
     func prepareRecoveryAccount(ticket: String, username: String, password: Data) async throws
       -> RecoveryAccountReply
@@ -587,7 +587,8 @@
   }
 
   extension InstallerEnvironment {
-    public func inspectRecoveryAccount() async throws -> RecoveryAccountReply? { nil }
+    public func inspectRecoveryAccount(binding: String? = nil) async throws -> RecoveryAccountReply?
+    { nil }
     public func prepareRecoveryHandoff(ticket: String) async throws -> RecoveryAccountReply {
       throw AccountSetupFailure("Recovery handoff is unavailable in this environment.")
     }
