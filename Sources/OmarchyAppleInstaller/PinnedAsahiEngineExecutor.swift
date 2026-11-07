@@ -798,7 +798,40 @@
         throw PinnedAsahiEngineExecutionError.unsafeTranscript
       }
       Darwin.close(descriptor)
+      if status.st_size > 0, try retireUnplannedJournal(journal) {
+        let fresh = Darwin.open(
+          journal.path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+          S_IRUSR | S_IWUSR)
+        guard fresh >= 0 else {
+          throw PinnedAsahiEngineExecutionError.unsafeTranscript
+        }
+        Darwin.close(fresh)
+      }
       return journal
+    }
+
+    private func retireUnplannedJournal(_ journal: URL) throws -> Bool {
+      guard
+        let data = try? readTranscript(journal),
+        let transcript = try? AppleInstallerTrustCore().validateEngineTranscript(data),
+        transcript.plan == nil
+      else { return false }
+
+      // A rejected admission can retain a snapshot-constrained inventory.
+      // Keep its evidence, but let the next attempt check the live bounds.
+      let retired = journal.deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("retired-execution-journals", isDirectory: true)
+      if !FileManager.default.fileExists(atPath: retired.path) {
+        try FileManager.default.createDirectory(
+          at: retired, withIntermediateDirectories: false,
+          attributes: [.posixPermissions: 0o700])
+      }
+      try validateJournalDirectory(retired)
+      let name =
+        journal.deletingPathExtension().lastPathComponent
+        + "-unplanned-\(UUID().uuidString.lowercased()).jsonl"
+      try FileManager.default.moveItem(at: journal, to: retired.appendingPathComponent(name))
+      return true
     }
 
     private func validateJournalDirectory(_ directory: URL) throws {

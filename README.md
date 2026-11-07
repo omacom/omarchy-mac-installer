@@ -124,7 +124,7 @@ If a removal record is unfinished, the app will not install or remove again unti
 
 **Recover a failed or interrupted install.**
 
-- A failed disk-space step reports that the disk has not been changed. Use **Check available space** to make a new plan.
+- A failed disk-space step reports that the disk has not been changed. Use **Check available space** to make a new plan. If no installation plan was recorded, the helper archives the old check under `/var/db/org.omarchy.installer/retired-execution-journals/` and starts a fresh journal. Records that already contain a plan stay available for resume.
 - If Apple's startup authorization step fails, use **Retry Recovery authorization**; the app first rechecks the plan, the installed files and the last completed step and cannot resize the disk or rewrite the system in the retry.
 - To start over, quit the app and reopen it, or use **Start over**. A simulation-only **Reset simulation** exists in debug builds.
 

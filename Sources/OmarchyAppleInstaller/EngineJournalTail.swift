@@ -37,6 +37,7 @@
     private let sink: any EngineJournalProgressSink
 
     private var offset: UInt64 = 0
+    private var fileIdentity: (device: dev_t, inode: ino_t)?
     private var task: Task<Void, Never>?
     private var disabled = false
 
@@ -106,6 +107,14 @@
         return
       }
 
+      // A retry can replace a rejected inventory at the same journal path.
+      // Replay sequence 1 so the app also drops the old progress buffer.
+      if let previous = fileIdentity,
+        previous.device != status.st_dev || previous.inode != status.st_ino
+      {
+        offset = 0
+      }
+      fileIdentity = (status.st_dev, status.st_ino)
       let size = UInt64(max(0, status.st_size))
       guard size > offset else {
         return

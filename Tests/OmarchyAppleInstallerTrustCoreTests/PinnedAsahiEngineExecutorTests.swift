@@ -163,6 +163,45 @@
       XCTAssertEqual(try Data(contentsOf: journals[0]), fixture.transcript)
     }
 
+    func testRetryAfterSpaceCheckFailureStartsFreshAndPreservesTheOldInventory() async throws {
+      let stale = retryJournal(includePlan: false)
+      let fixture = try makeFixture(expectedJournal: Data())
+      defer { try? FileManager.default.removeItem(at: fixture.root) }
+      try seedJournal(stale, in: fixture.root)
+
+      let result = try await rootExecutor().execute(
+        fixture.package, authorization: try machineOwnerAuthorization())
+
+      XCTAssertEqual(result, fixture.transcript)
+      let retired = fixture.root.appendingPathComponent("retired-execution-journals")
+      let archives = try FileManager.default.contentsOfDirectory(
+        at: retired, includingPropertiesForKeys: nil)
+      XCTAssertEqual(archives.count, 1)
+      XCTAssertEqual(try Data(contentsOf: XCTUnwrap(archives.first)), stale)
+      XCTAssertEqual(try journalEntries(in: fixture.root).count, 1)
+    }
+
+    func testPlannedAndInvalidJournalsStayAvailableToTheEngine() async throws {
+      for existing in [
+        retryJournal(includePlan: true),
+        retryJournal(includePlan: true, withEvent: true),
+        Data("invalid journal\n".utf8),
+        Data(retryJournal(includePlan: false).dropLast()),
+      ] {
+        let fixture = try makeFixture(expectedJournal: existing)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try seedJournal(existing, in: fixture.root)
+
+        let result = try await rootExecutor().execute(
+          fixture.package, authorization: try machineOwnerAuthorization())
+
+        XCTAssertEqual(result, fixture.transcript)
+        XCTAssertFalse(
+          FileManager.default.fileExists(
+            atPath: fixture.root.appendingPathComponent("retired-execution-journals").path))
+      }
+    }
+
     func testInstallHandsTheEngineOnlyTheVerifiedImportedDecoder() async throws {
       let fixture = try makeFixture()
       defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -635,7 +674,8 @@
       includeRestoreImage: Bool = true,
       includeRecoveryCapability: Bool = true,
       includeRecoveryTemplate: Bool = true,
-      imageNativeRecovery: Bool = false
+      imageNativeRecovery: Bool = false,
+      expectedJournal: Data? = nil
     ) throws -> PinnedExecutorFixture {
       let root = FileManager.default.temporaryDirectory.appendingPathComponent(
         "omarchy-pinned-executor-\(UUID().uuidString.lowercased())",
@@ -740,6 +780,7 @@
             ;;
           *) exit 70 ;;
         esac
+        \(expectedJournal == nil ? "" : #"/usr/bin/cmp "$PWD/expected-journal" "$OMARCHY_ENGINE_JOURNAL" || exit 89"#)
         /bin/cp "$PWD/transcript.jsonl" "$OMARCHY_ENGINE_JOURNAL"
         \(checkpointCommands.joined(separator: "\n"))
         \(standardError == nil ? "" : #"/bin/cat "$PWD/stderr.txt" >&2"#)
@@ -762,6 +803,10 @@
           standardError,
           to: bundleSource.appendingPathComponent("stderr.txt")
         )
+      }
+      if let expectedJournal {
+        try writePrivate(
+          expectedJournal, to: bundleSource.appendingPathComponent("expected-journal"))
       }
 
       let engineURL = packageURL.appendingPathComponent("engine.tar.gz")
@@ -818,6 +863,49 @@
         ),
         transcript: transcript
       )
+    }
+
+    private func seedJournal(_ data: Data, in root: URL) throws {
+      let directory = journalDirectory(root)
+      try FileManager.default.createDirectory(
+        at: directory, withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o700])
+      let name = String(repeating: "b", count: 64) + ".jsonl"
+      try data.write(to: directory.appendingPathComponent(name))
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o600], ofItemAtPath: directory.appendingPathComponent(name).path)
+    }
+
+    private func retryJournal(includePlan: Bool, withEvent: Bool = false) -> Data {
+      let layout = InstallerDigest.lengthPrefixedSHA256([
+        "disk0", "resize", "disk0s2", "524312576", "494384795648",
+      ]).rawValue
+      let minimum = includePlan ? 350_000_000_000 : 494_384_795_648
+      let engine = "sha256:" + String(repeating: "d", count: 64)
+      let metadata = "sha256:" + String(repeating: "e", count: 64)
+      let payload = "sha256:" + String(repeating: "f", count: 64)
+      let plan = InstallerDigest.lengthPrefixedSHA256([
+        "apple,j314s", "disk0", layout, "resize", "disk0s2",
+        "394909108224", "100000000000", "v0.9.2", engine, metadata, payload,
+        "enterOneTrueRecovery,authenticateMachineOwner",
+      ]).hexadecimal
+      var lines = [
+        #"{"schema_version":1,"sequence":1,"type":"inspection","payload":{"device_identifier":"apple,j314s","support":"supported"}}"#,
+        #"{"schema_version":1,"sequence":2,"type":"inventory","payload":{"layout_digest":"\#(layout)","system_store_identifier":"disk0","candidates":[{"kind":"resize","source_identifier":"disk0s2","offset_bytes":524312576,"length_bytes":494384795648,"minimum_install_bytes":40000000000,"minimum_container_bytes":\#(minimum)}]}}"#,
+      ]
+      if includePlan {
+        lines.append(
+          #"{"schema_version":1,"sequence":3,"type":"plan","payload":{"plan_digest":"\#(plan)","device_identifier":"apple,j314s","store_identifier":"disk0","layout_digest":"\#(layout)","candidate_kind":"resize","source_identifier":"disk0s2","offset_bytes":394909108224,"length_bytes":100000000000,"engine_version":"v0.9.2","engine_digest":"\#(engine)","metadata_digest":"\#(metadata)","payload_digest":"\#(payload)","required_human_steps":["enterOneTrueRecovery","authenticateMachineOwner"]}}"#
+        )
+      }
+      if withEvent {
+        lines.append(
+          #"{"schema_version":1,"sequence":4,"type":"event","payload":{"plan_digest":"\#(plan)","name":"apfs_preparation_started"}}"#
+        )
+      }
+      let data = Data((lines.joined(separator: "\n") + "\n").utf8)
+      XCTAssertNoThrow(try AppleInstallerTrustCore().validateEngineTranscript(data))
+      return data
     }
 
     private func readOnlyJournal(withEvent: Bool = false) -> Data {

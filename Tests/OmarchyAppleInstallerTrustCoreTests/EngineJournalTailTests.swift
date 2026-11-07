@@ -82,6 +82,25 @@
       XCTAssertEqual(sink.text, "only-line\n")
     }
 
+    func testTailerReplaysAReplacementJournalFromTheBeginning() async throws {
+      let journal = temporaryJournalURL()
+      defer { try? FileManager.default.removeItem(at: journal) }
+      let sink = RecordingJournalSink()
+      let tailer = EngineJournalTailer(
+        journalURL: journal, expectedOwner: geteuid(), pollInterval: .seconds(30), sink: sink)
+
+      try write("old inventory\n", to: journal, append: false)
+      await tailer.start()
+      await tailer.stop()
+      XCTAssertEqual(sink.text, "old inventory\n")
+
+      try write("new inventory\nplan\n", to: journal, append: false)
+      await tailer.start()
+      await tailer.stop()
+
+      XCTAssertEqual(sink.text, "old inventory\nnew inventory\nplan\n")
+    }
+
     func testForeignOwnerStopsForwarding() async throws {
       let journal = temporaryJournalURL()
       defer { try? FileManager.default.removeItem(at: journal) }
