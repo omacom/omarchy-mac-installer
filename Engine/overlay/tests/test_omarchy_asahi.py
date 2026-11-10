@@ -2589,5 +2589,61 @@ class NeoTouchIdCalibrationTests(unittest.TestCase):
             self.run_hook("j700ap", lambda device: self.fail("read"), partitions)
 
 
+class InstalledMacosWiFiTests(unittest.TestCase):
+    """collect_firmware takes Wi-Fi through omarchy_wifi (aurora-installer 34f90a5)."""
+
+    def collect(self, device_class, firmware, error=None):
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        image = Path(root.name, "VG", "usr/standalone/firmware/arm64eBaseSystem.dmg")
+        image.parent.mkdir(parents=True)
+        image.write_bytes(b"plain recovery image")
+        calls = []
+
+        class Stub:
+            def __init__(self, *args):
+                self.osi = SimpleNamespace(vgid="VG", recovery=root.name)
+                self.sysinfo = SimpleNamespace(device_class=device_class)
+
+            def load_identity(self):
+                pass
+
+            def install_files(self, cur_os):
+                pass
+
+            def collect_firmware(self, pkg):
+                calls.append(("collect", pkg))
+
+        def require():
+            calls.append(("require",))
+            if error is not None:
+                raise error
+
+        @contextmanager
+        def collectors(stub, upstream, machine):
+            calls.append(("collectors", stub is fake_stub, upstream, machine))
+            yield SimpleNamespace(require=require)
+
+        fake_stub = SimpleNamespace(StubInstaller=Stub, WiFiFWCollection=object, BluetoothFWCollection=object,
+                                    subprocess=subprocess)
+        with patch("omarchy_asahi.stub", fake_stub), patch("omarchy_asahi.asahi_firmware", firmware), \
+                patch("omarchy_asahi.omarchy_wifi.collectors", collectors):
+            stub_installer("sysinfo", "dutil", "osinfo").collect_firmware("pkg")
+        return calls
+
+    def test_collection_runs_inside_the_wifi_collectors_then_requires_radios(self):
+        calls = self.collect("j614sap", SimpleNamespace(wifi="upstream wifi"))
+        self.assertEqual(calls, [("collectors", True, "upstream wifi", "j614s"), ("collect", "pkg"), ("require",)])
+
+    def test_a_package_without_radios_stops_the_install(self):
+        import omarchy_wifi
+
+        with self.assertRaisesRegex(AsahiAdapterError, "Wi-Fi firmware collection failed: j616s: lacks"):
+            self.collect("j616sap", SimpleNamespace(wifi="upstream wifi"), omarchy_wifi.WiFiError("j616s: lacks"))
+
+    def test_without_upstream_wifi_nothing_is_rebound(self):
+        self.assertEqual(self.collect("j314sap", SimpleNamespace()), [("collect", "pkg")])
+
+
 if __name__ == "__main__":
     unittest.main()

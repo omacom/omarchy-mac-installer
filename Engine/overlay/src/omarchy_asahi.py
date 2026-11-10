@@ -32,6 +32,7 @@ import omarchy_als
 import omarchy_isp
 import omarchy_recovery
 import omarchy_planner
+import omarchy_wifi
 from omarchy_image import (
     WRITE_VERIFICATION, flush_device, hash_target, open_target, timing, write_image,
 )
@@ -679,6 +680,20 @@ def _neo_peripheral_collectors(installer):
             stub.AlsFWCollection, stub.ISPFWCollection, stub.subprocess = old_als, old_isp, old_process
 
 
+@contextlib.contextmanager
+def _installed_macos_wifi(installer):
+    """Collect BCM4388 rev C2 Wi-Fi, from the installed macOS when Recovery
+    lacks this Mac's board (omarchy_wifi)."""
+    upstream = getattr(asahi_firmware, "wifi", None)
+    if upstream is None or not hasattr(stub, "WiFiFWCollection"):
+        yield None
+        return
+    device = getattr(getattr(installer, "sysinfo", None), "device_class", "")
+    machine = device[:-2] if device.endswith("ap") else device
+    with omarchy_wifi.collectors(stub, upstream, machine) as radios:
+        yield radios
+
+
 def stub_installer(sysinfo, dutil, osinfo):
     """A StubInstaller that reads macOS 26 firmware's bootcaches.plist and
     writes Omarchy's own step2.sh as its Recovery setup."""
@@ -697,8 +712,14 @@ def stub_installer(sysinfo, dutil, osinfo):
     collect_firmware = installer.collect_firmware
 
     def collect_firmware_from_an_encrypted_recovery(pkg):
-        with _newer_trackpad_keys(), _neo_peripheral_collectors(installer):
+        with _newer_trackpad_keys(), _neo_peripheral_collectors(installer), \
+                _installed_macos_wifi(installer) as radios:
             result = _collect_firmware(pkg)
+            if radios is not None:
+                try:
+                    radios.require()
+                except omarchy_wifi.WiFiError as error:
+                    raise AsahiAdapterError(f"Wi-Fi firmware collection failed: {error}") from error
         required = getattr(installer, "required_neo_peripherals", [])
         _collect_neo_radios(installer, pkg, required="radio" in required)
         _collect_neo_touch_id(installer, pkg, required="touch-id" in required)
