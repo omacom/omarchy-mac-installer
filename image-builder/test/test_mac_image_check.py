@@ -832,5 +832,39 @@ class SyncDatabasesTest(unittest.TestCase):
                 with self.assertRaisesRegex(check.CheckError, message):
                     check.check_sync_databases(self.root)
 
+
+class EspGeneratorTest(unittest.TestCase):
+    """fstab's shared IDs are only safe with the generator in place (#219)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.installed = self.root / check.ESP_GENERATOR
+        self.installed.parent.mkdir(parents=True)
+        shutil.copyfile(ROOT / "builder/omarchy-esp-generator", self.installed)
+        self.installed.chmod(0o755)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_the_builder_generator_passes(self):
+        check.check_esp_generator(self.root)
+
+    def test_a_missing_generator_is_refused(self):
+        self.installed.unlink()
+        with self.assertRaisesRegex(check.CheckError, "is missing"):
+            check.check_esp_generator(self.root)
+
+    def test_a_generator_that_does_not_run_is_refused(self):
+        self.installed.chmod(0o644)
+        with self.assertRaisesRegex(check.CheckError, "not mode 0755"):
+            check.check_esp_generator(self.root)
+
+    def test_another_generator_is_refused(self):
+        self.installed.write_bytes(self.installed.read_bytes() + b"# changed\n")
+        with self.assertRaisesRegex(check.CheckError, "is not builder/omarchy-esp-generator"):
+            check.check_esp_generator(self.root)
+
+
 if __name__ == "__main__":
     unittest.main()
