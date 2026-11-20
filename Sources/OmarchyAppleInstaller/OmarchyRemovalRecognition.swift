@@ -55,6 +55,8 @@
       let kinds = middle.map { classify($0, snapshot) }
       let others = zip(middle, kinds).filter { $0.1 == .otherSystem }.map(\.0)
       if !others.isEmpty { throw refuse(RemovalText.otherSystem(others, snapshot)) }
+      let odd = zip(middle, kinds).filter { $0.1 == .stubWithUnknownVolumes }.map(\.0)
+      if !odd.isEmpty { throw refuse(RemovalText.unknownStubVolumes(odd, snapshot)) }
       let foreign = zip(middle, kinds).filter { $0.1 == .foreign }.map(\.0)
       if !foreign.isEmpty { throw refuse(RemovalText.foreign(foreign, snapshot)) }
       let stubs = zip(middle, kinds).filter { $0.1 == .stub }.map(\.0)
@@ -75,7 +77,7 @@
         macOS: macOS, target: target)
     }
 
-    enum Kind: Equatable { case stub, esp, linux, otherSystem, foreign }
+    enum Kind: Equatable { case stub, stubWithUnknownVolumes, esp, linux, otherSystem, foreign }
 
     static func classify(_ part: RemovalPartition, _ snapshot: RemovalSnapshot) -> Kind {
       switch part.type {
@@ -88,15 +90,31 @@
         let systems = volumes.filter { $0.roles == ["System"] }
         let data = volumes.filter { $0.roles == ["Data"] }
         guard !systems.isEmpty, !data.isEmpty else { return .foreign }
-        guard stubSizes.contains(where: { $0.contains(part.size) }), volumes.count == 4,
-          systems.count == 1,
+        guard stubSizes.contains(where: { $0.contains(part.size) }), systems.count == 1,
           data.count == 1, let group = systems[0].group, data[0].group == group,
           volumes.filter({ $0.roles == ["Preboot"] }).count == 1,
           volumes.filter({ $0.roles == ["Recovery"] }).count == 1
         else { return .otherSystem }
-        return .stub
+        return unrecognisedStubVolumes(containers[0]).isEmpty ? .stub : .stubWithUnknownVolumes
       default: return .foreign
       }
+    }
+
+    /// Software Update adds one permanent, ungrouped Update volume to a stub it
+    /// treats as a macOS.
+    static func unrecognisedStubVolumes(_ container: RemovalContainer) -> [RemovalVolume] {
+      let known: Set<[String]> = [["System"], ["Data"], ["Preboot"], ["Recovery"]]
+      let extra = container.volumes.filter { !known.contains($0.roles) }
+      let updates = extra.filter { $0.roles == ["Update"] && $0.group == nil }
+      return updates.count == 1 ? extra.filter { $0 != updates[0] } : extra
+    }
+
+    static func unrecognisedVolumeList(_ parts: [RemovalPartition], _ snapshot: RemovalSnapshot)
+      -> String
+    {
+      parts.flatMap { part in
+        snapshot.containers.filter { $0.storeUUID == part.uuid }.flatMap(unrecognisedStubVolumes)
+      }.map { "“\($0.name)”" }.joined(separator: ", ")
     }
 
     /// Unallocated space ≥ 1 GiB that sits behind a partition, so macOS can't grow into it.
@@ -596,6 +614,14 @@
 
     static func otherSystem(_ parts: [RemovalPartition], _ snapshot: RemovalSnapshot) -> String {
       "Found another system: \(list(parts, snapshot)). It looks like another macOS installation, and removal never deletes one."
+    }
+
+    static func unknownStubVolumes(_ parts: [RemovalPartition], _ snapshot: RemovalSnapshot)
+      -> String
+    {
+      let names = RemovalLayout.unrecognisedVolumeList(parts, snapshot)
+      return
+        "Found \(list(parts, snapshot)). It looks like an installation’s startup container, but removal doesn’t recognise \(names), so it stopped."
     }
 
     static func foreign(_ parts: [RemovalPartition], _ snapshot: RemovalSnapshot) -> String {

@@ -287,6 +287,8 @@
     var evidenceReads = 0
     var limitOverride: UInt64?
     var afterPlanning: ((FakeRemovalDisk) -> Void)?
+    /// A failing container delete first drops the container's last volume.
+    var deleteChangesBeforeFailing = false
     let failAt: Int?
     let skipGrowth: Bool
 
@@ -325,6 +327,14 @@
       return next - macOS.offset
     }
     func deleteContainer(_ stub: RemovalPartition, disk: String) throws {
+      if deleteChangesBeforeFailing, operations.count + 1 == failAt,
+        let index = state.containers.firstIndex(where: { $0.storeUUID == stub.uuid })
+      {
+        let container = state.containers[index]
+        state.containers[index] = RemovalContainer(
+          uuid: container.uuid, storeUUID: container.storeUUID,
+          volumes: Array(container.volumes.dropLast()))
+      }
       try record("container:\(stub.uuid)")
       state.partitions.removeAll { $0.uuid == stub.uuid }
       state.containers.removeAll { $0.storeUUID == stub.uuid }

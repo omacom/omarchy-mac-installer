@@ -320,6 +320,11 @@
           }
           return OmarchyRemovalReply(completed: true, message: message)
         } catch {
+          if (error as? RemovalFailure)?.nothingDeleted == true,
+            (try? discardRemovalRecord(journalURL, in: workingDirectory)) != nil
+          {
+            phase = "checking"
+          }
           let detail = (error as? RemovalFailure)?.message ?? "macOS could not complete removal."
           let message: String
           if phase == "checking" {
@@ -871,6 +876,12 @@
     let file = try FileHandle(forWritingTo: record)
     try file.synchronize()
     try file.close()
+    try synchronizeDirectory(workingDirectory)
+  }
+
+  /// For a removal that proved it deleted nothing, so it blocks nothing later.
+  func discardRemovalRecord(_ record: URL, in workingDirectory: URL) throws {
+    try FileManager.default.removeItem(at: record)
     try synchronizeDirectory(workingDirectory)
   }
 

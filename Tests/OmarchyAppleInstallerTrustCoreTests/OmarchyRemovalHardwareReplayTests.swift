@@ -53,6 +53,24 @@
       assertReadOnly(mac)
     }
 
+    /// The same Mac on 2026-11-20 (macOS 27.2.1), set to start up from Omarchy,
+    /// after Software Update gave the stub a permanent Update volume (disk3s5).
+    func testConvergedInstallWithTheUpdateVolumeSoftwareUpdateAdded() throws {
+      let mac = try CapturedMac("update-volume", capture: "m1-pro-2026-11-20")
+      let plan = try OmarchyRemovalPlan(disks: mac.makeOperator())
+      XCTAssertEqual(plan.kind, .installation)
+      XCTAssertEqual(plan.installation?.name, "Omarchy")
+      XCTAssertEqual(
+        plan.members.map(\.identifier), ["disk0s3", "disk0s4", "disk0s5", "disk0s6"])
+      XCTAssertEqual(plan.macOS.identifier, "disk0s2")
+      XCTAssertEqual(plan.reclaimBytes, 500_999_127_040)
+      XCTAssertEqual(plan.startup, .other("Omarchy"))
+      try assertConfirmed(plan, esp: "a18f074b-b866-4c19-85be-8efb5f991868")
+      XCTAssertEqual(mac.createdMountPoints, [])
+      XCTAssertEqual(mac.opened, [["/Volumes/Omarchy", "disk3s2"]])
+      assertReadOnly(mac)
+    }
+
     func testCapturedStartupDiskIsTheRunningMacOS() throws {
       for label in ["legacy", "converged-before"] {
         let plan = try OmarchyRemovalPlan(disks: CapturedMac(label).makeOperator())
@@ -140,9 +158,12 @@
     private let scratch: URL
     private let lock = NSLock()
 
-    init(_ label: String, diskutilRefusesMount: Set<String> = []) throws {
+    init(
+      _ label: String, capture: String = "m1-pro-2026-09-28",
+      diskutilRefusesMount: Set<String> = []
+    ) throws {
       let fixtures = try XCTUnwrap(Bundle.module.url(forResource: "Fixtures", withExtension: nil))
-      directory = fixtures.appendingPathComponent("m1-pro-2026-09-28/\(label)")
+      directory = fixtures.appendingPathComponent("\(capture)/\(label)")
       self.diskutilRefusesMount = diskutilRefusesMount
       scratch = FileManager.default.temporaryDirectory.appendingPathComponent(
         "removal-replay-\(UUID())")
