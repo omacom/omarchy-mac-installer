@@ -19,6 +19,14 @@ struct AuthorizationPrompt: Equatable {
 
   var title: String { purpose == .repair ? "Authorize startup disk" : "Finish setup" }
 
+  /// Shown above the password request when installing: without this step the
+  /// Mac cannot start Omarchy, and Startup Security Utility does not do it.
+  var introduction: String? {
+    purpose == .install
+      ? "This step lets this Mac start Omarchy. Click Install here to finish it. Don’t use Startup Security Utility instead."
+      : nil
+  }
+
   var message: String {
     var text =
       rejection.map { $0 + " Enter it again, or choose Utilities → Show Details." }

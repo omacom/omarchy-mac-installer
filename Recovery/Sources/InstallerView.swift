@@ -293,6 +293,12 @@ final class InstallerView: NSViewController, NSTextFieldDelegate, NSMenuItemVali
     }
     // Finish setup is the password request itself; refresh() fills in the copy.
     let stack = vertical(spacing: 16)
+    if let introduction = model.authorizationPrompt.introduction {
+      let intro = label(introduction, size: 13)
+      intro.textColor = OmarchyTheme.text
+      intro.preferredMaxLayoutWidth = 470
+      stack.addArrangedSubview(intro)
+    }
     let message = label("", size: 13)
     message.preferredMaxLayoutWidth = 470
     stack.addArrangedSubview(message)
