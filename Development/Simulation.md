@@ -23,6 +23,12 @@ All simulation controls live in the **Simulation** menu bar item. They are absen
 - **Dark appearance** is on by default to match Omarchy. Turn it off to test light mode.
 - **Install / Authorize** on the simulation sheet uses a dummy credential. There are no real account fields.
 
+## Keyboard
+
+Every screen opens with focus on the first field that still needs input: the password when the account name is known, on the removal review too, and the acknowledgement on the disk plan (Space ticks it). Tab moves between fields; buttons join in only with the macOS Keyboard navigation setting on.
+
+Command-Return presses a screen's main action, including Remove Omarchy and Shut Down, which Return leaves alone. Escape closes a sheet. On the main window it does what the close button does, and it stands aside while a size is being edited, during an installation or removal, and for a screen with its own Cancel.
+
 ## Scenario matrix
 
 | Group | Scenarios | Expected behavior |

@@ -23,6 +23,7 @@ struct OmarchyRemovalSheet: View {
   @State private var needsAccountFirst = false
   /// The person switched the helper off; the account first turns it back on.
   @State private var reenablingHelper = false
+  @FocusState private var focus: Field?
   @State private var contentHeight: CGFloat = 0
   @State private var footerHeight: CGFloat = 0
   @State private var measuredHeightCap: CGFloat?
@@ -31,7 +32,13 @@ struct OmarchyRemovalSheet: View {
   private var onControlFrame: ((String, CGRect) -> Void)?
   #if DEBUG
     @State private var scenario = RemovalPreviewScenario.success
+    @State private var simulatedSetupFailed = false
   #endif
+
+  private enum Field: Hashable {
+    case username
+    case password
+  }
 
   init(
     isSimulation: Bool, onBusyChanged: @escaping (Bool) -> Void,
@@ -76,7 +83,33 @@ struct OmarchyRemovalSheet: View {
 
   private var canRemove: Bool {
     ticket != nil && !busy && !submitted
-      && (isSimulation || (!username.isEmpty && !password.isEmpty))
+      && (!showsAccountFields || (!username.isEmpty && !password.isEmpty))
+  }
+
+  private var showsAccountFields: Bool {
+    #if DEBUG
+      if isSimulation { return scenario == .accountFirst }
+    #endif
+    return !isSimulation
+  }
+
+  /// Asks for the account before there is anything to confirm.
+  private var asksForAccountFirst: Bool {
+    needsAccountFirst && ticket == nil && showsAccountFields
+  }
+
+  private var firstEmptyField: Field? {
+    guard !submitted, showsAccountFields, ticket != nil || needsAccountFirst else { return nil }
+    return username.isEmpty ? .username : password.isEmpty ? .password : nil
+  }
+
+  /// The fields appear as the work that reveals them ends, so this waits a
+  /// moment for them to exist before moving focus.
+  private func focusFirstEmptyField() {
+    Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(50))
+      if let field = firstEmptyField { focus = field }
+    }
   }
 
   var body: some View {
@@ -111,9 +144,12 @@ struct OmarchyRemovalSheet: View {
       }
     }
     .interactiveDismissDisabled(busy)
-    .task { if !preloaded { await prepare() } }
+    .task { if preloaded { focusFirstEmptyField() } else { await prepare() } }
     .onDisappear { password = "" }
-    .onChange(of: busy) { _, value in onBusyChanged(value) }
+    .onChange(of: busy) { _, value in
+      onBusyChanged(value)
+      if !value { focusFirstEmptyField() }
+    }
     .onChange(of: simulationScenario) { _, value in
       #if DEBUG
         if !busy, let value, let selected = RemovalPreviewScenario(rawValue: value) {
@@ -149,7 +185,7 @@ struct OmarchyRemovalSheet: View {
         // helper is not mistaken for the ordinary first-time account step.
         HStack(alignment: .top, spacing: 8) {
           Image(systemName: "switch.2")
-          Text(message)
+          SentenceStack(text: message)
         }
         .font(OmarchyTheme.body)
         .foregroundStyle(OmarchyTheme.caution)
@@ -157,9 +193,8 @@ struct OmarchyRemovalSheet: View {
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("removal-message")
       } else {
-        Text(message)
+        SentenceStack(text: message)
           .font(OmarchyTheme.body)
-          .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("removal-message")
           .reportsFrame("removal-message", to: onControlFrame)
       }
@@ -184,10 +219,10 @@ struct OmarchyRemovalSheet: View {
 
   private var footer: some View {
     VStack(alignment: .leading, spacing: 18) {
-      if needsAccountFirst && ticket == nil && !isSimulation {
+      if asksForAccountFirst {
         accountFields
       }
-      if ticket != nil, !submitted, !isSimulation {
+      if ticket != nil, !submitted, showsAccountFields {
         accountFields
       }
       if busy {
@@ -201,15 +236,19 @@ struct OmarchyRemovalSheet: View {
       }
       HStack(spacing: 12) {
         Spacer()
-        Button(submitted || ticket == nil ? "Close" : "Cancel") {
-          password = ""
-          onClose()
+        if (submitted || ticket == nil) && !asksForAccountFirst {
+          // Nothing else to do here, so closing is the main action.
+          MainActionButton("Close", kind: .secondary, shortcut: .cancelAction, action: close)
+            .focusEffectDisabled()
+            .disabled(busy)
+        } else {
+          Button(submitted || ticket == nil ? "Close" : "Cancel", action: close)
+            .omarchySecondaryButton()
+            .keyboardShortcut(.cancelAction)
+            .focusEffectDisabled()
+            .disabled(busy)
         }
-        .omarchySecondaryButton()
-        .keyboardShortcut(.cancelAction)
-        .focusEffectDisabled()
-        .disabled(busy)
-        if needsAccountFirst && ticket == nil && !isSimulation {
+        if asksForAccountFirst {
           if reenablingHelper {
             Button(PlainLanguage.openLoginItems) {
               NSWorkspace.shared.open(PlainLanguage.loginItemsSettingsURL)
@@ -217,15 +256,15 @@ struct OmarchyRemovalSheet: View {
             .omarchySecondaryButton()
             .focusEffectDisabled()
           }
-          Button(continueTitle) { Task { await setUpHelperThenScan() } }
-            .omarchyPrimaryButton()
-            .keyboardShortcut(.defaultAction)
+          MainActionButton(continueTitle) { Task { await setUpHelperThenScan() } }
             .disabled(busy || username.isEmpty || password.isEmpty)
         }
         if let ticket, !submitted {
-          Button(ticket.kind == .freeSpace ? "Return Space" : "Remove Omarchy", role: .destructive)
-          { Task { await remove() } }
-          .omarchyDangerButton()
+          // Return is left off: the password field sits right above.
+          MainActionButton(
+            ticket.kind == .freeSpace ? "Return Space" : "Remove Omarchy", kind: .danger,
+            role: .destructive, shortcut: nil
+          ) { Task { await remove() } }
           .disabled(!canRemove)
           .accessibilityIdentifier("remove-omarchy")
           .reportsFrame("remove-omarchy", to: onControlFrame)
@@ -237,6 +276,11 @@ struct OmarchyRemovalSheet: View {
     .padding(.horizontal, 26)
     .padding(.top, 18)
     .padding(.bottom, 26)
+  }
+
+  private func close() {
+    password = ""
+    onClose()
   }
 
   private var continueTitle: String {
@@ -255,10 +299,13 @@ struct OmarchyRemovalSheet: View {
         .textFieldStyle(.roundedBorder)
         .textContentType(.username)
         .autocorrectionDisabled()
+        .focused($focus, equals: .username)
+        .onSubmit { focus = .password }
       SecureField("macOS password", text: $password)
         .textFieldStyle(.roundedBorder)
         .textContentType(.password)
         .privacySensitive()
+        .focused($focus, equals: .password)
     }
     .font(OmarchyTheme.body)
   }
@@ -288,7 +335,11 @@ struct OmarchyRemovalSheet: View {
     #if DEBUG
       if isSimulation {
         try? await Task.sleep(for: .milliseconds(350))
-        if scenario == .none || scenario == .ambiguous || scenario == .helperUnavailable {
+        if scenario == .accountFirst && !keepingAccount {
+          needsAccountFirst = true
+          simulatedSetupFailed = false
+          message = PlainLanguage.removalCredentialsFirst
+        } else if scenario == .none || scenario == .ambiguous || scenario == .helperUnavailable {
           message = scenario.message
         } else {
           (ticket, message) = scenario.previewTicket
@@ -345,6 +396,12 @@ struct OmarchyRemovalSheet: View {
   /// Sets the helper up with the typed account, then scans as usual.
   @MainActor private func setUpHelperThenScan() async {
     guard needsAccountFirst, !busy else { return }
+    #if DEBUG
+      if isSimulation {
+        await simulateHelperSetup()
+        return
+      }
+    #endif
     let authorization: MachineOwnerAuthorization
     do {
       authorization = try MachineOwnerAuthorization(
@@ -370,6 +427,27 @@ struct OmarchyRemovalSheet: View {
     await prepare(keepingAccount: true)
   }
 
+  #if DEBUG
+    /// The first try fails as a helper setup can, the next one goes on to
+    /// the confirmation.
+    @MainActor private func simulateHelperSetup() async {
+      struct SetupFailed: Error {}
+      busy = true
+      message = "Setting up the removal service…"
+      try? await Task.sleep(for: .milliseconds(500))
+      if !simulatedSetupFailed {
+        simulatedSetupFailed = true
+        busy = false
+        password = ""
+        message = PlainLanguage.removalHelperSetupMessage(for: SetupFailed())
+        return
+      }
+      busy = false
+      needsAccountFirst = false
+      await prepare(keepingAccount: true)
+    }
+  #endif
+
   @MainActor private func remove() async {
     guard canRemove, let ticket else { return }
     let authorization: MachineOwnerAuthorization?
@@ -392,7 +470,8 @@ struct OmarchyRemovalSheet: View {
           connectionLost()
           return
         }
-        completed = [.success, .asahi, .freeSpace, .startupDisk].contains(scenario)
+        completed = [.success, .asahi, .freeSpace, .startupDisk, .accountFirst, .noReply]
+          .contains(scenario)
         if [.interrupted, .reclaimFailed, .disconnected].contains(scenario) { onRequiresReview() }
         message = scenario.message
         return
@@ -545,6 +624,8 @@ private struct RemovalSheetHeightCapReader: NSViewRepresentable {
 #if DEBUG
   enum RemovalPreviewScenario: String, CaseIterable {
     case success = "Complete removal"
+    case accountFirst = "Removal service needs setup"
+    case noReply = "Removed, reply lost"
     case asahi = "Older omarchy-mac installation"
     case startupDisk = "Starts up from Omarchy"
     case startupFailed = "Startup disk not changed"
@@ -639,8 +720,10 @@ private struct RemovalSheetHeightCapReader: NSViewRepresentable {
 
     var message: String {
       switch self {
-      case .success:
+      case .success, .accountFirst:
         "“Omarchy” and its data have been removed. The freed space is now part of macOS."
+      case .noReply:
+        PlainLanguage.removalCompletedWithoutReply(freeSpace: false)
       case .asahi:
         "“Arch Linux ARM” and its data have been removed. The freed space is now part of macOS."
       case .freeSpace: "The free space is now part of macOS."

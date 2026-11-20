@@ -104,6 +104,18 @@
   }
 
   extension PlainLanguage {
+    /// A message split at its sentence ends, for showing one sentence a line.
+    public static func sentences(_ text: String) -> [String] {
+      var sentences: [String] = []
+      var start = text.startIndex
+      for match in text.matches(of: /([.?!…])\s+(?=[\p{Lu}“]|macOS)/) {
+        sentences.append(String(text[start..<match.1.endIndex]))
+        start = match.range.upperBound
+      }
+      sentences.append(String(text[start...]))
+      return sentences
+    }
+
     /// Shown when the reply was lost but the disk, with the helper's
     /// retirement or a helper that stays by design, proves the removal
     /// completed.
