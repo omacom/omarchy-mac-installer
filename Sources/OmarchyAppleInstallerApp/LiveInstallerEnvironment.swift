@@ -235,6 +235,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
 
   func preparePlan(
     omarchyBytes: UInt64?,
+    replacing: String?,
     progress: @escaping @Sendable (AssetProgressUpdate) -> Void
   ) async throws -> PlanPreparationDisplay {
     let (host, hasTranscript) = lock.withLock {
@@ -324,20 +325,26 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
 
     progress(AssetProgressUpdate(stage: .planning, rows: collector.rows()))
 
-    // Existing installs are never replaced or joined: report them and let
-    // the session refuse.
+    // An existing install is replaced only when the person chose to
+    // reinstall over exactly that one; otherwise report it and let the
+    // session refuse. A replace reuses the install's own space, so macOS is
+    // not resized.
     let existing = Self.existingInstalls(in: signedInspection.validated)
-    if !existing.isEmpty {
+    let recommendation: InstallerAllocationRecommendation
+    if let replacing {
+      recommendation = try InstallerAllocationRecommendation(replacing: replacing, in: inventory)
+    } else if !existing.isEmpty {
       return .existingInstallChoice(existing)
+    } else {
+      recommendation = try InstallerAllocationRecommendation(
+        inventory: inventory,
+        targetBytes: omarchyBytes ?? InstallerAllocationRecommendation.balancedTargetBytes,
+        reservedBytes: planningReserve,
+        snapshotConstraint: {
+          APFSSnapshotInspector().constraint(in: host.storage)
+        }
+      )
     }
-    let recommendation = try InstallerAllocationRecommendation(
-      inventory: inventory,
-      targetBytes: omarchyBytes ?? InstallerAllocationRecommendation.balancedTargetBytes,
-      reservedBytes: planningReserve,
-      snapshotConstraint: {
-        APFSSnapshotInspector().constraint(in: host.storage)
-      }
-    )
     let candidate = recommendation.candidate
     let requestedLengthBytes = recommendation.requestedLengthBytes
 
@@ -693,8 +700,10 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
     reservedBytes: UInt64 = 0
   ) -> PlanDisplay {
     let length = review.plan.lengthBytes
+    // A free extent or a replaced install sits beside macOS, which keeps its size.
+    let keepsMacOS = ["free", "replace"].contains(review.plan.candidateKind)
     let total =
-      review.plan.candidateKind == "free"
+      keepsMacOS
       ? host.storage.containerSizeBytes + recommendation.candidate.lengthBytes
       : max(host.storage.containerSizeBytes, length)
 
@@ -705,7 +714,7 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
       isResizable: review.plan.candidateKind != "replace",
       minimumBytes: recommendation.minimumBytes,
       maximumBytes: recommendation.maximumBytes,
-      fixedMacOSBytes: review.plan.candidateKind == "free" ? host.storage.containerSizeBytes : nil,
+      fixedMacOSBytes: keepsMacOS ? host.storage.containerSizeBytes : nil,
       macOSFreeBeforeAllocationBytes:
         review.plan.candidateKind == "resize"
         && recommendation.candidate.sourceIdentifier == host.storage.physicalStoreIdentifier

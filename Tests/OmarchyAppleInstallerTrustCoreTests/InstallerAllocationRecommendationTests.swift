@@ -691,6 +691,41 @@ final class InstallerAllocationRecommendationTests: XCTestCase {
     XCTAssertEqual(recommendation.candidate, free)
   }
 
+  /// A reinstall reuses the existing install's exact extent through the
+  /// engine's replace candidate, so macOS is not shrunk again. Numbers from
+  /// the 14-inch M2 Max on 2026-10-06, where removal grew macOS and the next
+  /// install shrank it back by the same 255,999,344,640 bytes in 2,740 s.
+  func testReplacingPlansTheExistingInstallsExactExtent() throws {
+    let resize = candidate(
+      kind: "resize", source: "disk0s2", length: 3_740_329_984_000,
+      minimumInstall: 76_562_825_216, minimumContainer: 3_564_621_529_088)
+    let replace = candidate(
+      kind: "replace", source: "disk0s3", length: 255_999_344_640,
+      minimumInstall: 76_562_825_216,
+      identityDigest: "sha256:" + String(repeating: "9", count: 64))
+    let inventory = inventory([resize, replace])
+
+    let recommendation = try InstallerAllocationRecommendation(
+      replacing: "disk0s3", in: inventory)
+
+    XCTAssertEqual(recommendation.candidate, replace)
+    XCTAssertEqual(recommendation.requestedLengthBytes, 255_999_344_640)
+    XCTAssertEqual(recommendation.minimumBytes, 255_999_344_640)
+    XCTAssertEqual(recommendation.maximumBytes, 255_999_344_640)
+    XCTAssertEqual(
+      try PinnedAsahiPlanRequest(
+        inventory: inventory, candidate: recommendation.candidate,
+        requestedLengthBytes: recommendation.requestedLengthBytes
+      ).candidateKind, "replace")
+    for missing in ["disk0s2", "disk0s9"] {
+      XCTAssertThrowsError(
+        try InstallerAllocationRecommendation(replacing: missing, in: inventory), missing
+      ) {
+        XCTAssertEqual($0 as? InstallerAllocationRecommendationError, .noEligibleCandidate)
+      }
+    }
+  }
+
   private func inventory(
     _ candidates: [ValidatedEngineCandidate]
   ) -> ValidatedEngineInventory {
