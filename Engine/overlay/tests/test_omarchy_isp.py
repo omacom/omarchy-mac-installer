@@ -23,7 +23,7 @@ class IspTests(unittest.TestCase):
     def test_extends_registry_without_changing_inherited_entries(self):
         custom = isp.SetFile(1, 0xABCD1234, "future_01XX", 100)
         result = isp.extended_setfiles([LEGACY, IMX558_1921, custom])
-        self.assertEqual(result, (LEGACY, IMX558_1921, custom, isp.IMX558_1925))
+        self.assertEqual(result, (LEGACY, IMX558_1921, custom, isp.IMX558_1925, isp.IMX958_2224, isp.IMX958_2226))
         self.assertEqual(isp.extended_setfiles(result), result)
         with self.assertRaises(isp.IspError):
             isp.extended_setfiles([isp.IMX558_1925._replace(size=64)])
@@ -33,6 +33,18 @@ class IspTests(unittest.TestCase):
         output = isp.extract(bytes(4096) + data, [LEGACY])
         self.assertEqual(output, {"apple/isp_1925_03XX.dat": data})
         self.assertEqual(len(next(iter(output.values()))), 52160)
+
+    def test_extracts_2224_full_kernel_size(self):
+        data = blob(isp.IMX958_2224, 0xCD)
+        output = isp.extract(bytes(4096) + data, [LEGACY])
+        self.assertEqual(output, {"apple/isp_2224_01XX.dat": data})
+        self.assertEqual(len(next(iter(output.values()))), 28672)
+
+    def test_extracts_2226_full_kernel_size(self):
+        data = blob(isp.IMX958_2226, 0xEF)
+        output = isp.extract(bytes(4096) + data, [LEGACY])
+        self.assertEqual(output, {"apple/isp_2226_02XX.dat": data})
+        self.assertEqual(len(next(iter(output.values()))), 28672)
 
     def test_both_daemons_and_legacy_only_directory(self):
         with tempfile.TemporaryDirectory() as tmp:

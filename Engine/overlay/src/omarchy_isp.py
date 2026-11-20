@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 """Extend the engine's ISP registry and scan both Apple camera daemons.
 
-Keep every inherited supported sensor. IMX558 1925's magic and length are
-the apple_isp driver's setfile entry; other unqualified sensor IDs are not
+Keep every inherited supported sensor. IMX558 1925's and IMX958 2224's and
+2226's magic and length are the apple_isp driver's setfile entries; other unqualified sensor IDs are not
 enabled merely because a byte pattern occurs in the daemon.
 """
 
@@ -13,6 +13,9 @@ import struct
 
 SetFile = namedtuple("SetFile", "sensor magic name size")
 IMX558_1925 = SetFile(0x558, 0x19250306, "1925_03XX", 0xCBC0)
+IMX958_2224 = SetFile(0x958, 0x22240106, "2224_01XX", 0x6FF4)
+# The M5 Max J714c IMX958 module (build rev 2) is tuned by 2226_02.
+IMX958_2226 = SetFile(0x958, 0x22260201, "2226_02XX", 0x6FF4)
 DAEMON_NAMES = ("appleh13camerad", "appleh16camerad")
 ALIGNMENT = 0x1000
 log = logging.getLogger(__name__)
@@ -23,10 +26,10 @@ class IspError(ValueError):
 
 
 def extended_setfiles(inherited):
-    """Preserve inherited entries, adding 1925 once without silent conflicts."""
+    """Preserve inherited entries, adding 1925, 2224 and 2226 once without silent conflicts."""
     entries = {}
     names = {}
-    for entry in (*inherited, IMX558_1925):
+    for entry in (*inherited, IMX558_1925, IMX958_2224, IMX958_2226):
         previous = entries.get(entry.magic)
         if previous is not None and tuple(previous) != tuple(entry):
             raise IspError(f"conflicting ISP registry entry {entry.magic:#x}")
