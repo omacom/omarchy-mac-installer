@@ -72,7 +72,7 @@ def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="pas
           profile=(), provenance_profile=None, name=None, inspection_digest=None, target_edit=None,
           sources=(("omarchy", "a" * 40),), runtime_sources=None, provenance_edit=None, legacy=False,
           inputs=INPUTS, pin=None, report_edit=None, recovery_app=None, builder_commit="c" * 40, grow=None,
-          lane="edge") -> None:
+          lane="edge", inputs_format="3") -> None:
     """A build directory as build-mac-image writes it; LEGACY, as a build before builds recorded their identity.
     With CHANNEL_INPUTS, a channel build: the image target names the channel set and database, INSPECTION the
     set it inspected, and PIN (the test image pin, empty for a public image) is recorded. BUILDER_COMMIT names
@@ -112,7 +112,7 @@ def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="pas
     if report_edit:
         report_edit(report)
     (out / "INSPECTION").write_text(json.dumps(report))
-    (out / "inputs").write_text("format=2\n" + "".join(f"{k}={v}\n" for k, v in inputs.items()))
+    (out / "inputs").write_text(f"format={inputs_format}\n" + "".join(f"{k}={v}\n" for k, v in inputs.items()))
     lines = ["format=2", "kind=mac-image", f"lane={lane}", "kernel=linux-aurora", "platform=apple-silicon",
              "builder_commit=" + builder_commit, "builder_tree_clean=true", f"inputs_sha256={sha(out / 'inputs')}"]
     lines += [f"input.{k}={v}" for k, v in inputs.items()]
@@ -160,6 +160,14 @@ class ChannelBuildDirectoryTest(unittest.TestCase):
         settings = dict(packages=CHANNEL_PACKAGES, candidates=CHANNEL_PACKAGES[:2], inputs=self.inputs, pin="",
                         sources=(("omarchy-mac", "b" * 40),), recovery_app=self.recovery)
         build(self.out, **{**settings, **options})
+
+    def test_an_older_build_with_a_format_2_record_still_checks(self):
+        # Before omarchy-pkgs built asahi-alarm's packages, the record pinned asahi-alarm too.
+        self.inputs.update(asahi_alarm_server="https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64",
+                           asahi_alarm_db_sha256="2" * 64)
+        self.build(inputs_format="2")
+        check.check_provenance("edge", self.out)
+        check.check_descriptor("edge", self.out)
 
     def test_a_channel_build_is_a_public_image_with_its_database_and_digests(self):
         self.build()
@@ -481,7 +489,7 @@ class BuildDirectoryTest(unittest.TestCase):
             check.image_name("edge", self.out)
 
     def test_a_candidate_installed_from_another_repository(self):
-        packages = [PACKAGES[0], ("uboot-aurora", "2026.07-1", "asahi-alarm", PACKAGES[1][3], PACKAGES[1][4]), PACKAGES[2]]
+        packages = [PACKAGES[0], ("uboot-aurora", "2026.07-1", "extra", PACKAGES[1][3], PACKAGES[1][4]), PACKAGES[2]]
         build(self.out, packages=packages)
         with self.assertRaisesRegex(check.CheckError, "uboot-aurora from the candidate set"):
             check.check_provenance("edge", self.out)
@@ -794,7 +802,7 @@ class BootTreeTest(unittest.TestCase):
 class SyncDatabasesTest(unittest.TestCase):
     """First boot resolves packages offline from the sync databases the image keeps."""
 
-    REPOSITORIES = ("omarchy", "asahi-alarm", "core", "extra", "alarm", "aur")
+    REPOSITORIES = ("omarchy", "core", "extra", "alarm", "aur")
 
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
@@ -831,6 +839,19 @@ class SyncDatabasesTest(unittest.TestCase):
                 edit()
                 with self.assertRaisesRegex(check.CheckError, message):
                     check.check_sync_databases(self.root)
+
+
+class ImagePackagesTest(unittest.TestCase):
+    def test_an_image_needs_the_aurora_tools(self):
+        packages = set(check.IMAGE_PACKAGES)
+        self.assertEqual(check.missing_image_packages(packages), [])
+        self.assertEqual(check.missing_image_packages(packages - {"aurora-scripts", "aurora-fwextract"}),
+                         ["aurora-fwextract", "aurora-scripts"])
+
+    def test_an_older_image_carries_the_asahi_names(self):
+        packages = set(check.IMAGE_PACKAGES) - {"aurora-scripts", "aurora-fwextract"} | {"asahi-scripts", "asahi-fwextract"}
+        self.assertEqual(check.missing_image_packages(packages), [])
+
 
 if __name__ == "__main__":
     unittest.main()

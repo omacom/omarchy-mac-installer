@@ -840,7 +840,6 @@ class InspectionTest(unittest.TestCase):
     def test_pacman_config_follows_the_runtimes_apple_silicon_template(self):
         templates = self.root / "usr/share/omarchy/default/pacman"
         apple = "[options]\nArchitecture = auto\n\n[omarchy]\nServer = https://pkgs.omarchy.org/edge/$arch\n"
-        apple += "\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
         apple += "".join(f"\n[{r}]\nInclude = /etc/pacman.d/mirrorlist\n" for r in ("core", "extra", "alarm", "aur"))
         (templates / "apple-silicon").mkdir()
         (templates / "apple-silicon/pacman-edge.conf").write_text(apple)
@@ -854,7 +853,6 @@ class InspectionTest(unittest.TestCase):
     def test_pacman_config_prefers_omarchy_macs_template(self):
         runtime = self.root / "usr/share/omarchy/default/pacman"
         apple = "[options]\nArchitecture = auto\n\n[omarchy]\nServer = https://pkgs.omarchy.org/edge/$arch\n"
-        apple += "\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
         apple += "".join(f"\n[{r}]\nInclude = /etc/pacman.d/mirrorlist\n" for r in ("core", "extra", "alarm", "aur"))
         (runtime / "apple-silicon").mkdir()
         (runtime / "apple-silicon/pacman-edge.conf").write_text(apple)
@@ -872,7 +870,6 @@ class InspectionTest(unittest.TestCase):
     def test_pacman_config_follows_the_runtimes_aarch64_apple_templates(self):
         runtime = self.root / "usr/share/omarchy/default/pacman"
         apple = "[options]\nArchitecture = auto\n\n[omarchy]\nServer = https://pkgs.omarchy.org/edge/$arch\n"
-        apple += "\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
         apple += "".join(f"\n[{r}]\nInclude = /etc/pacman.d/mirrorlist\n" for r in ("core", "extra", "alarm", "aur"))
         for directory in (runtime / "apple-silicon", self.root / "usr/share/omarchy-mac/pacman"):
             directory.mkdir(parents=True)
@@ -998,9 +995,8 @@ class RuntimeLayoutInspectionTest(unittest.TestCase):
                         self.assertEqual(report["result"], "passed", failed)
                         self.assertEqual(report["apple_package_list"], apple_list)
                         self.assertIn(pacman, report["checks"]["pacman-config"]["detail"])
-                        # The plain aarch64 template, without asahi-alarm, is not what the image installs.
+                        # The plain aarch64 template is not what the image installs.
                         template = root / "usr/share/omarchy/default/pacman/aarch64/pacman-edge.conf"
-                        self.assertNotIn("[asahi-alarm]", template.read_text())
                         (root / "etc/pacman.conf").write_bytes(
                             fixtures.test_image_pin.render(template.read_bytes(), fixtures.test_image_pin.pinned(summary)))
                         report = inspection.inspect(root, candidates, "edge", factory, trust=signer.trust)

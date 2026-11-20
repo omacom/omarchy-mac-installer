@@ -34,7 +34,7 @@ anything.
       the omarchy role (its package lists) and the omarchy-settings role (its
       pacman template)
   edge-dispatch-filter fetch-repos DIR
-      downloads asahi-alarm.db, core.db, extra.db, alarm.db and aur.db from
+      downloads core.db, extra.db, alarm.db and aur.db from
       the servers bin/mac-image-inputs resolves from into the empty DIR
   edge-dispatch-filter decide --db FILE --runtime ARCHIVE --settings ARCHIVE --payload FILE
                              [--repos DIR] [--builder FILE]
@@ -56,9 +56,9 @@ BUILDER_ARRAYS = ('BOOTSTRAP', 'PLATFORM_PACKAGES', 'APPLE_AUDIO')
 APPLE_LISTS = ('omarchy-aarch64-apple', 'omarchy-apple-silicon', 'omarchy-apple')
 LISTS = 'usr/share/omarchy/install/'
 # The repositories the inputs pin besides omarchy, and build-mac-image's
-# repository_order for a candidate set ([omarchy] last).
-OTHER_REPOS = ('asahi-alarm', 'core', 'extra', 'alarm', 'aur')
-PINNED_ORDER = OTHER_REPOS + ('omarchy',)
+# repository_order for a candidate set ([omarchy] first).
+OTHER_REPOS = ('core', 'extra', 'alarm', 'aur')
+PINNED_ORDER = ('omarchy',) + OTHER_REPOS
 # read_repository_order's template, in the archive filling the omarchy-settings role.
 TEMPLATE = 'usr/share/omarchy/default/pacman/aarch64-apple/pacman-{channel}.conf'
 SECTION = re.compile(r'^[ \t\r\f\v]*\[([^]]*)\][ \t\r\f\v]*$', re.MULTILINE)
@@ -105,8 +105,7 @@ def fetch_repos(directory, inputs=ROOT / 'bin/mac-image-inputs'):
     """The databases the builder resolves against besides omarchy.db, into the empty DIRECTORY."""
     directory.mkdir(parents=True, exist_ok=True)
     require(not any(directory.iterdir()), f'{directory} is not empty')
-    servers = {'asahi-alarm': bash_value(inputs, 'DEFAULT_ASAHI_ALARM_SERVER')[0]}
-    servers.update({r: bash_value(inputs, 'DEFAULT_ALARM_SERVER')[0] for r in OTHER_REPOS[1:]})
+    servers = {r: bash_value(inputs, 'DEFAULT_ALARM_SERVER')[0] for r in OTHER_REPOS}
     for repository, server in servers.items():
         url = db_url(server, repository)
         require(url.startswith('https://'), f'{repository} is not served over https')

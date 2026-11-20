@@ -25,6 +25,11 @@ name: Mac image
 # image installs). A caller grants contents: read, id-token: write and
 # attestations: write; the attestation's signer workflow is this file either
 # way, which is what the upload checks.
+#
+# builder-ref builds with an earlier image-builder from main instead of this
+# one: a 4.5 rc or stable respin, whose runtime's Apple template still names
+# [asahi-alarm], takes the last builder that pins it (format 2 inputs
+# records), the commit before omacom/omarchy-mac-installer#225 merged.
 
 on:
   workflow_call:
@@ -39,6 +44,10 @@ on:
         default: ''
       mac-revision:
         description: An rc or stable image's Mac revision (1 to 999); empty for 1
+        type: string
+        default: ''
+      builder-ref:
+        description: A main commit (full sha) whose image-builder builds the image; empty for this checkout's
         type: string
         default: ''
     outputs:
@@ -64,6 +73,10 @@ on:
         default: ''
       mac-revision:
         description: An rc or stable image's Mac revision (1 to 999); empty for 1
+        type: string
+        default: ''
+      builder-ref:
+        description: A main commit (full sha) whose image-builder builds the image; empty for this checkout's
         type: string
         default: ''
 
@@ -111,6 +124,7 @@ jobs:
       LANE: ${{ inputs.lane || 'edge' }}
       RELEASE_TAG: ${{ inputs.release-tag }}
       MAC_REVISION: ${{ inputs.mac-revision }}
+      BUILDER_REF: ${{ inputs.builder-ref }}
     outputs:
       name: ${{ steps.stage.outputs.name }}
       payload: ${{ steps.stage.outputs.payload }}
@@ -118,7 +132,20 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ${{ inputs.builder-ref }}
+          fetch-depth: ${{ inputs.builder-ref == '' && '1' || '0' }}
           persist-credentials: false
+
+      - name: Check the builder
+        run: |
+          set -euo pipefail
+          # Every builder this job runs is on main: an earlier one, never a branch's.
+          if [[ -n $BUILDER_REF ]]; then
+            [[ $BUILDER_REF =~ ^[0-9a-f]{40}$ ]] || { echo "::error::builder-ref must be a full commit sha, not $BUILDER_REF"; exit 1; }
+            [[ $(git rev-parse HEAD) == "$BUILDER_REF" ]] && git merge-base --is-ancestor HEAD origin/main ||
+              { echo "::error::builder-ref $BUILDER_REF is not a commit on main"; exit 1; }
+          fi
+          echo "builder: $(git rev-parse HEAD)"
 
       - name: Record the host
         run: |

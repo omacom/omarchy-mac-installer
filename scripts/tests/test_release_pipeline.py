@@ -932,6 +932,50 @@ class NativeRecovery(unittest.TestCase):
         self.assertIn('"$WORK/evidence/recovery-source.txt"', step_script(IMAGE, "Stage the image"))
 
 
+class BuilderRef(unittest.TestCase):
+    """A 4.5 respin builds with the last image-builder that pins asahi-alarm (builder-ref): a commit on main only."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+        git = lambda *args: subprocess.run(["git", "-C", str(self.repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+        self.git = git
+        git("init", "-q", "-b", "main")
+        git("-c", "user.name=t", "-c", "user.email=t@invalid", "commit", "-q", "--allow-empty", "-m", "old")
+        self.old = git("rev-parse", "HEAD")
+        git("-c", "user.name=t", "-c", "user.email=t@invalid", "commit", "-q", "--allow-empty", "-m", "new")
+        git("update-ref", "refs/remotes/origin/main", "HEAD")
+        git("checkout", "-q", "-b", "side", self.old)
+        git("-c", "user.name=t", "-c", "user.email=t@invalid", "commit", "-q", "--allow-empty", "-m", "side")
+        self.side = git("rev-parse", "HEAD")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def check(self, ref: str, checked_out: str) -> subprocess.CompletedProcess:
+        self.git("checkout", "-q", "--detach", checked_out)
+        env = {"PATH": os.environ["PATH"], "BUILDER_REF": ref}
+        return subprocess.run(["bash", "--noprofile", "--norc", "-e", "-c", step_script(IMAGE, "Check the builder")],
+                              cwd=self.repo, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+
+    def test_both_workflows_take_the_builder_ref(self):
+        self.assertIn("builder-ref: ${{ inputs.builder-ref }}", jobs(PIPELINE)["build"])
+        self.assertIn("ref: ${{ inputs.builder-ref }}", jobs(IMAGE)["build"])
+        self.assertIn("BUILDER_REF: ${{ inputs.builder-ref }}", jobs(IMAGE)["build"])
+
+    def test_an_earlier_main_commit_builds(self):
+        self.assertEqual(self.check("", self.old).returncode, 0)
+        result = self.check(self.old, self.old)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_branch_commit_or_a_short_ref_does_not(self):
+        for ref, checked_out in ((self.side, self.side), (self.old[:12], self.old), ("main", self.old)):
+            with self.subTest(ref=ref):
+                result = self.check(ref, checked_out)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("builder-ref", result.stdout + result.stderr)
+
+
 class Plan(unittest.TestCase):
     def plan(self, dry_run: str, ref: str, event: str = "workflow_dispatch") -> int:
         env = {"PATH": os.environ["PATH"], "DRY_RUN": dry_run, "GITHUB_REF": ref, "EVENT": event,

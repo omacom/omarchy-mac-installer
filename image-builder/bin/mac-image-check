@@ -111,12 +111,15 @@ IMAGE_LINKS = {
 }
 SYSTEM_USERS = {"nobody", "nfsnobody"}
 IMAGE_PACKAGES = (
-    "base", "sudo", "mkinitcpio", "asahi-scripts", "asahi-fwextract", "btrfs-progs",
-    "archlinuxarm-keyring", "asahi-alarm-keyring", "networkmanager", "iwd", "curl", "gnupg", "jq", "gum",
+    "base", "sudo", "mkinitcpio", "aurora-scripts", "aurora-fwextract", "btrfs-progs",
+    "archlinuxarm-keyring", "networkmanager", "iwd", "curl", "gnupg", "jq", "gum",
     "omarchy", "omarchy-settings", "omarchy-mac", "omarchy-mac-boot",
     "linux-aurora", "linux-aurora-headers", "m1n1-aurora", "uboot-asahi",
     "limine", "limine-mkinitcpio-hook", "limine-snapper-sync",
 )
+# The names an image built before omarchy-pkgs imported asahi-alarm's tools
+# carries for them.
+LEGACY_IMAGE_PACKAGES = {"aurora-scripts": "asahi-scripts", "aurora-fwextract": "asahi-fwextract"}
 NODE_PIN = ROOT / "builder/node.pin"
 
 
@@ -502,6 +505,12 @@ def runtime_providers(candidates: Path | None) -> dict[str, str]:
     return providers
 
 
+def missing_image_packages(packages: set[str], providers: dict[str, str] | None = None) -> list[str]:
+    filled = packages | {role for role, name in (providers or {}).items() if name in packages}
+    filled |= {name for name, legacy in LEGACY_IMAGE_PACKAGES.items() if legacy in packages}
+    return sorted((set(IMAGE_PACKAGES) | set(providers or {})) - filled)
+
+
 def check_state(root: Path, providers: dict[str, str] | None = None) -> None:
     check_provisioning(root)
     check_pristine(root)
@@ -512,9 +521,7 @@ def check_state(root: Path, providers: dict[str, str] | None = None) -> None:
         path = root / link
         require(path.is_symlink() and os.readlink(path) == destination, f"{link} is not the preset's enable link")
         require((root / destination.lstrip("/")).is_file(), f"{destination} is missing")
-    packages = installed_packages(root)
-    packages |= {role for role, name in (providers or {}).items() if name in packages}
-    missing = sorted((set(IMAGE_PACKAGES) | set(providers or {})) - packages)
+    missing = missing_image_packages(installed_packages(root), providers)
     require(not missing, f"the image lacks {missing}")
     require(not (root / "var/lib/systemd/random-seed").exists(), "the image keeps a random seed")
     require(not list((root / "etc/ssh").glob("ssh_host_*")) if (root / "etc/ssh").is_dir() else True,

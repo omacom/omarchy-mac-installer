@@ -42,8 +42,8 @@ def write_repo(path: Path, packages: dict[str, dict]) -> Path:
     return path
 
 
-EDGE_ORDER = ("omarchy", "asahi-alarm", "core", "extra", "alarm", "aur")
-CANDIDATE_ORDER = ("asahi-alarm", "core", "extra", "alarm", "aur", "omarchy")
+EDGE_ORDER = ("omarchy", "core", "extra", "alarm", "aur")
+LAST_ORDER = ("core", "extra", "alarm", "aur", "omarchy")
 
 
 def template(order) -> bytes:
@@ -95,7 +95,7 @@ class EdgeDispatchFilterTest(unittest.TestCase):
         cls.base = Path(cls.tmp.name)
         # Edge's order, [omarchy] first, and a runtime whose template puts it last.
         cls.database, cls.runtime, cls.settings = make_edge(cls.base / "edge")
-        cls.last = make_edge(cls.base / "edge-last", CANDIDATE_ORDER)
+        cls.last = make_edge(cls.base / "edge-last", LAST_ORDER)
         # Arch Linux ARM's extra carries hyprland, a vulkan-driver of its own, a walker too old for
         # omarchy-dev, a libthing new enough for walker and a provider of zram-generator.
         cls.repos = cls.base / "repos"
@@ -103,7 +103,7 @@ class EdgeDispatchFilterTest(unittest.TestCase):
         write_repo(cls.repos / "extra.db", {"hyprland": {}, "mesa": {"provides": ["vulkan-driver"]},
                                             "walker": {"version": "1.0-1"}, "libthing": {"version": "3.0-1"},
                                             "zram-tools": {"provides": ["zram-generator"]}})
-        for name in ("asahi-alarm", "core", "alarm", "aur"):
+        for name in ("core", "alarm", "aur"):
             write_repo(cls.repos / f"{name}.db", {f"{name}-placeholder": {}})
 
     @classmethod
@@ -153,7 +153,7 @@ class EdgeDispatchFilterTest(unittest.TestCase):
 
     def test_the_runtime_template_orders_the_repositories(self):
         self.assertEqual(self.decide()["repository_order"], list(EDGE_ORDER))
-        self.assertEqual(self.decide(edge=self.last)["repository_order"], list(CANDIDATE_ORDER))
+        self.assertEqual(self.decide(edge=self.last)["repository_order"], list(LAST_ORDER))
 
     def test_a_package_both_omarchy_and_alarm_carry_is_omarchys_on_edge(self):
         decision = self.decide("hyprland", "nvidia-utils")
@@ -174,9 +174,9 @@ class EdgeDispatchFilterTest(unittest.TestCase):
         for name, text, message in (
                 ("missing", False, "no Apple pacman template"),
                 ("short", template(tuple(n for n in EDGE_ORDER if n != "extra")),
-                 "names the repositories omarchy asahi-alarm core alarm aur, not"),
+                 "names the repositories omarchy core alarm aur, not"),
                 ("short-without-aur", template(tuple(n for n in EDGE_ORDER if n not in ("extra", "aur"))),
-                 "names the repositories omarchy asahi-alarm core alarm, not"),
+                 "names the repositories omarchy core alarm, not"),
                 ("extra", template(EDGE_ORDER + ("testing",)), "not the pinned"),
                 ("crlf-missing", template(EDGE_ORDER[1:]).replace(b"\n", b"\r\n"), "not the pinned")):
             with self.subTest(name), self.assertRaisesRegex(ValueError, message):
@@ -197,7 +197,7 @@ class EdgeDispatchFilterTest(unittest.TestCase):
         self.assertIn("archive=$candidates/$(candidate_archive omarchy-settings)", builder)
         self.assertEqual(edge_filter.TEMPLATE,
                          "usr/share/omarchy/default/pacman/aarch64-apple/pacman-{channel}.conf")
-        self.assertIn("repository_order=(" + " ".join(CANDIDATE_ORDER) + ")", builder)
+        self.assertIn("repository_order=(" + " ".join(EDGE_ORDER) + ")", builder)
 
     def test_without_the_other_repositories_it_over_matches(self):
         decision = self.decide("hyprland", "nvidia-utils", "claude-code", repos=False)
