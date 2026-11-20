@@ -402,6 +402,19 @@ def check_fstab(root: Path) -> None:
     require(actual == expected, "fstab does not mount the fixed UUIDs and four subvolumes")
 
 
+ESP_GENERATOR = "usr/local/lib/systemd/system-generators/omarchy-esp-generator"
+
+
+def check_esp_generator(root: Path) -> None:
+    """fstab's /boot and /boot/efi IDs are shared by every image: the generator
+    must be there to mount them from the ESP the Mac booted (#219)."""
+    installed = root / ESP_GENERATOR
+    require(installed.is_file() and not installed.is_symlink(), f"/{ESP_GENERATOR} is missing")
+    require(stat.S_IMODE(installed.stat().st_mode) == 0o755, f"/{ESP_GENERATOR} is not mode 0755")
+    require(installed.read_bytes() == (ROOT / "builder/omarchy-esp-generator").read_bytes(),
+            f"/{ESP_GENERATOR} is not builder/omarchy-esp-generator")
+
+
 def human_users(root: Path) -> list[str]:
     users = []
     passwd = root / "etc/passwd"
@@ -585,6 +598,7 @@ def check_tree(root: Path, factory: Path | None = None, profile: str = "release"
                providers: dict[str, str] | None = None) -> str:
     require(root.is_dir(), f"{root} is not a directory")
     check_fstab(root)
+    check_esp_generator(root)
     check_boot(root)
     check_state(root, providers)
     check_secret_material(root, "the image")

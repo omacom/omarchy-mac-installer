@@ -1129,6 +1129,14 @@ apply_presets() {
     fail "could not enable omarchy-mac-first-boot (logs/presets.log)"
 }
 
+# fstab mounts /boot and /boot/efi by IDs every image shares; the generator
+# mounts them from the ESP the Mac booted, and leaves fstab in charge when it
+# can't tell (builder/omarchy-esp-generator, #219).
+install_esp_generator() {
+  install -D -m 0755 "$ROOT/builder/omarchy-esp-generator" \
+    "$target/usr/local/lib/systemd/system-generators/omarchy-esp-generator"
+}
+
 finalize_root() {
   bash "$ROOT/builder/finalize-root" --root "$target" >>"$logs/finalize.log" 2>&1 ||
     fail "could not finalize the image root (logs/finalize.log)"
@@ -1274,6 +1282,7 @@ seal_factory() {
 
 configure_image() {
   write_fstab
+  install_esp_generator
   finalize_root
   # System setup expects a bootable system: a kernel in /boot (the Apple set's
   # initcpio hook built it). It is regenerated below once every package is in

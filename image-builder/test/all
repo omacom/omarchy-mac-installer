@@ -20,6 +20,7 @@ export PYTHONPYCACHEPREFIX=$tests_temp/pycache
 for script in bin/build-mac-image bin/mac-image-inputs builder/finalize-root test/all test/*.sh; do
   bash -n "$script"
 done
+sh -n builder/omarchy-esp-generator
 for script in bin/mac-image-check bin/mac-release-guard bin/edge-dispatch-filter builder/*.py test/*.py; do
   python3 -m py_compile "$script"
 done
