@@ -24,7 +24,7 @@ struct BootstrapAuthorization: Decodable {
 }
 
 enum RecoveryOwnerError: Error, LocalizedError {
-  case noOwner, ambiguous, changed
+  case noOwner, ambiguous, changed, sourceSystemChanged
   var errorDescription: String? {
     switch self {
     case .noOwner:
@@ -34,6 +34,9 @@ enum RecoveryOwnerError: Error, LocalizedError {
       return
         "This installation has multiple eligible owners. Aurora could not determine which owner was selected in Recovery."
     case .changed: return "The volume owner changed. Continue again to authorize the current owner."
+    case .sourceSystemChanged:
+      return
+        "macOS changed after this installation started, probably from a macOS update, so its owner can no longer be verified. Start up from macOS, open Omarchy Installer, choose Installation > Remove Omarchy, then install again."
     }
   }
 }
@@ -96,16 +99,26 @@ enum RecoveryOwnerResolver {
       let observed = try source()
       guard let actual = (observed.info["VolumeUUID"] as? String)?.uppercased(),
         UUID(uuidString: actual) != nil,
-        actual == bootstrap.sourceSystemUUID
-          || observed.snapshots.contains(bootstrap.sourceSystemUUID),
         (observed.info["APFSVolumeGroupID"] as? String)?.uppercased() == bootstrap.sourceGroupUUID
       else { throw RecoveryOwnerError.noOwner }
+      try verifySourceSystem(
+        bootstrap.sourceSystemUUID, actual: actual, snapshots: observed.snapshots)
       let allowed = Set(bootstrap.ownerUUIDs)
       let users = (observed.users["Users"] as? [[String: Any]] ?? []).filter {
         guard let id = $0["APFSCryptoUserUUID"] as? String else { return false }
         return allowed.contains(id.uppercased())
       }
       return try resolve(admins: admins, cryptoUsers: ["Users": users])
+    }
+  }
+
+  // Same APFS group, but stage 1's System volume is gone: a macOS update can
+  // replace it. Refused as before; only the reported reason differs.
+  static func verifySourceSystem(
+    _ recorded: String, actual: String, snapshots: Set<String>
+  ) throws {
+    guard actual == recorded || snapshots.contains(recorded) else {
+      throw RecoveryOwnerError.sourceSystemChanged
     }
   }
 

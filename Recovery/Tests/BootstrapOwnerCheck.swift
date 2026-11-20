@@ -101,6 +101,29 @@ import Foundation
           (["VolumeUUID": sourceID, "APFSVolumeGroupID": second], users([first]), [snapshot])
         })
     }
+    // macOS replaced the recorded System volume after stage 1: still refused,
+    // but reported as that, not as a problem with the volume owner.
+    do {
+      _ = try RecoveryOwnerResolver.resolve(
+        admins: admins, targetUsers: users([]), bootstrap: legacy,
+        source: { (sourceInfo, users([first]), []) })
+      fatalError("a replaced source System volume must be rejected")
+    } catch RecoveryOwnerError.sourceSystemChanged {}
+    do {
+      try RecoveryOwnerResolver.verifySourceSystem(snapshot, actual: sourceID, snapshots: [])
+      fatalError("a replaced source System volume must be rejected")
+    } catch RecoveryOwnerError.sourceSystemChanged {}
+    try RecoveryOwnerResolver.verifySourceSystem(sourceID, actual: sourceID, snapshots: [])
+    try RecoveryOwnerResolver.verifySourceSystem(snapshot, actual: sourceID, snapshots: [snapshot])
+    // Another APFS group is not an update to this macOS.
+    do {
+      _ = try RecoveryOwnerResolver.resolve(
+        admins: admins, targetUsers: users([]), bootstrap: legacy,
+        source: { (["VolumeUUID": sourceID, "APFSVolumeGroupID": second], users([first]), []) })
+      fatalError("another APFS group must be rejected")
+    } catch RecoveryOwnerError.noOwner {}
+    let advice = RecoveryOwnerError.sourceSystemChanged.errorDescription ?? ""
+    precondition(advice.contains("Remove Omarchy") && !advice.contains("metadata"))
     let system = sourceInfo.merging(["Roles": ["System"]]) { _, new in new }
     let data = sourceInfo.merging(["Roles": ["Data"]]) { _, new in new }
     let selectedSystem = try RecoveryOwnerResolver.sourceSystem(
