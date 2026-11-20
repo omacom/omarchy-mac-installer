@@ -56,6 +56,10 @@ expected size increase and unchanged Apple ISC, macOS identities and Recovery.
 Apple's local `diskutil(8)` documentation was checked for deleteContainer,
 resizeContainer and UUID device addressing. No force-delete fallback is used.
 
+## Interrupted native Recovery staging
+
+The pre-staging AppleDouble failure can leave the EFI proof files absent. Use the explicit [Resume Interrupted Installation flow](InterruptedResume.md) in an updated app and helper. It verifies the existing allocation and finishes staging without repeating partition or Linux-image writes. Successful recovery publishes a truthful verified-partition receipt that this removal flow accepts. Missing proof alone never authorizes deletion.
+
 ## Interrupted removal
 
 The root-owned helper directory contains `removal-<ticket UUID>.json`. The plan

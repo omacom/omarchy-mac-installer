@@ -1405,6 +1405,7 @@
         XCTAssertEqual(failure.replanAvailable, unchanged)
         XCTAssertEqual(session.hasExecutionStarted, !unchanged)
         XCTAssertEqual(session.canInspect, unchanged)
+        XCTAssertTrue(session.canOpenInterruptedResume)
         let prepared = environment.prepareCount
 
         await session.replanAfterEngineRefusal()

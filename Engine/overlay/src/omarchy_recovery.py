@@ -360,7 +360,7 @@ def _payload(path, maximum=256 << 20):
 
 def stage(installer, esp_uuid, esp_root, app_source=None,
           manifest_path=None, run=subprocess.run, source_os=None,
-          requirement=None, authorized_owner=None, expected_bootstrap=None):
+          requirement=None, authorized_owner=None, expected_bootstrap=None, payload_root=None):
     """Called after OS/ESP installation and common stage-1 target patching.
 
     Preserve upstream's Finish Installation resource paths for resume checks;
@@ -375,17 +375,18 @@ def stage(installer, esp_uuid, esp_root, app_source=None,
     system = Path(installer.osi.system)
     esp_root = Path(esp_root)
     stage1 = _payload(installer.boot_obj_path)
-    stage2 = _payload(esp_root / STAGE2_PATH)
+    payload_root = Path(payload_root) if payload_root is not None else esp_root
+    stage2 = _payload(payload_root / STAGE2_PATH)
     # Copy only this installation's finalized package. Never put these
     # per-device inputs in the distributable application template.
     firmware = {
-        name: _payload(esp_root / name, (1 << 20) if name.endswith(".txt") else (256 << 20))
+        name: _payload(payload_root / name, (1 << 20) if name.endswith(".txt") else (256 << 20))
         for name in VENDOR_FIRMWARE
     }
     if not firmware["vendorfw/manifest.txt"].strip():
         raise RecoveryError("finalized device firmware manifest is empty")
-    if os.path.lexists(esp_root / OPTIONAL_VENDOR_FIRMWARE):
-        firmware[OPTIONAL_VENDOR_FIRMWARE] = _payload(esp_root / OPTIONAL_VENDOR_FIRMWARE, 16 << 20)
+    if os.path.lexists(payload_root / OPTIONAL_VENDOR_FIRMWARE):
+        firmware[OPTIONAL_VENDOR_FIRMWARE] = _payload(payload_root / OPTIONAL_VENDOR_FIRMWARE, 16 << 20)
     marker = Path(installer.iapm_path)
     if marker.parent != system or marker.name != ".IAPhysicalMedia":
         raise RecoveryError("unexpected Recovery launch marker path")

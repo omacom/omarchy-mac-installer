@@ -452,7 +452,28 @@
         )
       else { return nil }
       var created = [RemovalCreatedPartition]()
+      var resumed: [RemovalCreatedPartition]?
       for line in String(decoding: log, as: UTF8.self).split(whereSeparator: \.isNewline) {
+        if let range = line.range(of: "Verified existing partitions: ") {
+          guard resumed == nil,
+            let bytes = String(line[range.upperBound...]).data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+            Set(object.keys) == ["format", "partitions"], object["format"] as? Int == 1,
+            let entries = object["partitions"] as? [[String: String]], entries.count == 4
+          else { return nil }
+          var verified = [RemovalCreatedPartition]()
+          for entry in entries {
+            guard Set(entry.keys) == ["uuid", "type"], let raw = entry["uuid"],
+              let uuid = UUID(uuidString: raw), let type = entry["type"],
+              !verified.contains(where: { $0.uuid == uuid.uuidString })
+            else { return nil }
+            verified.append(RemovalCreatedPartition(uuid: uuid.uuidString, type: type))
+          }
+          guard
+            verified.map(\.type) == ["Apple_APFS", "EFI", "Linux Filesystem", "Linux Filesystem"]
+          else { return nil }
+          resumed = verified
+        }
         guard let range = line.range(of: marker) else { continue }
         let rest = String(line[range.upperBound...])
         let whole = NSRange(rest.startIndex..., in: rest)
@@ -465,7 +486,8 @@
         guard !created.contains(where: { $0.uuid == entry.uuid }) else { return nil }
         created.append(entry)
       }
-      return created
+      guard resumed == nil || created.isEmpty else { return nil }
+      return resumed ?? created
     }
 
     /// The EFI partitions a startup container's m1n1 chainloads. Aurora's J700

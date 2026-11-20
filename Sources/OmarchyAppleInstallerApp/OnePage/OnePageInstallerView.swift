@@ -23,18 +23,23 @@ struct OnePageInstallerView: View {
   /// what to tell the owner if that or the shutdown request fails.
   @State private var preparingShutdown = false
   @State private var shutdownFailure: String?
+  @State private var checkingStartup = true
   /// Which channel this Mac reads. Owned by the scene so the banner always
   /// names the channel the next preparation will actually fetch; `nil` when
   /// the bundle has no release descriptor to fetch from.
   let channel: ReleaseChannel?
   let onChannelAvailability: (Bool) -> Void
   let onSessionAvailable: (InstallerSession) -> Void
+  let automaticResumeAllowed: Bool
+  let onInterruptedResumeDetected: () -> Void
 
   init(
     environment: any InstallerEnvironment,
     channel: ReleaseChannel?,
     onChannelAvailability: @escaping (Bool) -> Void = { _ in },
-    onSessionAvailable: @escaping (InstallerSession) -> Void = { _ in }
+    onSessionAvailable: @escaping (InstallerSession) -> Void = { _ in },
+    automaticResumeAllowed: Bool = true,
+    onInterruptedResumeDetected: @escaping () -> Void = {}
   ) {
     _session = State(
       initialValue: InstallerSession(
@@ -44,6 +49,8 @@ struct OnePageInstallerView: View {
     self.channel = channel
     self.onChannelAvailability = onChannelAvailability
     self.onSessionAvailable = onSessionAvailable
+    self.automaticResumeAllowed = automaticResumeAllowed
+    self.onInterruptedResumeDetected = onInterruptedResumeDetected
   }
 
   /// The window fits its content between these heights. A phase shorter than
@@ -139,7 +146,18 @@ struct OnePageInstallerView: View {
 
   /// Inspects the Mac, then re-reads what each channel offers it.
   private func recheck() async {
+    checkingStartup = true
     await session.inspect()
+    if automaticResumeAllowed, !session.isSimulation,
+      case .existingInstallRefused(let host) = session.phase,
+      host.supported, !session.installationBlocked, session.recoveryAccount == nil,
+      await InterruptedResumeStartup.available(), !Task.isCancelled
+    {
+      onInterruptedResumeDetected()
+      checkingStartup = false
+      return
+    }
+    checkingStartup = false
     await session.refreshChannelAvailability()
   }
 
@@ -173,6 +191,15 @@ struct OnePageInstallerView: View {
 
   @ViewBuilder
   private var stage: some View {
+    if checkingStartup {
+      statusPanel(title: "Checking this Mac and any saved installation…")
+    } else {
+      inspectedStage
+    }
+  }
+
+  @ViewBuilder
+  private var inspectedStage: some View {
     switch session.phase {
     case .inspecting:
       statusPanel(title: PlainLanguage.inspectingSubheadline)
@@ -270,6 +297,15 @@ struct OnePageInstallerView: View {
 
   @ViewBuilder
   private var actions: some View {
+    if checkingStartup {
+      EmptyView()
+    } else {
+      inspectedActions
+    }
+  }
+
+  @ViewBuilder
+  private var inspectedActions: some View {
     switch session.phase {
     case .inspecting, .preparingPlan, .planPrepared:
       EmptyView()
@@ -447,7 +483,7 @@ struct OnePageInstallerView: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(.vertical, 2)
       Text(
-        "If you’d like to remove Omarchy and return its space to macOS, select Installation → Remove Omarchy from the menu bar."
+        "If installation was interrupted, select Installation → Resume Interrupted Installation… from the menu bar. To remove Omarchy and return its space to macOS, select Installation → Remove Omarchy."
       )
       .font(OmarchyTheme.body)
       .foregroundStyle(OmarchyTheme.secondaryText)
