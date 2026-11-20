@@ -45,13 +45,26 @@ class AlsTests(unittest.TestCase):
 
     def test_rejects_unknown_version_length_size_and_bad_gains(self):
         cases = [b"", lsci()[:-1], lsci() + b"\0", "not bytes"]
-        for offset, replacement in ((0, b"\x06"), (1, b"\x05"), (4, b"\x98"), (58, b"\0\0"), (60, b"\xff\xff")):
+        for offset, replacement in ((0, b"\x06"), (1, b"\x05"), (4, b"\x98"), (58, b"\0\0"), (68, b"\0\0")):
             changed = bytearray(lsci())
             changed[offset:offset + len(replacement)] = replacement
             cases.append(bytes(changed))
         for data in cases:
             with self.subTest(data=str(data)[:60]), self.assertRaises(als.AlsError):
                 als.calibration(data)
+
+    def test_gain_steps_above_int16_range_are_unsigned(self):
+        # A shipping MacBook Neo stores 32793 (bytes 19 80) at offset 68; read
+        # as signed it became -32743 and stopped every install (issue #214).
+        record = bytearray(lsci())
+        for offset, value in zip((58, 62, 66, 60, 64, 68), (2026, 4111, 32460, 2040, 4143, 32793)):
+            struct.pack_into("<H", record, offset, value)
+        self.assertEqual(record[68:70], b"\x19\x80")
+        data = als.calibration(bytes(record))
+        gains = struct.unpack_from("<8f", data, 16 + 6 * 4)
+        expected = (1.0, 2026 / 255, 4111 / 255, 32460 / 255, 1.0, 2040 / 255, 4143 / 255, 32793 / 255)
+        for actual, wanted in zip(gains, expected):
+            self.assertAlmostEqual(actual, wanted, places=3)
 
     def test_searches_actual_node_not_fixed_descendant_indexes(self):
         child = {"IORegistryEntryName": "exbright", "LSCI": lsci()}

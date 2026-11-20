@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 """J700 CT817 calibration derived from this Mac's exbright LSCI record.
 
-LSCI 4.5 stores five signed Q16 coefficients and six signed gain steps.
+LSCI 4.5 stores five signed Q16 coefficients and six unsigned 16-bit gain steps.
 The AOP setup message uses per-step ratios, not cumulative gains: this is
 consistent with the captured J700 native 80-byte CT817 setup message. The
 correction factor is 1.0 and the final eight bytes are zero in that capture.
@@ -34,9 +34,9 @@ def calibration(lsci):
     coefficients = [value / 65536.0 for value in struct.unpack_from("<5i", lsci, 28)]
     gains = []
     for offsets in ((58, 62, 66), (60, 64, 68)):
-        raw = [struct.unpack_from("<h", lsci, offset)[0] for offset in offsets]
+        raw = [struct.unpack_from("<H", lsci, offset)[0] for offset in offsets]
         if any(value <= 0 for value in raw):
-            raise AlsError("exbright LSCI contains a non-positive gain ratio")
+            raise AlsError("exbright LSCI contains a zero gain ratio")
         gains.extend([1.0] + [value / 255.0 for value in raw])
     return struct.pack("<QQ14f8x", SETUP_OPCODE, 56, *coefficients, 1.0, *gains)
 
