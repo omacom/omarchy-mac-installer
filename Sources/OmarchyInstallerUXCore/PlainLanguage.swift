@@ -21,6 +21,18 @@
     public static let inspectingHeadline = "Checking this Mac…"
     public static let inspectingSubheadline = "Making sure this Mac is ready for Omarchy…"
 
+    // MARK: Optional display preference
+
+    public static let proMotionSuggestion =
+      "For smoother graphics in Omarchy, select ProMotion in macOS before installing."
+    public static let proMotionPreference =
+      "Optional. This also changes your macOS display setting and may affect battery life. You can change it later in System Settings → Displays → Refresh Rate."
+    public static let proMotionEnable = "Enable ProMotion"
+    public static let proMotionEnabled = "ProMotion is enabled."
+    public static let proMotionSettings = "Open Display Settings"
+    public static let proMotionFailure =
+      "Couldn’t confirm ProMotion. Check System Settings → Displays → Refresh Rate. You can still install Omarchy."
+
     // MARK: Screen A2 — Existing install
 
     public static let existingInstallHeadline = "Omarchy is already installed"
