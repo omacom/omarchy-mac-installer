@@ -27,6 +27,15 @@ code-signing requirement that is not anchored to the configured Developer ID
 team (the lab app pins cdhashes or identifiers only, or switches the client
 check off).
 
+A DMG install blesses the helper with SMJobBless, and launchd then runs it
+with the job embedded in the helper binary (__TEXT,__launchd_plist), not the
+package's Contents/Library/LaunchDaemons plist. That embedded job must carry
+the Developer ID client requirement, from which the helper derives the
+decoder's and the Recovery template's. A Developer ID signed app's decoder
+and Recovery template must satisfy those derived requirements, and the
+Recovery template may not link CryptoKit or CryptoTokenKit, which older
+macOS Recovery stubs cannot load.
+
 Notarization rejects any Mach-O the release signing does not reach, archived
 ones included, and the dry run never notarizes. So every app bundle must
 carry its restore-image decoder in Contents/Helpers (and nothing else there),
@@ -172,6 +181,85 @@ def binary_plist_allows_debugging(data: bytes) -> bool:
     return False
 
 
+RECOVERY_IDENTIFIER = "org.aurorasilicon.omarchy.recovery.recovery"
+RECOVERY_BANNED_FRAMEWORKS = ("CryptoKit", "CryptoTokenKit")
+LC_SEGMENT_64 = 0x19
+DYLIB_COMMANDS = {0xC, 0x20, 0x80000018, 0x8000001F, 0x80000023}
+
+
+def developer_id_requirement(identifier: str, team: str) -> str:
+    """The designated form RestoreImageHelper and RecoveryTemplateIdentity
+    derive from the client's team."""
+    return (f'anchor apple generic and identifier "{identifier}" '
+            'and certificate 1[field.1.2.840.113635.100.6.2.6] '
+            'and certificate leaf[field.1.2.840.113635.100.6.1.13] '
+            f'and certificate leaf[subject.OU] = "{team}"')
+
+
+def macho_slices(data: bytes) -> list[bytes]:
+    """The thin 64-bit little-endian images in a Mach-O, fat or not."""
+    if data[:4] == b"\xcf\xfa\xed\xfe":
+        return [data]
+    if data[:4] == b"\xca\xfe\xba\xbe":
+        count = int.from_bytes(data[4:8], "big")
+        slices = []
+        for index in range(min(count, 64)):
+            entry = data[8 + 20 * index:28 + 20 * index]
+            if len(entry) < 20:
+                break
+            offset, size = int.from_bytes(entry[8:12], "big"), int.from_bytes(entry[12:16], "big")
+            slices.extend(macho_slices(data[offset:offset + size]))
+        return slices
+    return []
+
+
+def load_commands(image: bytes):
+    """(cmd, bytes) for each load command of one thin image."""
+    if len(image) < 32:
+        return
+    count = int.from_bytes(image[16:20], "little")
+    at = 32
+    for _ in range(min(count, 4096)):
+        if at + 8 > len(image):
+            return
+        cmd = int.from_bytes(image[at:at + 4], "little")
+        size = int.from_bytes(image[at + 4:at + 8], "little")
+        if size < 8 or at + size > len(image):
+            return
+        yield cmd, image[at:at + size]
+        at += size
+
+
+def macho_section(data: bytes, segment: str, section: str) -> bytes | None:
+    """A section's bytes from the first slice that has it."""
+    for image in macho_slices(data):
+        for cmd, body in load_commands(image):
+            if cmd != LC_SEGMENT_64 or len(body) < 72:
+                continue
+            for index in range(int.from_bytes(body[64:68], "little")):
+                entry = body[72 + 80 * index:152 + 80 * index]
+                if len(entry) < 80:
+                    break
+                name = entry[0:16].rstrip(b"\0").decode("ascii", "replace")
+                owner = entry[16:32].rstrip(b"\0").decode("ascii", "replace")
+                if (owner, name) == (segment, section):
+                    size = int.from_bytes(entry[40:48], "little")
+                    offset = int.from_bytes(entry[48:52], "little")
+                    return image[offset:offset + size]
+    return None
+
+
+def linked_libraries(data: bytes) -> set[str]:
+    """Every library any slice loads, weak and re-exported ones included."""
+    names = set()
+    for image in macho_slices(data):
+        for cmd, body in load_commands(image):
+            if cmd in DYLIB_COMMANDS and len(body) >= 12:
+                offset = int.from_bytes(body[8:12], "little")
+                names.add(body[offset:].split(b"\0", 1)[0].decode("utf-8", "replace"))
+    return names
+
+
 class Guard:
     def __init__(self) -> None:
         self.values = identity()
@@ -306,6 +394,14 @@ class Guard:
         executable = app / "Contents/MacOS/OmarchyRecovery"
         if not executable.is_file() or executable.is_symlink():
             self.find(label, "Recovery executable is missing or linked")
+        else:
+            for library in sorted(linked_libraries(executable.read_bytes())):
+                framework = Path(library).name
+                if framework in RECOVERY_BANNED_FRAMEWORKS:
+                    self.find(label, f"the Recovery executable links {framework}, which older Recovery stubs cannot load")
+        self.check_signed_requirement(
+            app, label, "the Recovery template",
+            developer_id_requirement(RECOVERY_IDENTIFIER, self.values["INSTALLER_TEAM_ID"]))
         for name in ("install-config.json", "AuraPayloads"):
             path = app / "Contents/Resources" / name
             if path.exists() or path.is_symlink():
@@ -342,6 +438,7 @@ class Guard:
         client = daemon.get("EnvironmentVariables", {}).get("OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT")
         if client != client_requirement:
             self.find(label, f"the helper's client requirement {client!r} is not the Developer ID team's")
+        self.check_blessed_job(app, label, helper_id, client_requirement)
         # Released helpers derive the decoder's requirement from that team;
         # a pin, if any, must be the same team's, never a lab cdhash.
         decoder_requirement = (f'anchor apple generic and identifier "{v["INSTALLER_RESTORE_IMAGE_IDENTIFIER"]}" '
@@ -383,6 +480,44 @@ class Guard:
             if descriptor.get("trust_root_fingerprint") != f"sha256:{digest}":
                 self.find(label, "release.json does not pin the bundled trust root")
 
+    def check_blessed_job(self, app: Path, label: str, helper_id: str, client_requirement: str) -> None:
+        """The job SMJobBless installs is the one linked into the helper."""
+        helper = app / "Contents/Library/LaunchServices" / helper_id
+        if helper.is_symlink() or not helper.is_file():
+            self.find(label, f"Contents/Library/LaunchServices/{helper_id}, the helper, is missing")
+            return
+        embedded = macho_section(helper.read_bytes(), "__TEXT", "__launchd_plist")
+        if embedded is None:
+            self.find(label, "the helper has no embedded __launchd_plist for SMJobBless")
+            return
+        try:
+            job = plistlib.loads(embedded.rstrip(b"\0"))
+        except (ValueError, plistlib.InvalidFileException):
+            self.find(label, "the helper's embedded __launchd_plist is unreadable")
+            return
+        environment = job.get("EnvironmentVariables", {}) if isinstance(job, dict) else {}
+        if environment.get("OMARCHY_CLIENT_CODE_SIGNING_REQUIREMENT") != client_requirement:
+            self.find(label, "the helper's embedded job does not pin the Developer ID client, so a DMG install "
+                             "cannot derive the decoder's or the Recovery template's identity")
+        pinned = environment.get("OMARCHY_RECOVERY_TEMPLATE_REQUIREMENT")
+        if pinned is not None and not re.fullmatch(r'cdhash H"[0-9a-f]{40,64}"', pinned):
+            self.find(label, f"the helper's embedded Recovery-template requirement {pinned!r} is malformed")
+
+    def developer_id_signed(self, path: Path) -> bool:
+        """Whether codesign reports a Developer ID signature (False without codesign)."""
+        if not shutil.which("codesign"):
+            return False
+        result = subprocess.run(["codesign", "--display", "--verbose=2", str(path)], capture_output=True, text=True)
+        return result.returncode == 0 and "Authority=Developer ID Application: " in result.stderr
+
+    def check_signed_requirement(self, path: Path, label: str, what: str, requirement: str) -> None:
+        if not self.developer_id_signed(path):
+            return
+        result = subprocess.run(["codesign", "--verify", "--deep", "--strict", f"-R={requirement}", str(path)],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            self.find(label, f"{what} does not satisfy the requirement the helper derives from the Developer ID team")
+
     def check_native_code(self, app: Path, label: str) -> None:
         helpers = app / "Contents/Helpers"
         decoder = helpers / "omarchy-restore-image"
@@ -390,6 +525,11 @@ class Guard:
             self.find(label, "Contents/Helpers/omarchy-restore-image, the restore-image decoder, is missing")
         elif decoder.read_bytes()[:4] not in MACHO:
             self.find(label, "Contents/Helpers/omarchy-restore-image is not a Mach-O executable")
+        elif self.developer_id_signed(app):
+            self.check_signed_requirement(
+                decoder, label, "the restore-image decoder",
+                developer_id_requirement(self.values["INSTALLER_RESTORE_IMAGE_IDENTIFIER"],
+                                         self.values["INSTALLER_TEAM_ID"]))
         for entry in sorted(helpers.iterdir()) if helpers.is_dir() and not helpers.is_symlink() else []:
             if entry.name != decoder.name:
                 self.find(label, f"Contents/Helpers/{entry.name} is not the restore-image decoder")
