@@ -73,6 +73,38 @@
       XCTAssertEqual(disk.mountPoint, "/Volumes/EFI - OMARC")
     }
 
+    func testRefusedUnmountRestartsSpotlightOnceThenUnmountsNormally() throws {
+      let disk = MountFixture(mountPoint: "/Volumes/EFI - OMARC", unmountRefusals: 1)
+      let operatorUnderTest = DiskutilInstallConfESPOperator(
+        commands: disk.run, openMount: disk.openMount,
+        restartSpotlightServer: disk.restartSpotlightServer)
+      try operatorUnderTest.unmount("disk5s1")
+      XCTAssertEqual(disk.spotlightRestarts, 1)
+      XCTAssertEqual(disk.calls, [["unmount", "disk5s1"], ["unmount", "disk5s1"]])
+      XCTAssertNil(disk.mountPoint)
+    }
+
+    func testUnmountThatSucceedsLeavesSpotlightAlone() throws {
+      let disk = MountFixture(mountPoint: "/Volumes/EFI - OMARC")
+      let operatorUnderTest = DiskutilInstallConfESPOperator(
+        commands: disk.run, openMount: disk.openMount,
+        restartSpotlightServer: disk.restartSpotlightServer)
+      try operatorUnderTest.unmount("disk5s1")
+      XCTAssertEqual(disk.spotlightRestarts, 0)
+      XCTAssertEqual(disk.calls, [["unmount", "disk5s1"]])
+    }
+
+    func testUnmountStillRefusedAfterTheRestartIsNeverForced() {
+      let disk = MountFixture(mountPoint: "/Volumes/EFI - OMARC", refusesUnmount: true)
+      let operatorUnderTest = DiskutilInstallConfESPOperator(
+        commands: disk.run, openMount: disk.openMount,
+        restartSpotlightServer: disk.restartSpotlightServer)
+      XCTAssertThrowsError(try operatorUnderTest.unmount("disk5s1"))
+      XCTAssertEqual(disk.spotlightRestarts, 1)
+      XCTAssertEqual(disk.calls, [["unmount", "disk5s1"], ["unmount", "disk5s1"]])
+      XCTAssertEqual(disk.mountPoint, "/Volumes/EFI - OMARC")
+    }
+
     func testExistingPathOnAnotherFilesystemIsRejected() {
       let disk = MountFixture(mountPoint: FileManager.default.temporaryDirectory.path)
       let operatorUnderTest = DiskutilInstallConfESPOperator(commands: disk.run)
@@ -97,20 +129,26 @@
     var mountPoint: String?
     let forcedMountPoint: String?
     let writable: Bool
-    let refusesUnmount: Bool
+    var unmountRefusalsRemaining: Int
     let failsAfterMount: Bool
     var calls: [[String]] = []
     var openedMounts: [String] = []
+    var spotlightRestarts = 0
 
     init(
       mountPoint: String? = nil, forcedMountPoint: String? = nil,
-      writable: Bool = true, refusesUnmount: Bool = false, failsAfterMount: Bool = false
+      writable: Bool = true, refusesUnmount: Bool = false, unmountRefusals: Int = 0,
+      failsAfterMount: Bool = false
     ) {
       self.mountPoint = mountPoint
       self.forcedMountPoint = forcedMountPoint
       self.writable = writable
-      self.refusesUnmount = refusesUnmount
+      self.unmountRefusalsRemaining = refusesUnmount ? Int.max : unmountRefusals
       self.failsAfterMount = failsAfterMount
+    }
+
+    func restartSpotlightServer() {
+      spotlightRestarts += 1
     }
 
     func openMount(_ identifier: String, at mountPoint: URL) throws -> Int32 {
@@ -132,7 +170,10 @@
         if mountPoint == nil { mountPoint = forcedMountPoint ?? arguments[2] }
         if failsAfterMount { throw InstallConfESPError.mountFailed }
       case "unmount":
-        if refusesUnmount { throw InstallConfESPError.mountFailed }
+        if unmountRefusalsRemaining > 0 {
+          unmountRefusalsRemaining -= 1
+          throw InstallConfESPError.mountFailed
+        }
         mountPoint = nil
       default:
         XCTFail("Unexpected disk command: \(arguments)")
