@@ -59,9 +59,7 @@ Build concurrency defaults to 10 workers so a 14-core Mac retains four cores for
 responsiveness. Override it with `OMARCHY_BUILD_JOBS`; the same value is exported
 as `CARGO_BUILD_JOBS` for nested Rust builds.
 
-The default signing identity is `-`, which creates an ad-hoc development bundle
-for local structural validation only. A named identity also requires its
-10-character team identifier:
+The default signing identity is `-`, which creates an ad-hoc bundle for local testing. Assembly does not install the helper or authorize a physical installation. A named identity also requires its 10-character team identifier:
 
 ```sh
 OMARCHY_APP_SIGNING_IDENTITY="Apple Development: Name (TEAMID)" \
@@ -79,7 +77,9 @@ OMARCHY_NOTARY_PROFILE="omarchy-notary" \
 Packaging/notarize-app.sh "/absolute/path/Omarchy Installer.app"
 ```
 
-The app installs its own helper with `SMJobBless` the first time the person authorizes an install, using the password they typed; ad hoc builds leave the declaration out and still need the installer package. After notarization, package the download:
+Builds that declare `SMPrivilegedExecutables` install their helper through `SMJobBless` after owner authorization. Ad-hoc bundles omit that declaration because `SMJobBless` refuses them; when the bundled helper and daemon definition are available, the app instead uses [`AdHocInstallerHelperBlesser`](../Sources/OmarchyAppleInstaller/AdHocInstallerHelperBlesser.swift). That path installs the helper through administrator authorization, verifies the helper against its exact code hash, and pins the accepted client, Recovery template and decoder to this build. A separate installer package is not required for this path. Neither assembling nor simply opening the app authorizes helper replacement.
+
+After notarization, package the public download:
 
 ```sh
 Packaging/make-download-zip.sh "/absolute/path/Omarchy Installer.app" /absolute/path/Omarchy-Installer.zip
@@ -87,7 +87,7 @@ Packaging/make-download-zip.sh "/absolute/path/Omarchy Installer.app" /absolute/
 
 It refuses an app without a stapled ticket and checks that the zip holds only the app.
 
-After a completed removal, a helper the app installed itself with `SMJobBless` uninstalls itself: its job file, its binary in `/Library/PrivilegedHelperTools` and its state directory go, and the app sets it up again at the next authorization. A helper an installer package put in place (the package from `pkg/build-pkg.sh`, which runs it from inside the app in `/Applications`, or the private ad hoc package, whose build cannot bless its helper) stays registered after a removal, because nothing but the package could register it again; Remove followed by Install then works without running the package again. The helper tells the two apart by where it runs from and whether its build declares `SMAuthorizedClients`.
+After a completed removal, a helper the app installed itself with `SMJobBless` uninstalls itself: its job file, its binary in `/Library/PrivilegedHelperTools` and its state directory go, and the app sets it up again at the next authorization. A helper an installer package put in place (the package from `pkg/build-pkg.sh`, which runs it from inside the app in `/Applications`, or the private ad hoc package) stays registered after a removal; Remove followed by Install then works without running the package again. The helper tells the two apart by where it runs from and whether its build declares `SMAuthorizedClients`.
 
 A helper that stays keeps its removal records. Before any install or removal it checks them: an unfinished removal blocks both until the record and disk layout are checked, and a completed removal whose install journals were not yet set aside (the helper stopped in between, or moving them failed) gets them set aside first, or the request is refused. If the app loses a removal's reply, it asks the kept helper whether the removal finished; the macOS container size alone only shows that macOS has its space back.
 
@@ -100,7 +100,7 @@ changes the application bundle.
 The script refuses unsafe or mismatched release inputs and will not overwrite an
 existing application bundle.
 
-For a local hardware test, first assemble an explicitly marked `OMARCHY_DEVELOPER_BUILD=1` app with its sealed developer catalog, then run `Packaging/build-developer-pkg.sh APP OUTPUT.pkg`. This verifies the app and embedded client requirement and creates an unsigned local package that installs the app and its helper through PackageKit. It requires the developer marker and does not use the production signing identities. This package is for local testing, not public distribution.
+For the optional PackageKit route with an explicitly marked `OMARCHY_DEVELOPER_BUILD=1` app and its sealed developer catalog, run `Packaging/build-developer-pkg.sh APP OUTPUT.pkg`. This verifies the app and embedded client requirement and creates an unsigned local package that installs the app and its helper through PackageKit. It requires the developer marker and does not use the production signing identities. This package is for local testing, not public distribution.
 
 A developer build's helper blocks any older build, including a release: `SMJobBless` won't replace a helper with a lower build, and the app reports the service couldn't be set up. To go back to an older release on that Mac, remove the helper first: `sudo launchctl bootout system/org.omarchy.installer.helper`, then delete `/Library/PrivilegedHelperTools/org.omarchy.installer.helper` and `/Library/LaunchDaemons/org.omarchy.installer.helper.plist`.
 
