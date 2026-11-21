@@ -379,6 +379,7 @@
   struct DiskutilInstallConfESPOperator: InstallConfESPDiskOperating {
     var commands: @Sendable ([String]) throws -> Data = Self.systemRun
     var openMount: @Sendable (String, URL) throws -> Int32 = Self.openVerifiedMount
+    var restartSpotlightServer: @Sendable () -> Void = Self.restartSystemSpotlightServer
 
     func partitions(on storeIdentifier: String) throws -> [InstallConfESPPartition] {
       let listing = try plist(["list", "-plist", storeIdentifier])
@@ -468,8 +469,35 @@
       return descriptor
     }
 
+    /// A normal unmount, retried once after restarting Spotlight's server.
+    ///
+    /// On macOS 27 the Spotlight server that watched the engine create and
+    /// remount the new EFI can keep descriptors on its root after approving
+    /// the unmount and closing its index, so the kernel refuses every normal
+    /// unmount. A restarted server releases the volume when asked. The retry
+    /// is the same normal unmount; nothing is forced.
     func unmount(_ identifier: String) throws {
-      _ = try run(["unmount", identifier])
+      do {
+        _ = try run(["unmount", identifier])
+      } catch {
+        restartSpotlightServer()
+        _ = try run(["unmount", identifier])
+      }
+    }
+
+    /// launchd starts the server again at once; its indexes are kept.
+    static func restartSystemSpotlightServer() {
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+      process.arguments = ["kickstart", "-k", "system/com.apple.metadata.mds"]
+      process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C"]
+      process.standardOutput = FileHandle.nullDevice
+      process.standardError = FileHandle.nullDevice
+      process.standardInput = FileHandle.nullDevice
+      do {
+        try process.run()
+        process.waitUntilExit()
+      } catch {}
     }
 
     private func plist(_ arguments: [String]) throws -> [String: Any] {
