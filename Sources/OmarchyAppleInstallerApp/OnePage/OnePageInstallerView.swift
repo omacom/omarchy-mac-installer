@@ -573,7 +573,8 @@ struct OnePageInstallerView: View {
         RecoveryStep(
           number: 3,
           title:
-            "Choose “\(target.volumeName)”, click Continue, then sign in with your macOS account."),
+            "Choose “\(target.volumeName)”, click Continue and sign in, then click Install in Omarchy’s Finish setup. Don’t use Startup Security Utility."
+        ),
       ],
       warning: "Don’t restart normally yet: unfinished setup can cause a boot loop.")
   }

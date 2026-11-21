@@ -80,8 +80,14 @@ import Foundation
       preconditionFailure("Changed startup selection was accepted")
     } catch RecoveryBootRepair.Failure.selectionNotVerified {}
     precondition(!shutDown)
+    // Each way into the right Recovery ends at Finish setup's Install, never
+    // Startup Security Utility, which does not enroll Omarchy.
+    for issue in [EnrollmentGateIssue.notRecovery, .wrongPair, .powerButtonRequired] {
+      precondition(issue.message.contains("click Install in Finish setup"), issue.message)
+      precondition(issue.message.contains("Don’t use Startup Security Utility"), issue.message)
+    }
     print(
-      "PASS environment classifications; selection/readback/shutdown ordering; no shutdown on failed or changed selection"
+      "PASS environment classifications; selection/readback/shutdown ordering; no shutdown on failed or changed selection; Finish setup Install copy"
     )
   }
 }

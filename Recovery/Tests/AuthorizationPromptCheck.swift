@@ -7,6 +7,10 @@ import Foundation
     precondition(install.title == "Finish setup")
     precondition(install.action == "Install")
     precondition(
+      install.introduction
+        == "This step lets this Mac start Omarchy. Click Install here to finish it. Don’t use Startup Security Utility instead."
+    )
+    precondition(
       install.message
         == "Enter password for jane. Use your existing macOS owner’s password to set up Omarchy.",
       install.message)
@@ -35,6 +39,7 @@ import Foundation
     repair.purpose = .repair
     precondition(repair.title == "Authorize startup disk")
     precondition(repair.action == "Shut Down")
+    precondition(repair.introduction == nil)
     precondition(repair.message == "Enter password for jane.", repair.message)
     repair.rejection = refused
     precondition(
@@ -42,7 +47,7 @@ import Foundation
         == "The password for jane was not accepted. Enter it again, or choose Utilities → Show Details.",
       repair.message)
     print(
-      "PASS authorization prompt: install, target owner, rejection retry and startup-disk repair copy"
+      "PASS authorization prompt: install (with its Finish setup introduction), target owner, rejection retry and startup-disk repair copy"
     )
   }
 }

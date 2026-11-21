@@ -256,6 +256,13 @@
 
     public static let recoveryHeadline = "Finish setup"
     public static let recoveryShutDown = "Shut down"
+    /// The whole last stage in one place: a stub that never runs Omarchy's
+    /// Finish setup stays unenrolled and can't start Omarchy, and Startup
+    /// Security Utility does not enroll it.
+    public static let recoveryInstruction =
+      "Shut down, hold the power button until startup options appear, pick the highlighted Omarchy, sign in, then click Install in Omarchy’s Finish setup. Don’t use Startup Security Utility."
+    public static let recoveryFinishSetupDetail =
+      "Pick the highlighted Omarchy, click Continue and sign in with your macOS account, then click Install in Omarchy’s Finish setup. Don’t use Startup Security Utility."
     public static let mediaHeadline = "Connect the installation media"
 
     /// Numbered plain-language steps for the signed `requiredHumanSteps`
@@ -274,9 +281,7 @@
         append("Hold the power button", "Hold until “Loading startup options” appears.")
       }
       func authenticate() {
-        append(
-          "Finish installation",
-          "Choose Omarchy, click Continue, then sign in with your macOS account.")
+        append("Click Install in Finish setup", recoveryFinishSetupDetail)
       }
       for token in requiredHumanSteps {
         switch token {
@@ -386,7 +391,8 @@
         base = "Your approved plan was accepted. Installation is continuing."
       case .enterRecovery:
         base =
-          "Omarchy’s files are in place. Finish setup at startup so this Mac can start Omarchy."
+          "Omarchy’s files are in place, but this Mac can’t start Omarchy until you finish setup. "
+          + recoveryInstruction
       case .attachInstallationMedia:
         base = "Preparation is complete. Connect the verified installation media to continue."
       case .verifyInstalledSystem:

@@ -19,16 +19,16 @@ enum EnrollmentGateIssue: String, Error, Identifiable, LocalizedError {
     switch self {
     case .notRecovery:
       return
-        "Shut down, then hold the power button until Startup Options appears. Select Omarchy to finish setup."
+        "Shut down, then hold the power button until Startup Options appears. Select Omarchy, sign in, then click Install in Finish setup: that step lets this Mac start Omarchy. Don’t use Startup Security Utility instead."
     case .rootRequired:
       return
         "Launch Aurora Installer from Recovery’s Utilities menu or Terminal. No installation changes have been made."
     case .wrongPair:
       return
-        "This Recovery belongs to a different installation. Aurora will select Omarchy as the startup disk and shut down. Once powered off, hold the power button continuously until Startup Options appears, then select Omarchy."
+        "This Recovery belongs to a different installation. Aurora will select Omarchy as the startup disk and shut down. Once powered off, hold the power button continuously until Startup Options appears, then select Omarchy and click Install in Finish setup. Don’t use Startup Security Utility."
     case .powerButtonRequired:
       return
-        "This is ordinary Recovery. Aurora will select Omarchy as the startup disk and shut down. Once powered off, hold the power button continuously until Startup Options appears, then select Omarchy. Do not press and release it first."
+        "This is ordinary Recovery. Aurora will select Omarchy as the startup disk and shut down. Once powered off, hold the power button continuously until Startup Options appears, then select Omarchy and click Install in Finish setup. Do not press and release it first. Don’t use Startup Security Utility."
     case .cannotVerify:
       return
         "Aurora could not confirm that this is Omarchy’s paired power-button Recovery. No installation changes have been made. Restart into that Recovery and try again."

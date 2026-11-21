@@ -356,6 +356,16 @@
       XCTAssertTrue(messages.allSatisfy { !$0.isEmpty })
     }
 
+    func testRecoveryHandoffSaysToClickInstallAndAvoidStartupSecurityUtility() {
+      XCTAssertEqual(
+        PlainLanguage.nextActionMessage(.enterRecovery),
+        "Omarchy’s files are in place, but this Mac can’t start Omarchy until you finish setup. Shut down, hold the power button until startup options appear, pick the highlighted Omarchy, sign in, then click Install in Omarchy’s Finish setup. Don’t use Startup Security Utility."
+      )
+      XCTAssertTrue(
+        PlainLanguage.nextActionMessage(.enterRecovery, installConf: .notRecorded)
+          .hasPrefix(PlainLanguage.nextActionMessage(.enterRecovery)))
+    }
+
     func testRecoveryStepsCoverSignedTokensAndUnknowns() {
       let steps = PlainLanguage.recoverySteps(for: [
         "enterOneTrueRecovery", "authenticateMachineOwner",
@@ -365,8 +375,11 @@
       XCTAssertTrue(steps.allSatisfy { !($0.detail ?? "").isEmpty })
       XCTAssertEqual(steps[1].title, "Hold the power button")
       XCTAssertEqual(steps[1].detail, "Hold until “Loading startup options” appears.")
+      XCTAssertEqual(steps[2].title, "Click Install in Finish setup")
       XCTAssertEqual(
-        steps[2].detail, "Choose Omarchy, click Continue, then sign in with your macOS account.")
+        steps[2].detail,
+        "Pick the highlighted Omarchy, click Continue and sign in with your macOS account, then click Install in Omarchy’s Finish setup. Don’t use Startup Security Utility."
+      )
 
       let unknown = PlainLanguage.recoverySteps(for: ["somethingNew"])
       XCTAssertEqual(unknown.count, 1)
