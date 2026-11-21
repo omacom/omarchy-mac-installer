@@ -561,6 +561,27 @@
       XCTAssertTrue(PlainLanguage.planAcknowledgement(resizesMacOS: false).contains("backup"))
     }
 
+    func testAnUntestedMacsAcknowledgementCoversTheRiskAndTheWayBack() {
+      for resizes in [true, false] {
+        let plain = PlainLanguage.planAcknowledgement(resizesMacOS: resizes)
+        let untested = PlainLanguage.planAcknowledgement(resizesMacOS: resizes, untested: true)
+        XCTAssertFalse(plain.contains("untested"))
+        XCTAssertTrue(untested.hasPrefix(plain))
+        XCTAssertTrue(untested.contains("untested"))
+        XCTAssertTrue(untested.contains("start macOS again"))
+      }
+      XCTAssertTrue(PlainLanguage.untestedMacRecovery.contains("Loading startup options"))
+    }
+
+    func testAPlanCarriesTheCatalogsPreviewNote() {
+      let plain = PlanDisplay(diskTotalBytes: 100, omarchyBytes: 50, bindingDigest: "sha256:x")
+      XCTAssertNil(plain.previewNote)
+      let untested = PlanDisplay(
+        diskTotalBytes: 100, omarchyBytes: 50, bindingDigest: "sha256:x",
+        previewNote: "Untested: qualified on edge next")
+      XCTAssertEqual(untested.previewNote, "Untested: qualified on edge next")
+    }
+
     func testEncryptionNoteIsOneLineWithThePasswordWarning() {
       let note = PlainLanguage.encryptionNote
       XCTAssertTrue(note.contains("encrypts Omarchy"), note)

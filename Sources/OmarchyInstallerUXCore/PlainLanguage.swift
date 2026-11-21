@@ -82,11 +82,20 @@
     public static let replanning = "Checking the new size…"
     /// A free-space plan leaves macOS its current size, so only a plan that
     /// shrinks macOS asks to approve a resize.
-    public static func planAcknowledgement(resizesMacOS: Bool) -> String {
-      resizesMacOS
+    public static func planAcknowledgement(resizesMacOS: Bool, untested: Bool = false) -> String {
+      let approval =
+        resizesMacOS
         ? "I have a current backup and approve the disk resize above."
         : "I have a current backup and approve the disk layout above."
+      return untested
+        ? approval + " I understand this Mac is untested and know how to start macOS again."
+        : approval
     }
+    public static let untestedMacHeadline = "Omarchy has not been tested on this Mac yet"
+    /// How to get back to macOS if Omarchy does not start; the same steps as
+    /// the startup-disk guide.
+    public static let untestedMacRecovery =
+      "If Omarchy does not start, shut the Mac down, then press and hold the power button until “Loading startup options” appears, and choose macOS."
     public static let planInstall = "Install"
     public static let installHoldAcknowledgement = "Tick the backup box above to continue."
     public static let installHoldDownload = "Install unlocks once the download is verified."

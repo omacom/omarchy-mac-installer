@@ -15,6 +15,10 @@ public struct PinnedInstallerRecord: Equatable, Sendable {
   public let repairManifestDigest: String?
   public let evidenceRevision: String
   public let delivery: PinnedInstallerDelivery?
+  /// The signed catalog's note for a Mac no image has been installed on yet
+  /// (scripts/supported-models.json `untested`). Only edge carries one; the
+  /// owner must acknowledge it before any disk change.
+  public let previewNote: String?
 
   public init(
     deviceIdentifier: String,
@@ -29,7 +33,8 @@ public struct PinnedInstallerRecord: Equatable, Sendable {
     payloadDigest: String,
     repairManifestDigest: String? = nil,
     evidenceRevision: String,
-    delivery: PinnedInstallerDelivery?
+    delivery: PinnedInstallerDelivery?,
+    previewNote: String? = nil
   ) {
     self.deviceIdentifier = deviceIdentifier
     self.operation = operation
@@ -44,6 +49,7 @@ public struct PinnedInstallerRecord: Equatable, Sendable {
     self.repairManifestDigest = repairManifestDigest
     self.evidenceRevision = evidenceRevision
     self.delivery = delivery
+    self.previewNote = previewNote
   }
 }
 
@@ -246,6 +252,13 @@ struct SignedSupportCatalogVerifier: Sendable {
           "models[\(index)].evidenceRevision"
         )
       }
+      if let note = model.previewNote {
+        guard !note.isEmpty, note.count <= 1000,
+          note.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+        else {
+          throw SupportCatalogError.invalidField("models[\(index)].previewNote")
+        }
+      }
 
       let engineVersion: String?
       if manifest.schemaVersion >= 2 {
@@ -284,7 +297,8 @@ struct SignedSupportCatalogVerifier: Sendable {
         payloadDigest: model.payloadDigest,
         repairManifestDigest: repairManifestDigest,
         evidenceRevision: model.evidenceRevision,
-        delivery: delivery
+        delivery: delivery,
+        previewNote: model.previewNote
       )
     }
 
@@ -481,6 +495,7 @@ private struct ModelRecord: Decodable {
   let payloadDigest: String
   let repairManifestDigest: String?
   let evidenceRevision: String
+  let previewNote: String?
   let engineArtifact: ModelArtifactRecord?
   let metadataArtifact: ModelArtifactRecord?
   let payloadArtifact: ModelArtifactRecord?

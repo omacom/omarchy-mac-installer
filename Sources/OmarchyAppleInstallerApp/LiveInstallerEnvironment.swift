@@ -711,7 +711,8 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
         && recommendation.candidate.sourceIdentifier == host.storage.physicalStoreIdentifier
         ? host.storage.containerFreeBytes - min(host.storage.containerFreeBytes, reservedBytes)
         : nil,
-      recommendedOmarchyBytes: recommendation.candidate.recommendedInstallBytes
+      recommendedOmarchyBytes: recommendation.candidate.recommendedInstallBytes,
+      previewNote: review.assets.installer.previewNote
     )
   }
 

@@ -229,7 +229,12 @@ struct OnePageInstallerView: View {
       if let notice = session.allocationNotice {
         Text(notice).font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
       }
-      acknowledgement(acknowledged, resizesMacOS: plan.fixedMacOSBytes == nil)
+      if let note = plan.previewNote {
+        untestedMacPanel(note)
+      }
+      acknowledgement(
+        acknowledged, resizesMacOS: plan.fixedMacOSBytes == nil,
+        untested: plan.previewNote != nil)
 
     case .awaitingInstall(let plan, let helper, _):
       DiskSplitPanel(plan: plan, editable: false, isBusy: false, onSizeChosen: { _ in })
@@ -467,8 +472,23 @@ struct OnePageInstallerView: View {
 
   /// The tick and its text. Both are inert while a re-plan runs so a tick
   /// cannot land between the drag and the new plan.
-  private func acknowledgement(_ acknowledged: Bool, resizesMacOS: Bool) -> some View {
-    let text = PlainLanguage.planAcknowledgement(resizesMacOS: resizesMacOS)
+  /// The signed catalog's note for a Mac no image has been installed on yet,
+  /// with the way back to macOS. The tick below covers it.
+  private func untestedMacPanel(_ note: String) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(PlainLanguage.untestedMacHeadline)
+        .font(OmarchyTheme.heading)
+        .foregroundStyle(OmarchyTheme.caution)
+      Text(note).font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
+      Text(PlainLanguage.untestedMacRecovery).omarchyHelpText()
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func acknowledgement(
+    _ acknowledged: Bool, resizesMacOS: Bool, untested: Bool = false
+  ) -> some View {
+    let text = PlainLanguage.planAcknowledgement(resizesMacOS: resizesMacOS, untested: untested)
     return HStack(alignment: .center, spacing: 12) {
       Toggle(
         "",

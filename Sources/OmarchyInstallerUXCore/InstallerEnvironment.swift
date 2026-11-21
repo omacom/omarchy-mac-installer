@@ -124,6 +124,9 @@
     /// existing install and reuses its exact extent, so there is nothing to
     /// drag; showing a divider there invites a re-plan the engine refuses.
     public let isResizable: Bool
+    /// The signed catalog's note when no image has been installed on this Mac
+    /// yet. The plan shows it and the owner's acknowledgement covers it.
+    public let previewNote: String?
 
     public init(
       diskTotalBytes: UInt64,
@@ -134,7 +137,8 @@
       maximumBytes: UInt64? = nil,
       fixedMacOSBytes: UInt64? = nil,
       macOSFreeBeforeAllocationBytes: UInt64? = nil,
-      recommendedOmarchyBytes: UInt64? = nil
+      recommendedOmarchyBytes: UInt64? = nil,
+      previewNote: String? = nil
     ) {
       self.diskTotalBytes = diskTotalBytes
       self.omarchyBytes = omarchyBytes
@@ -145,6 +149,7 @@
       self.macOSFreeBeforeAllocationBytes = macOSFreeBeforeAllocationBytes
       self.recommendedOmarchyBytes = recommendedOmarchyBytes
       self.isResizable = isResizable && self.minimumBytes < self.maximumBytes
+      self.previewNote = previewNote
     }
   }
 

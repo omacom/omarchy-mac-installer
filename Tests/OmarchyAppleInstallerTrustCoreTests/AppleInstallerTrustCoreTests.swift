@@ -272,6 +272,27 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
     )
   }
 
+  func testAnUntestedModelCarriesTheSignedPreviewNote() throws {
+    let plain = try makeCatalog(sequence: 7)
+    let untested = try makeCatalog(sequence: 7, previewNote: "Untested: qualified on edge next")
+    let cases: [(CatalogFixture, String?)] = [
+      (plain, nil), (untested, "Untested: qualified on edge next"),
+    ]
+    for (fixture, note) in cases {
+      let result = try core.validateSupportCatalog(
+        payload: fixture.payload, signature: fixture.signature, trustRoot: fixture.trustRoot,
+        now: now)
+      guard case .admitted(let record) = result.admission(for: "apple,j314s") else {
+        return XCTFail("Expected the signed record to be admitted")
+      }
+      XCTAssertEqual(record.previewNote, note)
+    }
+    let empty = try makeCatalog(sequence: 7, previewNote: "")
+    XCTAssertThrowsError(
+      try core.validateSupportCatalog(
+        payload: empty.payload, signature: empty.signature, trustRoot: empty.trustRoot, now: now))
+  }
+
   func testCatalogRejectsInvalidSignature() throws {
     let fixture = try makeCatalog(sequence: 8)
     let mutatedPayload = fixture.payload + Data(" ".utf8)
@@ -824,7 +845,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
     expiresAt: Date? = nil,
     schemaVersion: Int = 1,
     includeExpiry: Bool = true,
-    installer: String? = nil
+    installer: String? = nil,
+    previewNote: String? = nil
   ) throws -> CatalogFixture {
     let privateKey = Curve25519.Signing.PrivateKey()
     let issued = ISO8601DateFormatter().string(
@@ -838,7 +860,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
         deviceIdentifier: "apple,j314s",
         status: "enabled",
         evidence: evidence,
-        withDelivery: schemaVersion >= 2
+        withDelivery: schemaVersion >= 2,
+        previewNote: previewNote
       ),
       catalogModel(
         deviceIdentifier: "apple,j614s",
@@ -884,14 +907,16 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
     deviceIdentifier: String,
     status: String,
     evidence: String,
-    withDelivery: Bool = false
+    withDelivery: Bool = false,
+    previewNote: String? = nil
   ) -> String {
     let delivery =
       withDelivery
       ? #","engineVersion":"v0.9.0-omarchy.14","engineArtifact":{"sourceURL":"https://downloads.example.com/engine.tar.gz","fileName":"engine.tar.gz","sizeBytes":1},"metadataArtifact":{"sourceURL":"https://downloads.example.com/metadata.json","fileName":"metadata.json","sizeBytes":1},"payloadArtifact":{"sourceURL":"https://downloads.example.com/payload.zip","fileName":"payload.zip","sizeBytes":1}"#
       : ""
+    let note = previewNote.map { #","previewNote":"# + "\"\($0)\"" } ?? ""
     return """
-      {"deviceIdentifier":"\(deviceIdentifier)","status":"\(status)","asahiInstallerTag":"v0.9.0","asahiInstallerRevision":"\(String(repeating: "a", count: 40))","asahiInstallerDataRevision":"\(String(repeating: "b", count: 40))","downstreamRevision":"\(String(repeating: "c", count: 40))","engineDigest":"sha256:\(String(repeating: "d", count: 64))","metadataDigest":"sha256:\(String(repeating: "e", count: 64))","payloadDigest":"sha256:\(String(repeating: "f", count: 64))","evidenceRevision":"\(evidence)"\(delivery)}
+      {"deviceIdentifier":"\(deviceIdentifier)","status":"\(status)","asahiInstallerTag":"v0.9.0","asahiInstallerRevision":"\(String(repeating: "a", count: 40))","asahiInstallerDataRevision":"\(String(repeating: "b", count: 40))","downstreamRevision":"\(String(repeating: "c", count: 40))","engineDigest":"sha256:\(String(repeating: "d", count: 64))","metadataDigest":"sha256:\(String(repeating: "e", count: 64))","payloadDigest":"sha256:\(String(repeating: "f", count: 64))","evidenceRevision":"\(evidence)"\(delivery)\(note)}
       """
   }
 
