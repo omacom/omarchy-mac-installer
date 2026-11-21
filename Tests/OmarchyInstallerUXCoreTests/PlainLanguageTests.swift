@@ -6,6 +6,33 @@
   @testable import OmarchyInstallerUXCore
 
   final class PlainLanguageTests: XCTestCase {
+    func testSentencesSplitAMessageAtItsSentenceEnds() {
+      XCTAssertEqual(
+        PlainLanguage.sentences(
+          "The removal service couldn’t be set up. Try again. No disk changes were made."),
+        ["The removal service couldn’t be set up.", "Try again.", "No disk changes were made."])
+      XCTAssertEqual(
+        PlainLanguage.sentences(
+          PlainLanguage.removalCompletedWithoutReply(freeSpace: false)),
+        [
+          "Omarchy and its data have been removed.",
+          "The freed space is now part of macOS.",
+          "The removal service finished and removed itself before this window heard back, as can happen if the Mac sleeps.",
+        ])
+    }
+
+    func testSentencesKeepNamesNumbersAndSingleSentencesWhole() {
+      XCTAssertEqual(
+        PlainLanguage.sentences("Found “Omarchy”. Removal returns 524.3 MB to macOS."),
+        ["Found “Omarchy”.", "Removal returns 524.3 MB to macOS."])
+      XCTAssertEqual(
+        PlainLanguage.sentences("Checking for an existing Omarchy installation…"),
+        ["Checking for an existing Omarchy installation…"])
+      XCTAssertEqual(
+        PlainLanguage.sentences("Nothing was deleted. macOS is unchanged."),
+        ["Nothing was deleted.", "macOS is unchanged."])
+    }
+
     func testPreSubmissionHelperFailureKeepsSpecificRecoveryAdvice() throws {
       let failure = PlainLanguage.failure(
         for: InstallerPreSubmissionFailure(EngineXPCSubmissionError.helperUnresponsive))

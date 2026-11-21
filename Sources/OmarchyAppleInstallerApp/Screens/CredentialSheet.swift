@@ -78,7 +78,6 @@ struct CredentialSheet: View {
           .autocorrectionDisabled()
           .focused($focus, equals: .username)
           .onSubmit { focus = .password }
-          .disabled(isSimulation)
       }
       field(label: PlainLanguage.authorizePasswordLabel, reason: input.passwordReason) {
         SecureField("", text: isSimulation ? .constant("simulation-only") : $input.password)
@@ -88,7 +87,6 @@ struct CredentialSheet: View {
           .privacySensitive()
           .focused($focus, equals: .password)
           .onSubmit(submit)
-          .disabled(isSimulation)
       }
 
       if context.isVerifying || context.error != nil {
@@ -125,10 +123,8 @@ struct CredentialSheet: View {
           .fixedSize()
           .keyboardShortcut(.cancelAction)
           .focusEffectDisabled()
-        Button(primaryTitle, action: submit)
-          .omarchyPrimaryButton()
+        MainActionButton(primaryTitle, action: submit)
           .fixedSize()
-          .keyboardShortcut(.defaultAction)
           .disabled(!input.isValid)
       }
       .padding(.top, 8)
@@ -142,7 +138,7 @@ struct CredentialSheet: View {
     .onAppear {
       input.username = isSimulation ? "simulation" : NSUserName()
       if isSimulation { input.password = "simulation-only" }
-      if !isSimulation { focus = input.username.isEmpty ? .username : .password }
+      focus = input.username.isEmpty ? .username : .password
     }
     // The spinner alone reads as stuck once the helper moves from checking
     // the password to preparing the package; after a few seconds say so.
@@ -157,7 +153,7 @@ struct CredentialSheet: View {
     .onChange(of: context.error) { _, error in
       if error == .credentialsRejected {
         if isSimulation { input.password = "simulation-only" }
-        if !isSimulation { focus = .password }
+        focus = .password
       }
     }
     .task { await onCheckHelper() }

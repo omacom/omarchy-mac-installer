@@ -86,6 +86,15 @@ struct OmarchyAppleInstallerApp: App {
     #endif
   }
 
+  /// Escape does what the window's close button does, and stands aside for a
+  /// size being edited or a screen with its own Cancel.
+  private var escapeClosesWindow: Bool {
+    guard !showsRemoval, !removalInProgress else { return false }
+    guard let liveSession else { return true }
+    return !liveSession.isExecutionInProgress && !liveSession.isEditingSize
+      && !liveSession.showsRecoveryAccountSetup
+  }
+
   @ViewBuilder
   private var installerContent: some View {
     #if DEBUG
@@ -133,6 +142,10 @@ struct OmarchyAppleInstallerApp: App {
         }
       }
       .id(generation)
+      .background {
+        HiddenShortcutButton(shortcut: .cancelAction) { NSApplication.shared.terminate(nil) }
+          .disabled(!escapeClosesWindow)
+      }
       .onReceive(
         NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
       ) { _ in
