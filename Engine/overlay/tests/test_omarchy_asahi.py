@@ -82,6 +82,9 @@ class FakeStubInstaller:
             return
         self.calls.append(("check_volume",))
 
+    def get_paths(self):
+        pass  # Fixture paths are assigned in __init__.
+
     def install_files(self, current_os):
         self.calls.append(("install_files", current_os))
         # As the real stub does, with the plain image older firmware ships.

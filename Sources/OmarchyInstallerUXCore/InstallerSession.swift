@@ -84,6 +84,11 @@
     /// Unlike hasExecutionStarted, it clears on terminal outcomes so shutdown works.
     public private(set) var isExecutionInProgress = false
     public var canInspect: Bool { !isBusy && !isExecuting && !hasExecutionStarted }
+    /// A failed execution keeps its no-replan latch, but the helper may still
+    /// admit a narrowly scoped resume from its protected installation record.
+    public var canOpenInterruptedResume: Bool {
+      !isBusy && !isExecuting && !isExecutionInProgress
+    }
     public var canChangeChannel: Bool {
       recoveryAccount == nil && canInspect && !isEditingSize && credentialSheet.context == nil
     }

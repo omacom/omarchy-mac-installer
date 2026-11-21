@@ -9,6 +9,7 @@ import omarchy_contract
 import omarchy_execution
 import omarchy_planner
 import omarchy_repair
+import omarchy_resume
 import omarchy_stage1
 
 
@@ -26,6 +27,7 @@ ENVIRONMENT_KEYS = {
     "OMARCHY_RECOVERY_APP",
     "OMARCHY_RECOVERY_MANIFEST",
     "OMARCHY_RECOVERY_REQUIREMENT",
+    "OMARCHY_RESUME_ENGINE_DIGEST",
     "DISTRO",
     "DISTRO_DOCS",
     "OMARCHY_INSTALLER_NAME",
@@ -46,6 +48,7 @@ OPTIONAL_INSTALL_KEYS = {
     "OMARCHY_RECOVERY_APP",
     "OMARCHY_RECOVERY_MANIFEST",
     "OMARCHY_RECOVERY_REQUIREMENT",
+    "OMARCHY_RESUME_ENGINE_DIGEST",
 }
 
 
@@ -80,6 +83,7 @@ class EngineRuntime:
             "plan",
             "install",
             "retry-recovery-authorization",
+            "resume-interrupted-install",
         ):
             raise EngineRuntimeError("unsupported engine mode")
         if environment.get("EXPERT"):
@@ -94,13 +98,19 @@ class EngineRuntime:
             },
             "install": ENVIRONMENT_KEYS - OPTIONAL_INSTALL_KEYS,
             "retry-recovery-authorization": ENVIRONMENT_KEYS - OPTIONAL_INSTALL_KEYS,
+            "resume-interrupted-install": {
+                "OMARCHY_ENGINE_JOURNAL", "OMARCHY_ENGINE_METADATA", "OMARCHY_ENGINE_PAYLOAD",
+                "OMARCHY_MACHINE_OWNER", omarchy_apple_aea.DECODER_ENVIRONMENT,
+                omarchy_apple_aea.REQUIREMENT_ENVIRONMENT,
+                "OMARCHY_RESUME_ENGINE_DIGEST",
+            },
         }[mode]
         missing = sorted(required - set(values))
         if missing:
             raise EngineRuntimeError(
                 "missing engine environment: " + ",".join(missing)
             )
-        if mode in ("install", "retry-recovery-authorization"):
+        if mode in ("install", "retry-recovery-authorization", "resume-interrupted-install"):
             # Refuse before any disk change, not when the first image needs it.
             try:
                 omarchy_apple_aea.decoder(values)
@@ -112,6 +122,7 @@ class EngineRuntime:
         if self.mode not in (
             "install",
             "retry-recovery-authorization",
+            "resume-interrupted-install",
         ):
             return bundled_metadata
         return omarchy_asahi.load_metadata(
@@ -143,6 +154,24 @@ class EngineRuntime:
             self.device_identifier = inspection["device_identifier"]
         if self.journal.inspection_payload["support"] != "supported":
             raise EngineRuntimeError("unsupported device has no layout")
+
+        if self.mode == "resume-interrupted-install":
+            plan = omarchy_resume.original_plan(self.journal)
+            if (self.device_identifier != plan.device_identifier
+                    or installer.sys_disk != plan.store_identifier
+                    or installer.sysinfo.boot_mode != "macOS"):
+                raise EngineRuntimeError("resume host differs from the original installation")
+            for key, digest in (("OMARCHY_ENGINE_METADATA", plan.metadata_digest),
+                                ("OMARCHY_ENGINE_PAYLOAD", plan.payload_digest)):
+                omarchy_resume.verify_input(self.values[key], digest)
+            adapter = omarchy_asahi.AsahiStage1Adapter(
+                installer=installer, metadata_path=self.values["OMARCHY_ENGINE_METADATA"],
+                payload_path=self.values["OMARCHY_ENGINE_PAYLOAD"], stub_size=stub_size,
+                authorized_owner=self.values["OMARCHY_MACHINE_OWNER"], full_readback=True,
+                resume_engine_digest=self.values["OMARCHY_RESUME_ENGINE_DIGEST"],
+            )
+            adapter.preflight(plan)
+            return omarchy_resume.resume_stage1(plan, self.journal, adapter)
 
         repair_manifest = None
         repair_manifest_path = self.values.get(
