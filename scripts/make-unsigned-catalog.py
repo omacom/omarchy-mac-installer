@@ -185,8 +185,10 @@ def load_developer_models(document: dict) -> list[str]:
     groups = document["developer_models"]
     if not isinstance(groups, list) or not groups:
         raise SystemExit("inputs developer_models must be a non-empty list")
-    supported, _ = supported_models.load()
-    allowed = set(supported_models.developer_boards()) | set(supported)
+    # The widest channel's Macs count towards the main group's coverage; a
+    # developer board does not, since no channel offers it.
+    offered = set(supported_models.boards_for(supported_models.CHANNELS[0]))
+    allowed = set(supported_models.developer_boards()) | offered
     taken = []
     # Groups may share a payload; each metadata file belongs to one group.
     payloads = {document["payload_name"]}
@@ -219,7 +221,7 @@ def load_developer_models(document: dict) -> list[str]:
                     f"{identifier} is not a developer board or a supported Mac "
                     "in scripts/supported-models.json"
                 )
-            if identifier in supported:
+            if identifier in offered:
                 taken.append(identifier)
             boards.add(identifier)
     return taken
@@ -298,7 +300,7 @@ def load_inputs(path: Path, developer: bool = False) -> dict:
     # Every catalog enables every supported Mac (scripts/supported-models.json):
     # in the main group, or in a developer group that gives some of them their own metadata.
     taken = load_developer_models(document) if "developer_models" in document else []
-    coverage = supported_models.coverage_errors(identifiers + taken)
+    coverage = supported_models.private_coverage_errors(identifiers + taken)
     if coverage:
         raise SystemExit("inputs device_identifiers: " + "; ".join(coverage))
 

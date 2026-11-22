@@ -226,7 +226,8 @@ catalog = {
                 "sizeBytes": int(payload_size),
             },
         }
-        for identifier in json.load(open(manifest))["supported"]
+        for identifier, record in json.load(open(manifest))["macs"].items()
+        if record.get("qualified") == "stable"
     ],
 }
 with open(output, "w", encoding="utf-8") as stream:

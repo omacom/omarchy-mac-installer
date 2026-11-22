@@ -250,7 +250,7 @@ class CatalogGeneratorTests(unittest.TestCase):
             for identifier in document["device_identifiers"]
             if identifier not in M3_MACS
         ]
-        self.assertRejected(document, "every supported Mac must be enabled")
+        self.assertRejected(document, "every Mac qualified for edge must be enabled")
 
     def test_refused_and_unknown_macs_are_rejected_with_a_reason(self) -> None:
         for identifier, fragment in (
@@ -263,20 +263,33 @@ class CatalogGeneratorTests(unittest.TestCase):
             self.assertRejected(document, fragment)
 
     def test_the_manifest_is_every_m1_m2_and_m3_mac_and_the_neo(self) -> None:
-        manifest = json.loads(MANIFEST.read_text())
-        self.assertEqual(len(manifest["supported"]), 35)
-        self.assertTrue(set(M3_MACS) <= set(manifest["supported"]))
-        self.assertIn("apple,j700", manifest["supported"])
-        self.assertFalse(set(M3_MACS + ["apple,j700"]) & set(manifest["untested"]),
-                         "the M3 Macs and the MacBook Neo are tested")
-        self.assertEqual(set(manifest["refused"]), {"apple,j575d", "apple,j614s"})
+        macs = json.loads(MANIFEST.read_text())["macs"]
+        stable = {
+            identifier
+            for identifier, record in macs.items()
+            if record.get("qualified") == "stable"
+        }
+        self.assertEqual(len(stable), 35)
+        self.assertTrue(set(M3_MACS) <= stable)
+        self.assertIn("apple,j700", stable)
+        # A board that has reached stable carries no note: there is nothing to
+        # warn about, and the manifest refuses one.
+        self.assertFalse(
+            [identifier for identifier in M3_MACS + ["apple,j700"] if "note" in macs[identifier]],
+            "the M3 Macs and the MacBook Neo are tested",
+        )
+        refused = {identifier for identifier, record in macs.items() if "refused" in record}
+        self.assertEqual(refused, {"apple,j575d", "apple,j614s"})
         # The M4 Pro and M5 Air bring-up boards, developer catalogs only.
-        self.assertEqual(set(manifest["developer"]), {"apple,j616s", "apple,j815"})
+        developer = {
+            identifier
+            for identifier, record in macs.items()
+            if record.get("qualified") == "developer"
+        }
+        self.assertEqual(developer, {"apple,j616s", "apple,j815"})
         for template in sorted(MANIFEST.parent.glob("release-inputs*.template.json")):
             identifiers = json.loads(template.read_text())["device_identifiers"]
-            self.assertEqual(
-                sorted(identifiers), sorted(manifest["supported"]), template.name
-            )
+            self.assertEqual(sorted(identifiers), sorted(stable), template.name)
 
     def test_the_generated_catalog_enables_every_supported_mac(self) -> None:
         result = self.generate()

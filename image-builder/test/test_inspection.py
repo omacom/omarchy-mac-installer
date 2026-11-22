@@ -1476,15 +1476,26 @@ class TestImagePinTest(unittest.TestCase):
 
 class DeviceTreeCoverageTest(unittest.TestCase):
     """Device trees are per board: the trust policy names one for every Mac the
-    catalogs may offer (scripts/supported-models.json, untested ones included)
-    and none beyond them. A board joins both together, so the image can never
-    admit a Mac its kernel cannot describe, or carry a tree no catalog offers.
-    An edge-only tree belongs to an untested Mac, which rc and stable never offer."""
+    catalogs may offer (every board qualified for a channel in
+    scripts/supported-models.json) and none beyond them. A board joins both
+    together, so the image can never admit a Mac its kernel cannot describe, or
+    carry a tree no catalog offers. An edge-only tree belongs to a board
+    qualified for edge and no further, which rc and stable never offer."""
 
     def test_every_supported_mac_has_exactly_one_policy_device_tree(self):
-        manifest = json.loads((fixtures.ROOT.parent / "scripts/supported-models.json").read_text())
-        boards = {identifier.removeprefix("apple,") for identifier in manifest["supported"]}
-        untested = {identifier.removeprefix("apple,") for identifier in manifest.get("untested", {})}
+        macs = json.loads(
+            (fixtures.ROOT.parent / "scripts/supported-models.json").read_text()
+        )["macs"]
+        boards = {
+            identifier.removeprefix("apple,")
+            for identifier, record in macs.items()
+            if record.get("qualified") in ("edge", "rc", "stable")
+        }
+        untested = {
+            identifier.removeprefix("apple,")
+            for identifier, record in macs.items()
+            if record.get("qualified") == "edge"
+        }
         edge_only = {tree.split("-", 1)[1] for tree in fixtures.POLICY.get("edge_device_trees", [])}
         self.assertEqual(sorted(edge_only - untested), [], "an edge-only device tree for a tested Mac")
         trees = {}

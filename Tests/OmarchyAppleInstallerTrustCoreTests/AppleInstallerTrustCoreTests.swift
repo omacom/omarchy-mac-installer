@@ -902,6 +902,57 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
     }
   }
 
+
+  func testAMacCannotReturnToTheCatalogThatOfferedItAfterItsWithdrawal() throws {
+    // Raising a board's floor withdraws it. The app must not then be talked
+    // back to the older catalog that still admitted it.
+    let offering = try makeCatalog(sequence: 10, channel: "rc")
+    let admitted = try core.validateSupportCatalog(
+      payload: offering.payload,
+      signature: offering.signature,
+      trustRoot: offering.trustRoot,
+      now: now,
+      expectedChannel: "rc"
+    )
+    guard case .admitted = admitted.admission(for: "apple,j314s") else {
+      return XCTFail("The M1 Pro must start out admitted")
+    }
+
+    let withdrawing = try makeCatalog(
+      sequence: 11,
+      channel: "rc",
+      withdrawing: ["apple,j314s"]
+    )
+    let withdrawn = try core.validateSupportCatalog(
+      payload: withdrawing.payload,
+      signature: withdrawing.signature,
+      trustRoot: withdrawing.trustRoot,
+      now: now,
+      expectedChannel: "rc",
+      previouslyAccepted: admitted.acceptedIdentity
+    )
+    XCTAssertEqual(
+      withdrawn.admission(for: "apple,j314s"),
+      .unsupported(deviceIdentifier: "apple,j314s")
+    )
+
+    XCTAssertThrowsError(
+      try core.validateSupportCatalog(
+        payload: offering.payload,
+        signature: offering.signature,
+        trustRoot: offering.trustRoot,
+        now: now,
+        expectedChannel: "rc",
+        previouslyAccepted: withdrawn.acceptedIdentity
+      )
+    ) { error in
+      XCTAssertEqual(
+        error as? SupportCatalogSequenceError,
+        .rollback(stored: 11, candidate: 10)
+      )
+    }
+  }
+
   private func makeCatalog(
     sequence: UInt64,
     evidence: String = "evidence-1",
@@ -910,7 +961,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
     schemaVersion: Int = 1,
     includeExpiry: Bool = true,
     installer: String? = nil,
-    channel: String? = nil
+    channel: String? = nil,
+    withdrawing: Set<String> = []
   ) throws -> CatalogFixture {
     let privateKey = Curve25519.Signing.PrivateKey()
     let issued = ISO8601DateFormatter().string(
@@ -922,7 +974,7 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
     let models = [
       catalogModel(
         deviceIdentifier: "apple,j314s",
-        status: "enabled",
+        status: withdrawing.contains("apple,j314s") ? "disabled" : "enabled",
         evidence: evidence,
         withDelivery: schemaVersion >= 2
       ),

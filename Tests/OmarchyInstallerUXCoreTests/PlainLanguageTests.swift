@@ -286,7 +286,10 @@
       XCTAssertEqual(identifiers, Set(everyM1M2M3Mac + ["apple,j700"]))
       let manifest = try JSONSerialization.jsonObject(
         with: Data(contentsOf: scripts.appendingPathComponent("supported-models.json")))
-      let supported = try XCTUnwrap((manifest as? [String: Any])?["supported"] as? [String])
+      let macs = try XCTUnwrap((manifest as? [String: Any])?["macs"] as? [String: Any])
+      let supported = macs.compactMap { identifier, record -> String? in
+        (record as? [String: Any])?["qualified"] as? String == "stable" ? identifier : nil
+      }
       XCTAssertEqual(Set(supported), Set(everyM1M2M3Mac + ["apple,j700"]))
       #if DEBUG
         XCTAssertEqual(

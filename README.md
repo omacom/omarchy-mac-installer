@@ -24,7 +24,7 @@ Installing Omarchy changes the partition layout of your Mac's internal disk and 
 
 ## Supported Macs
 
-Which Macs a release supports is decided by that release's signed catalog, not by the app alone. The source of truth in this repository is [`scripts/supported-models.json`](scripts/supported-models.json). Every catalog that offers a Mac release enables all of the 35 boards in that file from one image:
+Which Macs a release supports is decided by that release's signed catalog, not by the app alone. The source of truth in this repository is [`scripts/supported-models.json`](scripts/supported-models.json), which records for each board the highest channel it has qualified for. A channel's catalog enables every board qualified at or above that channel, so edge's set always contains rc's, which always contains stable's. All three channels offer the same 35 boards today, from one image:
 
 - M1: Mac mini, MacBook Air, MacBook Pro 13-inch, iMac 24-inch, MacBook Pro 14/16-inch (M1 Pro/Max), Mac Studio (M1 Max/Ultra)
 - M2: MacBook Air 13/15-inch, MacBook Pro 13-inch, Mac mini (M2, M2 Pro), MacBook Pro 14/16-inch (M2 Pro/Max), Mac Studio (M2 Max/Ultra), Mac Pro
@@ -38,9 +38,9 @@ Not supported:
 - The M3 Ultra Mac Studio (`apple,j575d`): the pinned v0.9.2 engine cannot inspect or plan it.
 - M4 and later, for example the MacBook Pro 14-inch M4 Pro (`apple,j614s`). Public builds keep these blocked until official support and physical qualification both exist.
 
-The 11 supported M3 boards and the MacBook Neo have been installed and run on real hardware. A newly supported board that has not been tested yet is listed under `untested` in `supported-models.json` until the testing team qualifies it on edge ([`docs/mac-release-pipeline.md`](docs/mac-release-pipeline.md#qualification-on-edge)). No board is listed there today.
+The 11 supported M3 boards and the MacBook Neo have been installed and run on real hardware. A board that has not been tested yet is qualified only for `edge` in `supported-models.json`, so rc and stable do not offer it until the testing team qualifies it on edge ([`docs/mac-release-pipeline.md`](docs/mac-release-pipeline.md#qualification-on-edge)). Every board on offer today has reached `stable`. A board qualified only for `developer` reaches no channel at all: `apple,j616s` and `apple,j815` are the M4 Pro and M5 Air bring-up boards.
 
-Why a catalog check exists: `make-unsigned-catalog.py` refuses inputs that miss, add or refuse a board, and `publish-channels envelope` refuses to wrap a catalog that lists a Mac but leaves any of them out or disabled. Only an empty "No Mac release yet" catalog lists none. `os-promote` does not re-check an envelope staged before this rule, so a rollback to an older catalog stays possible.
+Why a catalog check exists: `make-unsigned-catalog.py` refuses inputs that miss, add or refuse a board, and `publish-channels envelope` refuses to wrap a catalog that lists a Mac but leaves any of its channel's out or disabled. Only an empty "No Mac release yet" catalog lists none. `os-promote` does not re-check an envelope staged before this rule, so a rollback to an older catalog stays possible.
 
 ## Before you install
 

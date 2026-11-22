@@ -488,8 +488,8 @@ def check_supported_models(root: Path, candidates: Candidates, report: dict, pol
                            channel: str | None = None) -> str:
     """Every Mac the image admits has its Aurora device tree in stage 2. The
     trusted policy names them; the Aurora U-Boot ships no device trees. An edge
-    image also needs the trees of the edge-only (untested) Macs, which rc and
-    stable never offer."""
+    image also needs the trees of the Macs qualified for edge and no further,
+    which rc and stable never offer."""
     policy = policy if policy is not None else candidate_set.load_policy()
     kernel_dtbs = {PurePosixPath(p).name for p in candidates.dtbs()}
     trees = list(policy["device_trees"]) + (list(policy.get("edge_device_trees", [])) if channel == "edge" else [])
