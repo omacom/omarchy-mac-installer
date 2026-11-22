@@ -332,7 +332,9 @@
             standardError: capturedError,
             secrets: secrets,
             exitStatus: process.terminationStatus,
-            journal: journal
+            journal: journal,
+            readOnlyTranscript: ["inspect", "plan"].contains(
+              additionalEnvironment["OMARCHY_ENGINE_MODE"] ?? "") ? transcriptURL : nil
           )
         )
       }
@@ -343,7 +345,8 @@
       standardError: (data: Data, truncated: Bool),
       secrets: [Data],
       exitStatus: Int32,
-      journal: URL?
+      journal: URL?,
+      readOnlyTranscript: URL? = nil
     ) -> EngineFailureReport {
       let redacted = EngineStandardErrorRedactor.redact(
         standardError.data,
@@ -359,13 +362,21 @@
         notice: EngineFailureNotice(
           reason: reason,
           exitStatus: exitStatus,
-          diskUnchanged: journal.map(journalProvesNoMutation) ?? false,
+          diskUnchanged: journal.map(journalProvesNoMutation)
+            ?? readOnlyTranscript.map(readOnlyRunChangedNothing) ?? false,
           summary: final.map {
             EngineStandardErrorRedactor.summary(from: $0.line, secrets: secrets)
           } ?? ""
         ),
         redactedStandardErrorTail: redacted
       )
+    }
+
+    /// Inspect and plan stop before the engine admits any execution, so only
+    /// a transcript that records otherwise makes them claim a change.
+    private func readOnlyRunChangedNothing(_ transcript: URL) -> Bool {
+      !FileManager.default.fileExists(atPath: transcript.path)
+        || journalProvesNoMutation(transcript)
     }
 
     /// True only when the persistent journal can be read in full and holds

@@ -69,6 +69,34 @@
       XCTAssertTrue(try executionEntries(in: scratch).isEmpty)
     }
 
+    func testAFailedInspectionSaysTheDiskIsUnchanged() async throws {
+      let stderr = """
+        subprocess.CalledProcessError: Command '['diskutil', 'info', '-plist', 'disk6']' returned non-zero exit status 1.
+
+        """
+      for (transcript, unchanged) in [(Data(), true), (readOnlyJournal(withEvent: true), false)] {
+        let fixture = try makeFixture(
+          exitCode: 1, transcript: transcript, standardError: Data(stderr.utf8))
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let scratch = fixture.root.appendingPathComponent("inspection-scratch", isDirectory: true)
+        try FileManager.default.createDirectory(
+          at: scratch, withIntermediateDirectories: false,
+          attributes: [.posixPermissions: 0o700])
+        let archive = try PinnedAsahiEngineArchive(
+          fileURL: fixture.package.engineURL,
+          expectedDigest: try digest(of: fixture.package.engineURL),
+          expectedSizeBytes: try size(of: fixture.package.engineURL))
+        let executor = PinnedAsahiEngineExecutor(effectiveUserID: { 501 })
+
+        await assertThrowsErrorAsync(try await executor.inspect(archive, in: scratch)) {
+          guard
+            case .engineFailed(let report) = $0 as? PinnedAsahiEngineExecutionError
+          else { return XCTFail("Expected engineFailed, got \($0)") }
+          XCTAssertEqual(report.notice.diskUnchanged, unchanged)
+        }
+      }
+    }
+
     func testVerifiedPlanReceivesPrivateInputsAndCleansAllTemporaryState()
       async throws
     {
