@@ -95,16 +95,21 @@ struct SupportCatalog: Equatable, Sendable {
 
   let sequence: UInt64
   let installerCompatibility: InstallerCompatibility?
+  /// The channel this catalog was signed for, or nil for one published before
+  /// the field existed.
+  let channel: String?
   private let records: [String: PinnedInstallerRecord]
 
   init(
     sequence: UInt64,
     records: [String: PinnedInstallerRecord],
-    installerCompatibility: InstallerCompatibility? = nil
+    installerCompatibility: InstallerCompatibility? = nil,
+    channel: String? = nil
   ) {
     self.sequence = sequence
     self.records = records
     self.installerCompatibility = installerCompatibility
+    self.channel = channel
   }
 
   func record(for deviceIdentifier: String) -> PinnedInstallerRecord? {
@@ -126,14 +131,19 @@ public enum SupportCatalogError: Error, Equatable, Sendable {
   case invalidField(String)
   case notYetValid
   case expired
+  case channelMismatch(expected: String, found: String)
 }
 
 struct SignedSupportCatalogVerifier: Sendable {
+  /// `expectedChannel` is the channel whose URL these bytes came from. The
+  /// verifier never learns which channels exist: it only refuses a catalog
+  /// whose own declared channel contradicts the one asked for.
   func verify(
     payload: Data,
     signature: Data,
     publicKey: Data,
-    now: Date
+    now: Date,
+    expectedChannel: String?
   ) throws -> SupportCatalog {
     let trustRoot: Curve25519.Signing.PublicKey
 
@@ -162,6 +172,17 @@ struct SignedSupportCatalogVerifier: Sendable {
     }
     guard manifest.sequence > 0 else {
       throw SupportCatalogError.invalidSequence
+    }
+    if let declared = manifest.channel {
+      guard isChannelName(declared) else {
+        throw SupportCatalogError.invalidField("channel")
+      }
+      if let expectedChannel, declared != expectedChannel {
+        throw SupportCatalogError.channelMismatch(
+          expected: expectedChannel,
+          found: declared
+        )
+      }
     }
     if let expiresAt = manifest.expiresAt {
       guard manifest.issuedAt < expiresAt else {
@@ -291,8 +312,17 @@ struct SignedSupportCatalogVerifier: Sendable {
     return SupportCatalog(
       sequence: manifest.sequence,
       records: records,
-      installerCompatibility: compatibility
+      installerCompatibility: compatibility,
+      channel: manifest.channel
     )
+  }
+
+  /// A channel name is lowercase ASCII letters, which is all three of ours.
+  /// The set itself lives in `ReleaseChannel`, which this file cannot see.
+  private func isChannelName(_ value: String) -> Bool {
+    !value.isEmpty
+      && value.count <= 32
+      && value.utf8.allSatisfy { byte in byte >= 97 && byte <= 122 }
   }
 
   private func installerCompatibility(
@@ -454,6 +484,7 @@ struct SignedSupportCatalogVerifier: Sendable {
 
 private struct Manifest: Decodable {
   let schemaVersion: Int
+  let channel: String?
   let sequence: UInt64
   let issuedAt: Date
   let expiresAt: Date?

@@ -1190,9 +1190,12 @@ class PromotionTests(ReleaseTestCase):
             _, catalog = self.signed_catalog(envelopes[channel])
             sequences.append(catalog["sequence"])
             self.assertEqual(catalog["issuedAt"], now)
+            # The promoted catalog says which channel serves it.
+            self.assertEqual(catalog["channel"], channel)
+            self.assertEqual(edge_catalog["channel"], "edge")
             # The same models, pins, digests and installer block as edge.
             for key in set(edge_catalog) | set(catalog):
-                if key not in ("sequence", "issuedAt"):
+                if key not in ("sequence", "issuedAt", "channel"):
                     self.assertEqual(catalog.get(key), edge_catalog.get(key), key)
             for model in catalog["models"]:
                 self.assertEqual(model["payloadDigest"], f"sha256:{sha(PAYLOAD)}")
@@ -1308,7 +1311,8 @@ class PromotionTests(ReleaseTestCase):
         self.assert_refused(mispinned, "not the pinned")
         changed = json.loads(json.dumps(original))
         changed["models"][0]["engineDigest"] = f"sha256:{'a' * 64}"
-        self.assert_refused(check(changed, name="catalog-rc.json"), "changes more than sequence and issuedAt: models")
+        self.assert_refused(check(changed, name="catalog-rc.json"),
+                            "changes more than sequence, issuedAt and channel: models")
         changed = json.loads(json.dumps(original))
         changed["models"][0]["payloadArtifact"]["parts"][0]["sourceURL"] = f"{release_base('other')}/{ZIP}.part00"
         self.assert_refused(check(changed, name="catalog-rc.json"), "models")

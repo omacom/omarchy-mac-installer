@@ -48,7 +48,7 @@
       let core = AppleInstallerTrustCore()
       let catalog = try core.validateSupportCatalog(
         payload: documents.payload, signature: documents.signature,
-        trustRoot: configuration.trustRoot, now: Date())
+        trustRoot: configuration.trustRoot, now: Date(), expectedChannel: nil)
       guard case .admitted(let record) = catalog.admission(for: "apple,j613") else {
         return XCTFail("13-inch M3 Air must be admitted")
       }
@@ -69,17 +69,20 @@
       XCTAssertThrowsError(
         try core.validateSupportCatalog(
           payload: payload + Data([32]), signature: signature, trustRoot: configuration.trustRoot,
-          now: Date()))
+          now: Date(),
+          expectedChannel: nil))
       let wrongSignature = try Curve25519.Signing.PrivateKey().signature(for: payload)
       XCTAssertThrowsError(
         try core.validateSupportCatalog(
           payload: payload, signature: wrongSignature, trustRoot: configuration.trustRoot,
-          now: Date()))
+          now: Date(),
+          expectedChannel: nil))
       let newer = try AcceptedCatalogIdentity(
         sequence: catalog.sequence + 1, payloadDigest: SHA256Digest(hashing: payload).rawValue)
       XCTAssertThrowsError(
         try core.validateSupportCatalog(
           payload: payload, signature: signature, trustRoot: configuration.trustRoot, now: Date(),
+          expectedChannel: nil,
           previouslyAccepted: newer))
     }
   }

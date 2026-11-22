@@ -216,7 +216,8 @@
         payload: catalog,
         signature: signature,
         trustRoot: trustRoot,
-        now: validationTime
+        now: validationTime,
+        expectedChannel: nil
       )
       guard
         case .admitted(let installer) = accepted.admission(
@@ -261,7 +262,8 @@
       )
       let release = PreparedInstallerRelease(
         assets: assets,
-        catalogDocuments: documents
+        catalogDocuments: documents,
+        channel: .stable
       )
       let configuration = InstallerReleaseConfiguration(
         channels: ReleaseChannelEndpoints(endpoints: [

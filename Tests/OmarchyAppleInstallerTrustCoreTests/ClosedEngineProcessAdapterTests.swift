@@ -361,7 +361,8 @@ final class ClosedEngineProcessAdapterTests: XCTestCase {
       catalogPayload: deliveredCatalog,
       catalogSignature: signature,
       trustRoot: trustRoot,
-      validationTime: now
+      validationTime: now,
+      expectedChannel: nil
     )
   }
 

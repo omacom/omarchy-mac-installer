@@ -87,8 +87,10 @@ SIGNED_CHANNELS = ("edge", "rc", "stable")
 # A catalog is promoted only forward along this order: edge to rc or
 # stable, rc to stable.
 CHANNEL_ORDER = ("edge", "rc", "stable")
-# The only catalog keys a promotion changes.
-PROMOTION_FIELDS = ("sequence", "issuedAt")
+# The only catalog keys a promotion changes. `channel` is among them because a
+# promoted catalog is served at the target channel's URL and must say so; its
+# new value is checked against the target, not left free.
+PROMOTION_FIELDS = ("sequence", "issuedAt", "channel")
 # The harness's fresh-install scenarios (omarchy-mac-pkgs
 # tools/acceptance/mac-image): every one must pass for the image's sha256.
 REQUIRED_SCENARIOS = ("first-boot", "conversion", "second-boot")
@@ -500,6 +502,10 @@ def build_catalog(
         models.append(model)
     catalog = {
         "schemaVersion": SCHEMA_VERSION,
+        # The channel this catalog is signed for. The app checks it against the
+        # channel URL it fetched from, so an envelope published to the wrong
+        # channel is refused rather than installed.
+        "channel": channel,
         "sequence": int(now.timestamp()),
         "issuedAt": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
@@ -640,9 +646,11 @@ def check_promotion_source(source: dict) -> None:
             raise Refusal(f"{image} is a final tag built on the rc lane: it is never promoted")
 
 
-def promote_catalog(source: dict, now: datetime.datetime) -> dict:
-    """SOURCE with only its sequence and issue time replaced: every model,
-    pin, digest and the installer block keep exactly the source's values."""
+def promote_catalog(source: dict, now: datetime.datetime, channel: str) -> dict:
+    """SOURCE with only its sequence, issue time and channel replaced: every
+    model, pin, digest and the installer block keep exactly the source's
+    values. CHANNEL is the destination the result is published to."""
+    check_channel(channel)
     if source.get("schemaVersion") != SCHEMA_VERSION:
         raise Refusal("the source catalog is not a schema 4 catalog")
     check_promotion_source(source)
@@ -656,13 +664,15 @@ def promote_catalog(source: dict, now: datetime.datetime) -> dict:
     promoted = json.loads(json.dumps(source))
     promoted["sequence"] = sequence
     promoted["issuedAt"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    check_same_pins(source, promoted)
+    promoted["channel"] = channel
+    check_same_pins(source, promoted, channel)
     return promoted
 
 
-def check_same_pins(source: dict, promoted: dict) -> None:
-    """Refuse unless PROMOTED differs from SOURCE only in its sequence and
-    issue time."""
+def check_same_pins(source: dict, promoted: dict, channel: str) -> None:
+    """Refuse unless PROMOTED differs from SOURCE only in its sequence, issue
+    time and channel, and its channel is CHANNEL, reached forward along
+    CHANNEL_ORDER from the source's."""
     def rest(document: dict) -> dict:
         return {key: value for key, value in document.items() if key not in PROMOTION_FIELDS}
 
@@ -671,9 +681,19 @@ def check_same_pins(source: dict, promoted: dict) -> None:
     before, after = rest(source), rest(promoted)
     if before != after:
         changed = sorted(key for key in before.keys() | after.keys() if before.get(key) != after.get(key))
-        raise Refusal(f"the promoted catalog changes more than {' and '.join(PROMOTION_FIELDS)}: {', '.join(changed)}")
+        allowed = f"{', '.join(PROMOTION_FIELDS[:-1])} and {PROMOTION_FIELDS[-1]}"
+        raise Refusal(f"the promoted catalog changes more than {allowed}: {', '.join(changed)}")
     if not isinstance(promoted.get("sequence"), int) or promoted["sequence"] <= source["sequence"]:
         raise Refusal("the promoted catalog's sequence does not follow its source's")
+    if promoted.get("channel") != channel:
+        raise Refusal(f"the promoted catalog is for {promoted.get('channel')!r}, not the {channel} it is published to")
+    declared = source.get("channel")
+    if declared is not None:
+        if declared not in CHANNEL_ORDER:
+            raise Refusal(f"the source catalog names an unknown channel {declared!r}")
+        if CHANNEL_ORDER.index(declared) >= CHANNEL_ORDER.index(channel):
+            raise Refusal(f"{declared} is not promoted to {channel}: promotion only moves forward along "
+                          f"{' to '.join(CHANNEL_ORDER)}")
 
 
 def check_promotion_mode(channel: str, real: bool, confirm: str | None, source_sha256: str | None) -> None:
@@ -1296,7 +1316,7 @@ def command_promote(arguments) -> None:
     source_sha256 = hashlib.sha256(source_bytes).hexdigest()
     if expected is not None and source_sha256 != expected:
         raise Refusal(f"the published {source_channel} catalog is sha256 {source_sha256}, not the pinned {expected}")
-    promoted = promote_catalog(source, now)
+    promoted = promote_catalog(source, now, channel)
     artifacts = promotion_artifacts(promoted)
     if arguments.verify_remote:
         # Read back what the catalog pins; nothing is built or uploaded.
@@ -1341,7 +1361,7 @@ def command_check_promotion(arguments) -> None:
             raise Refusal(f"the source catalog is sha256 {source_sha256}, not the pinned {arguments.source_sha256}")
     check_promotion_source(source)
     promoted = load_json(arguments.catalog, "catalog")
-    check_same_pins(source, promoted)
+    check_same_pins(source, promoted, channel)
     promotion_artifacts(promoted)
     print(f"promotion=checked {source_channel} to {channel}, sequence {source['sequence']} to {promoted['sequence']}")
 

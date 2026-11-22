@@ -533,7 +533,8 @@
         catalogPayload: catalog,
         catalogSignature: signature,
         trustRoot: trustRoot,
-        validationTime: now
+        validationTime: now,
+        expectedChannel: nil
       )
       let identity = try ClosedEngineProcessAdapter().candidateIdentity(
         for: request

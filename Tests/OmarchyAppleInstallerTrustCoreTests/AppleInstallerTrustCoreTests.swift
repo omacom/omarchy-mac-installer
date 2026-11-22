@@ -258,7 +258,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
       payload: fixture.payload,
       signature: fixture.signature,
       trustRoot: fixture.trustRoot,
-      now: now
+      now: now,
+      expectedChannel: nil
     )
 
     XCTAssertEqual(result.sequence, 7)
@@ -281,7 +282,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
         payload: mutatedPayload,
         signature: fixture.signature,
         trustRoot: fixture.trustRoot,
-        now: now
+        now: now,
+        expectedChannel: nil
       )
     ) {
       XCTAssertEqual($0 as? SupportCatalogError, .invalidSignature)
@@ -315,7 +317,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
         rawRepresentation: publicKey,
         expectedFingerprint: fingerprint
       ),
-      now: now
+      now: now,
+      expectedChannel: nil
     )
     guard case .admitted(let record) = catalog.admission(for: "apple,j314s")
     else {
@@ -344,7 +347,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
       payload: fixture.payload,
       signature: fixture.signature,
       trustRoot: fixture.trustRoot,
-      now: now.addingTimeInterval(10 * 365 * 86_400)
+      now: now.addingTimeInterval(10 * 365 * 86_400),
+      expectedChannel: nil
     )
 
     XCTAssertEqual(validated.sequence, 40)
@@ -361,7 +365,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
       payload: fixture.payload,
       signature: fixture.signature,
       trustRoot: fixture.trustRoot,
-      now: now.addingTimeInterval(-10 * 365 * 86_400)
+      now: now.addingTimeInterval(-10 * 365 * 86_400),
+      expectedChannel: nil
     )
 
     XCTAssertEqual(validated.sequence, 41)
@@ -380,7 +385,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
         payload: fixture.payload,
         signature: fixture.signature,
         trustRoot: fixture.trustRoot,
-        now: now
+        now: now,
+        expectedChannel: nil
       )
     ) {
       XCTAssertEqual($0 as? SupportCatalogError, .expired)
@@ -399,7 +405,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
         payload: fixture.payload,
         signature: fixture.signature,
         trustRoot: fixture.trustRoot,
-        now: now
+        now: now,
+        expectedChannel: nil
       )
     ) {
       XCTAssertEqual($0 as? SupportCatalogError, .invalidField("expiresAt"))
@@ -418,7 +425,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
         payload: fixture.payload,
         signature: fixture.signature,
         trustRoot: fixture.trustRoot,
-        now: now
+        now: now,
+        expectedChannel: nil
       )
     ) {
       XCTAssertEqual($0 as? SupportCatalogError, .unsupportedSchema(5))
@@ -434,7 +442,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
       payload: fixture.payload,
       signature: fixture.signature,
       trustRoot: fixture.trustRoot,
-      now: now
+      now: now,
+      expectedChannel: nil
     )
 
     XCTAssertNil(validated.installerCompatibility)
@@ -452,7 +461,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
       payload: fixture.payload,
       signature: fixture.signature,
       trustRoot: fixture.trustRoot,
-      now: now
+      now: now,
+      expectedChannel: nil
     )
 
     let compatibility = try XCTUnwrap(validated.installerCompatibility)
@@ -479,7 +489,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
         payload: fixture.payload,
         signature: fixture.signature,
         trustRoot: fixture.trustRoot,
-        now: now
+        now: now,
+        expectedChannel: nil
       )
     ) {
       XCTAssertEqual(
@@ -502,7 +513,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
         payload: fixture.payload,
         signature: fixture.signature,
         trustRoot: fixture.trustRoot,
-        now: now
+        now: now,
+        expectedChannel: nil
       )
     ) {
       XCTAssertEqual(
@@ -529,7 +541,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
         payload: fixture.payload,
         signature: fixture.signature,
         trustRoot: fixture.trustRoot,
-        now: now
+        now: now,
+        expectedChannel: nil
       )
     ) {
       XCTAssertEqual(
@@ -569,7 +582,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
         rawRepresentation: publicKey,
         expectedFingerprint: fingerprint
       ),
-      now: now
+      now: now,
+      expectedChannel: nil
     )
 
     XCTAssertEqual(validated.sequence, 50)
@@ -587,7 +601,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
         payload: fixture.payload,
         signature: fixture.signature,
         trustRoot: fixture.trustRoot,
-        now: now
+        now: now,
+        expectedChannel: nil
       )
     ) {
       XCTAssertEqual($0 as? SupportCatalogError, .expired)
@@ -604,6 +619,7 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
         signature: older.signature,
         trustRoot: older.trustRoot,
         now: now,
+        expectedChannel: nil,
         previouslyAccepted: current.acceptedIdentity
       )
     ) {
@@ -629,6 +645,7 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
         signature: replacement.signature,
         trustRoot: replacement.trustRoot,
         now: now,
+        expectedChannel: nil,
         previouslyAccepted: first.acceptedIdentity
       )
     ) {
@@ -644,6 +661,7 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
       signature: fixture.signature,
       trustRoot: fixture.trustRoot,
       now: now,
+      expectedChannel: nil,
       previouslyAccepted: first.acceptedIdentity
     )
 
@@ -802,7 +820,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
         rawRepresentation: publicKey,
         expectedFingerprint: fingerprint
       ),
-      now: now
+      now: now,
+      expectedChannel: nil
     )
   }
 
@@ -813,8 +832,74 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
       payload: fixture.payload,
       signature: fixture.signature,
       trustRoot: fixture.trustRoot,
-      now: now
+      now: now,
+      expectedChannel: nil
     )
+  }
+
+
+  func testACatalogIsRefusedAtAnotherChannelsURL() throws {
+    let fixture = try makeCatalog(sequence: 9, channel: "edge")
+
+    let served = try core.validateSupportCatalog(
+      payload: fixture.payload,
+      signature: fixture.signature,
+      trustRoot: fixture.trustRoot,
+      now: now,
+      expectedChannel: "edge"
+    )
+    XCTAssertEqual(served.channel, "edge")
+
+    for destination in ["stable", "rc"] {
+      XCTAssertThrowsError(
+        try core.validateSupportCatalog(
+          payload: fixture.payload,
+          signature: fixture.signature,
+          trustRoot: fixture.trustRoot,
+          now: now,
+          expectedChannel: destination
+        )
+      ) { error in
+        XCTAssertEqual(
+          error as? SupportCatalogError,
+          .channelMismatch(expected: destination, found: "edge")
+        )
+      }
+    }
+  }
+
+  func testACatalogPublishedBeforeTheChannelFieldStillInstalls() throws {
+    let fixture = try makeCatalog(sequence: 9)
+
+    let validated = try core.validateSupportCatalog(
+      payload: fixture.payload,
+      signature: fixture.signature,
+      trustRoot: fixture.trustRoot,
+      now: now,
+      expectedChannel: "stable"
+    )
+
+    // Nothing to contradict: the field is signed, so an absent one means the
+    // catalog predates it rather than that someone removed it.
+    XCTAssertNil(validated.channel)
+    XCTAssertEqual(validated.sequence, 9)
+  }
+
+  func testAMalformedChannelIsRefusedEvenWithNothingToCompareAgainst() throws {
+    for declared in ["", "Edge", "edge-1", "rc ", "sTaBlE"] {
+      let fixture = try makeCatalog(sequence: 9, channel: declared)
+      XCTAssertThrowsError(
+        try core.validateSupportCatalog(
+          payload: fixture.payload,
+          signature: fixture.signature,
+          trustRoot: fixture.trustRoot,
+          now: now,
+          expectedChannel: nil
+        )
+      ) { error in
+        XCTAssertEqual(error as? SupportCatalogError, .invalidField("channel"))
+      }
+    }
   }
 
   private func makeCatalog(
@@ -824,7 +909,8 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
     expiresAt: Date? = nil,
     schemaVersion: Int = 1,
     includeExpiry: Bool = true,
-    installer: String? = nil
+    installer: String? = nil,
+    channel: String? = nil
   ) throws -> CatalogFixture {
     let privateKey = Curve25519.Signing.PrivateKey()
     let issued = ISO8601DateFormatter().string(
@@ -849,9 +935,10 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
     ].joined(separator: ",")
     let expiryField = includeExpiry ? ",\"expiresAt\":\"\(expires)\"" : ""
     let installerField = installer.map { ",\"installer\":\($0)" } ?? ""
+    let channelField = channel.map { ",\"channel\":\"\($0)\"" } ?? ""
     let payload = Data(
       """
-      {"schemaVersion":\(schemaVersion),"sequence":\(sequence),"issuedAt":"\(issued)"\(expiryField)\(installerField),"models":[\(models)]}
+      {"schemaVersion":\(schemaVersion),"sequence":\(sequence),"issuedAt":"\(issued)"\(expiryField)\(channelField)\(installerField),"models":[\(models)]}
       """.utf8
     )
     let publicKey = privateKey.publicKey.rawRepresentation
