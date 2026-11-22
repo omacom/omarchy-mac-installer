@@ -81,6 +81,10 @@ on:
         description: Build a final tag (v4.5.0) from the rc channel for catalog-rc, before rc is promoted to stable
         type: boolean
         default: false
+      builder-ref:
+        description: A main commit (full sha) whose image-builder builds the image (mac-image.yml); empty for this run's
+        type: string
+        default: ''
 
 permissions: {}
 
@@ -172,6 +176,7 @@ jobs:
       lane: ${{ needs.plan.outputs.lane }}
       release-tag: ${{ needs.plan.outputs.release-tag }}
       mac-revision: ${{ needs.plan.outputs.mac-revision }}
+      builder-ref: ${{ inputs.builder-ref }}
 
   acceptance:
     name: Acceptance

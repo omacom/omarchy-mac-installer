@@ -46,25 +46,17 @@ KERNEL=linux-aurora
 PLATFORM=apple-silicon
 PLATFORM_COMPATIBLE=apple,arm-platform
 
-# The keyring asahi-alarm's packages are signed with.
-ASAHI_KEYRING_FILE=asahi-alarm-keyring-20241216-1-any.pkg.tar.xz
-ASAHI_KEYRING_SHA256=798f4b283ad2819aee950d042f26566ae1a68f87c12247301ce449bea3b2d81e
-ASAHI_KEY=12CE6799A94A3F1B5DDFFE88F576553597FB8FEB
 OMARCHY_REPOSITORY_KEY=40DFB630FF42BCFFB047046CF0134EE680CAC571
 CANDIDATE_KEY=E11E851AF82E02AEF54C8794599A6024E3D35379
 
 # The first transaction: a bootable base and the settings package, so its
 # pacman platform guard is resident before any platform package arrives.
-BOOTSTRAP=(base sudo btrfs-progs dosfstools e2fsprogs archlinuxarm-keyring asahi-alarm-keyring
+BOOTSTRAP=(base sudo btrfs-progs dosfstools e2fsprogs archlinuxarm-keyring
   networkmanager iwd curl gnupg jq gum)
 # The Apple boot chain beside the set's packages. The Mac boots Limine only:
 # GRUB is not installed, and /etc/default/grub, which the finalizer writes, is
 # just the file the Limine command line is derived from.
 PLATFORM_PACKAGES=(mkinitcpio limine limine-snapper-sync aurora-scripts aurora-fwextract)
-# The asahi-alarm names of the Apple tools omarchy-pkgs builds as aurora-*: a
-# lane whose pinned [omarchy] does not carry the aurora tools yet (rc and
-# stable before the imports reach them) installs these (select_platform_tools).
-declare -A PLATFORM_TOOL_FALLBACK=([aurora-scripts]=asahi-scripts [aurora-fwextract]=asahi-fwextract)
 # The speaker stack's model profiles and DSP chain. Without alsa-ucm-conf-asahi
 # the default sink is stereo-fallback, not the model's convolver; the runtime's
 # audio leaf, deferred to first boot, may find no network to fetch them.
@@ -246,6 +238,10 @@ host_main() {
     command -v "$tool" >/dev/null 2>&1 || fail "missing command: $tool"
   done
   "$BASH" "$ROOT/bin/mac-image-inputs" check "$inputs" >/dev/null
+  # A format 2 record pins asahi-alarm, which this builder no longer reads: the
+  # builder that resolved it (its image's builder_commit) replays it.
+  [[ $(record_field format "$inputs") == 3 ]] ||
+    fail "$inputs is a format 2 inputs record, which pins asahi-alarm: build it with the builder that resolved it (its IMAGE's builder_commit, or mac-image.yml's builder-ref), or resolve a new record"
   inputs=$(cd -- "$(dirname -- "$inputs")" && pwd)/$(basename -- "$inputs")
   kind=$(record_kind "$inputs")
   if [[ $kind == channel ]]; then
@@ -439,7 +435,7 @@ verify_database() {
 # The pinned repositories behind the candidate set, in the order transactions
 # search them, [omarchy] first as the channel templates name them. Both kinds
 # of set take their runtime's template order instead (read_repository_order).
-repository_order=(omarchy asahi-alarm core extra alarm aur)
+repository_order=(omarchy core extra alarm aur)
 
 # Every repository a transaction reads, in repository_order behind the
 # candidate set: name, pinned sha256 (none for the set) and remote server.
@@ -449,7 +445,6 @@ repositories() {
   for repository in "${repository_order[@]}"; do
     case $repository in
       omarchy) printf 'omarchy %s %s\n' "$(field omarchy_db_sha256)" "$(field omarchy_server)" ;;
-      asahi-alarm) printf 'asahi-alarm %s %s\n' "$(field asahi_alarm_db_sha256)" "$(field asahi_alarm_server)" ;;
       *) printf '%s %s %s\n' "$repository" "$(field "alarm_${repository}_db_sha256")" "$(field alarm_server)" ;;
     esac
   done
@@ -514,45 +509,6 @@ candidate_repository_order() {
   repository_order=("${order[@]}")
 }
 
-# The lane's own names for the Apple tools: aurora-scripts wherever the lane's
-# pinned [omarchy] or the candidate set carries it, and aurora-fwextract only
-# beside it (it depends on aurora-scripts by name); asahi-alarm's names
-# otherwise. The pre-check, the install, qualified() and edge-dispatch-filter
-# all take this choice, so rc and stable keep building before the imports
-# reach them, edge never takes asahi-alarm's, and a candidate set's own
-# aurora-scripts is always the one installed.
-select_platform_tools() {
-  local listing index scripts=asahi-scripts fwextract=asahi-fwextract
-  listing=$(bsdtar -tf "$repos/omarchy/omarchy.db") || fail "could not read the pinned omarchy.db"
-  if platform_tool_available aurora-scripts "$listing"; then
-    scripts=aurora-scripts
-    platform_tool_available aurora-fwextract "$listing" && fwextract=aurora-fwextract
-  fi
-  for index in "${!PLATFORM_PACKAGES[@]}"; do
-    case ${PLATFORM_PACKAGES[index]} in
-      aurora-scripts) PLATFORM_PACKAGES[index]=$scripts ;;
-      aurora-fwextract) PLATFORM_PACKAGES[index]=$fwextract ;;
-    esac
-  done
-}
-
-# Whether the pinned omarchy.db LISTING (directory or desc members) or the candidate set carries NAME.
-platform_tool_available() {
-  grep -Eq "^$1-[^-/]+-[^-/]+/(desc)?\$" <<<"$2" || [[ -n $(candidate_archive "$1") ]]
-}
-
-# The selected name for an Apple tool, given either of its names.
-platform_tool() {
-  local name
-  for name in "${PLATFORM_PACKAGES[@]}"; do
-    if [[ $name == "$1" || $name == "${PLATFORM_TOOL_FALLBACK[$1]:-}" ]]; then
-      printf '%s\n' "$name"
-      return 0
-    fi
-  done
-  printf '%s\n' "$1"
-}
-
 prepare_toolchain() {
   local repository sha server
   {
@@ -572,15 +528,6 @@ prepare_toolchain() {
     fail "could not set up the build keyring (logs/toolchain.log)"
   pacman -Su --noconfirm --needed arch-install-scripts btrfs-progs dosfstools e2fsprogs gnupg jq python \
     >>"$logs/toolchain.log" 2>&1 || fail "could not install the build tools (logs/toolchain.log)"
-
-  fetch \
-    --output "$work/$ASAHI_KEYRING_FILE" "$(field asahi_alarm_server)/$ASAHI_KEYRING_FILE" ||
-    fail "could not download $ASAHI_KEYRING_FILE"
-  [[ $(sha256_of "$work/$ASAHI_KEYRING_FILE") == "$ASAHI_KEYRING_SHA256" ]] || fail "$ASAHI_KEYRING_FILE changed"
-  pacman -U --noconfirm --config <(sed 's/^LocalFileSigLevel = .*/LocalFileSigLevel = Never/' /etc/pacman.conf) \
-    "$work/$ASAHI_KEYRING_FILE" >>"$logs/toolchain.log" 2>&1 && pacman-key --populate asahi-alarm >>"$logs/toolchain.log" 2>&1 ||
-    fail "could not trust the Asahi ALARM keyring (logs/toolchain.log)"
-  pacman-key --finger "$ASAHI_KEY" >/dev/null 2>&1 || fail "the Asahi ALARM keyring does not hold $ASAHI_KEY"
 
   # The build keyring alone trusts the candidate test key: pacman checks each
   # candidate archive's signature again as it installs it. The image never
@@ -900,8 +847,8 @@ qualified() {
   for name in "$@"; do
     replacement=$name
     case $name in
-      asahi-scripts | aurora-scripts) name=$(platform_tool aurora-scripts) replacement=$name ;;
-      asahi-fwextract | aurora-fwextract) name=$(platform_tool aurora-fwextract) replacement=$name ;;
+      asahi-scripts) name=aurora-scripts replacement=aurora-scripts ;;
+      asahi-fwextract) name=aurora-fwextract replacement=aurora-fwextract ;;
       uboot-asahi) replacement=uboot-aurora ;;
       mesa) replacement=mesa-aurora ;;
       vulkan-asahi) replacement=vulkan-aurora ;;
@@ -1167,7 +1114,7 @@ write_installed_config() {
 # The image keyring for the runtime's own transactions during setup; removed
 # before @factory is sealed, and made anew on each Mac's first boot.
 prepare_target_keyring() {
-  local key=$target/var/tmp/omarchy-repository.gpg keyrings=(archlinuxarm asahi-alarm)
+  local key=$target/var/tmp/omarchy-repository.gpg keyrings=(archlinuxarm)
   rm -rf "$target/etc/pacman.d/gnupg"
   isolated_chroot "$target" pacman-key --init >>"$logs/keyring.log" 2>&1 ||
     fail "could not initialise the image's pacman keyring (logs/keyring.log)"
@@ -1964,8 +1911,6 @@ build_payload() {
   read_repository_order
   step "repository order: omarchy-candidates ${repository_order[*]}"
   prepare_repositories
-  select_platform_tools
-  step "Apple tools: ${PLATFORM_PACKAGES[*]: -2}"
   read_apple_list
   render_config "$repos" /cache >"$work/build.conf"
   step "creating the images"

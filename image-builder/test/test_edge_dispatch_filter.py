@@ -42,8 +42,8 @@ def write_repo(path: Path, packages: dict[str, dict]) -> Path:
     return path
 
 
-EDGE_ORDER = ("omarchy", "asahi-alarm", "core", "extra", "alarm", "aur")
-LAST_ORDER = ("asahi-alarm", "core", "extra", "alarm", "aur", "omarchy")
+EDGE_ORDER = ("omarchy", "core", "extra", "alarm", "aur")
+LAST_ORDER = ("core", "extra", "alarm", "aur", "omarchy")
 
 
 def template(order) -> bytes:
@@ -103,7 +103,7 @@ class EdgeDispatchFilterTest(unittest.TestCase):
         write_repo(cls.repos / "extra.db", {"hyprland": {}, "mesa": {"provides": ["vulkan-driver"]},
                                             "walker": {"version": "1.0-1"}, "libthing": {"version": "3.0-1"},
                                             "zram-tools": {"provides": ["zram-generator"]}})
-        for name in ("asahi-alarm", "core", "alarm", "aur"):
+        for name in ("core", "alarm", "aur"):
             write_repo(cls.repos / f"{name}.db", {f"{name}-placeholder": {}})
 
     @classmethod
@@ -179,9 +179,9 @@ class EdgeDispatchFilterTest(unittest.TestCase):
         for name, text, message in (
                 ("missing", False, "no Apple pacman template"),
                 ("short", template(tuple(n for n in EDGE_ORDER if n != "extra")),
-                 "names the repositories omarchy asahi-alarm core alarm aur, not"),
+                 "names the repositories omarchy core alarm aur, not"),
                 ("short-without-aur", template(tuple(n for n in EDGE_ORDER if n not in ("extra", "aur"))),
-                 "names the repositories omarchy asahi-alarm core alarm, not"),
+                 "names the repositories omarchy core alarm, not"),
                 ("extra", template(EDGE_ORDER + ("testing",)), "not the pinned"),
                 ("crlf-missing", template(EDGE_ORDER[1:]).replace(b"\n", b"\r\n"), "not the pinned")):
             with self.subTest(name), self.assertRaisesRegex(ValueError, message):
@@ -318,27 +318,6 @@ class EdgeDispatchFilterTest(unittest.TestCase):
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
         self.assertIn("edge aarch64", result.stderr)
-
-
-class BuilderSeedsTest(unittest.TestCase):
-    BUILDER = Path(__file__).resolve().parents[1] / 'bin/build-mac-image'
-
-    def tools(self, seeds):
-        return [n for n in seeds if n.endswith(('-scripts', '-fwextract'))]
-
-    def test_the_tools_follow_the_builders_selection(self):
-        self.assertEqual(edge_filter.platform_tools(self.BUILDER),
-                         {'aurora-scripts': 'asahi-scripts', 'aurora-fwextract': 'asahi-fwextract'})
-        both = {'aurora-scripts': {}, 'aurora-fwextract': {}, 'lzfse': {}}
-        self.assertEqual(self.tools(edge_filter.builder_seeds(self.BUILDER, both)), ['aurora-scripts', 'aurora-fwextract'])
-        # aurora-scripts alone keeps asahi-alarm's extractor, which pulls lzfse.
-        self.assertEqual(self.tools(edge_filter.builder_seeds(self.BUILDER, {'aurora-scripts': {}, 'lzfse': {}})),
-                         ['aurora-scripts', 'asahi-fwextract'])
-        # aurora-fwextract without aurora-scripts, or neither, keeps asahi-alarm's pair.
-        for entries in ({'aurora-fwextract': {}}, {}):
-            with self.subTest(sorted(entries)):
-                self.assertEqual(self.tools(edge_filter.builder_seeds(self.BUILDER, entries)),
-                                 ['asahi-scripts', 'asahi-fwextract'])
 
 
 if __name__ == "__main__":

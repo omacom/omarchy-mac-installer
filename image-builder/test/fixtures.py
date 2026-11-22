@@ -664,14 +664,12 @@ def make_root(root: Path, candidates: Path, layout: str | None = None, lane: str
     wants.mkdir(parents=True, exist_ok=True)
     for unit in ("omarchy-mac-first-boot.service", "omarchy-provision-owner.service"):
         (wants / unit).symlink_to(f"/usr/lib/systemd/system/{unit}")
-    template = "[options]\nArchitecture = auto\n\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
+    template = "[options]\nArchitecture = auto\n"
     template += "".join(f"\n[{r}]\nInclude = /etc/pacman.d/mirrorlist\n" for r in ("core", "extra", "alarm", "aur"))
     template += f"\n[omarchy]\nServer = https://pkgs.omarchy.org/{lane}/$arch\n"
-    # A runtime with a platform template keeps asahi-alarm out of its plain aarch64 one.
-    asahi = "\n[asahi-alarm]\nServer = https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64\n"
     # A release lane's image takes Arch Linux ARM from that lane's frozen snapshot.
     release_mirror = f"Server = https://arm-{lane}-mirror.omarchy.org/$arch/$repo\n" if lane != "edge" else None
-    templates = {"aarch64": (template.replace(asahi, "") if layout else template,
+    templates = {"aarch64": (template,
                              release_mirror or "Server = https://mirror.invalid/$arch/$repo\n")}
     for name in RUNTIME_LAYOUTS[layout]["templates"] if layout else ():
         templates.setdefault(name, (f"# {name}\n" + template,

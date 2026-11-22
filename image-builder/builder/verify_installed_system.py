@@ -5,7 +5,6 @@ Runs against the finalized root tree, mounted read-only or extracted. Every
 check here corresponds to a way a built image installed fine but broke on
 first use:
 
-- /etc/pacman.conf missing [asahi-alarm] broke Apple package updates;
 - a build-only repository or file:// server left in pacman.conf broke them too;
 - a SigLevel with TrustAll lets pacman install packages signed by keys nobody
   trusts, which the unsigned [omarchy-aarch64] fork repository relied on;
@@ -34,10 +33,11 @@ from pathlib import Path
 
 # [aur] is not required: ALARM's [aur] carries none of Omarchy's packages, and
 # the runtime's templates may leave it out.
-REQUIRED_PACMAN_SECTIONS = ("asahi-alarm", "core", "extra", "alarm", "omarchy")
+REQUIRED_PACMAN_SECTIONS = ("core", "extra", "alarm", "omarchy")
 # Repositories an image must never be left pointing at: the mx-mac fork's
-# channels and the builder's own candidate repository.
-FORBIDDEN_PACMAN_SECTIONS = ("omarchy-aurora", "omarchy-aarch64", "omarchy-candidates")
+# channels, the builder's own candidate repository and asahi-alarm, whose
+# packages omarchy-pkgs now builds.
+FORBIDDEN_PACMAN_SECTIONS = ("omarchy-aurora", "omarchy-aarch64", "omarchy-candidates", "asahi-alarm")
 REQUIRED_PACKAGES = (
     "linux-aurora",
     "m1n1-aurora",
@@ -131,13 +131,6 @@ def check_pacman(verification: Verification, root: Path) -> None:
         "pacman-no-trust-all",
         not trust_all,
         "no SigLevel trusts every key" if not trust_all else "TrustAll: " + "; ".join(trust_all),
-    )
-
-    asahi_servers = [line for line in sections.get("asahi-alarm", []) if line.startswith("Server")]
-    verification.record(
-        "pacman-asahi-alarm-server",
-        any("https://github.com/asahi-alarm/" in line for line in asahi_servers),
-        asahi_servers[0] if asahi_servers else "no Server entry under [asahi-alarm]",
     )
 
     build_only = re.search(r"^\s*Server\s*=\s*file://", text, flags=re.MULTILINE) or re.search(

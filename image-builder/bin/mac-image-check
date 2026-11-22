@@ -112,7 +112,7 @@ IMAGE_LINKS = {
 SYSTEM_USERS = {"nobody", "nfsnobody"}
 IMAGE_PACKAGES = (
     "base", "sudo", "mkinitcpio", "aurora-scripts", "aurora-fwextract", "btrfs-progs",
-    "archlinuxarm-keyring", "asahi-alarm-keyring", "networkmanager", "iwd", "curl", "gnupg", "jq", "gum",
+    "archlinuxarm-keyring", "networkmanager", "iwd", "curl", "gnupg", "jq", "gum",
     "omarchy", "omarchy-settings", "omarchy-mac", "omarchy-mac-boot",
     "linux-aurora", "linux-aurora-headers", "m1n1-aurora", "uboot-asahi",
     "limine", "limine-mkinitcpio-hook", "limine-snapper-sync",

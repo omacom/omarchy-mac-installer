@@ -34,7 +34,7 @@ anything.
       the omarchy role (its package lists) and the omarchy-settings role (its
       pacman template)
   edge-dispatch-filter fetch-repos DIR
-      downloads asahi-alarm.db, core.db, extra.db, alarm.db and aur.db from
+      downloads core.db, extra.db, alarm.db and aur.db from
       the servers bin/mac-image-inputs resolves from into the empty DIR
   edge-dispatch-filter decide --db FILE --runtime ARCHIVE --settings ARCHIVE --payload FILE
                              [--repos DIR] [--builder FILE]
@@ -57,7 +57,7 @@ APPLE_LISTS = ('omarchy-aarch64-apple', 'omarchy-apple-silicon', 'omarchy-apple'
 LISTS = 'usr/share/omarchy/install/'
 # The repositories the inputs pin besides omarchy, and build-mac-image's
 # repository_order for a candidate set ([omarchy] first).
-OTHER_REPOS = ('asahi-alarm', 'core', 'extra', 'alarm', 'aur')
+OTHER_REPOS = ('core', 'extra', 'alarm', 'aur')
 PINNED_ORDER = ('omarchy',) + OTHER_REPOS
 # read_repository_order's template, in the archive filling the omarchy-settings role.
 TEMPLATE = 'usr/share/omarchy/default/pacman/aarch64-apple/pacman-{channel}.conf'
@@ -97,26 +97,6 @@ def builder_arrays(builder):
     return names
 
 
-def platform_tools(builder):
-    """build-mac-image's PLATFORM_TOOL_FALLBACK: each Apple tool's aurora name -> asahi-alarm name."""
-    found = re.search(r'^declare -A PLATFORM_TOOL_FALLBACK=\((.*?)\)', builder.read_text(), re.MULTILINE)
-    require(found, f'{builder.name} defines no PLATFORM_TOOL_FALLBACK')
-    tools = dict(re.findall(r'\[([^]\s]+)\]=(\S+)', found.group(1)))
-    require(tools and all(NAME.fullmatch(n) for pair in tools.items() for n in pair),
-            f'{builder.name} has an unreadable PLATFORM_TOOL_FALLBACK')
-    return tools
-
-
-def builder_seeds(builder, entries):
-    """builder_arrays with the Apple tools named as select_platform_tools names them for this omarchy.db:
-    aurora-scripts when it carries it, aurora-fwextract only beside it, else asahi-alarm's."""
-    tools = platform_tools(builder)
-    scripts = 'aurora-scripts' in entries
-    chosen = {'aurora-scripts': scripts, 'aurora-fwextract': scripts and 'aurora-fwextract' in entries}
-    require(set(chosen) == set(tools), f'{builder.name} has Apple tools this filter does not know')
-    return [name if chosen.get(name, True) else tools[name] for name in builder_arrays(builder)]
-
-
 def db_url(server, repository):
     return server.replace('$arch', 'aarch64').replace('$repo', repository) + f'/{repository}.db'
 
@@ -125,8 +105,7 @@ def fetch_repos(directory, inputs=ROOT / 'bin/mac-image-inputs'):
     """The databases the builder resolves against besides omarchy.db, into the empty DIRECTORY."""
     directory.mkdir(parents=True, exist_ok=True)
     require(not any(directory.iterdir()), f'{directory} is not empty')
-    servers = {'asahi-alarm': bash_value(inputs, 'DEFAULT_ASAHI_ALARM_SERVER')[0]}
-    servers.update({r: bash_value(inputs, 'DEFAULT_ALARM_SERVER')[0] for r in OTHER_REPOS[1:]})
+    servers = {r: bash_value(inputs, 'DEFAULT_ALARM_SERVER')[0] for r in OTHER_REPOS}
     for repository, server in servers.items():
         url = db_url(server, repository)
         require(url.startswith('https://'), f'{repository} is not served over https')
@@ -402,7 +381,7 @@ def decide(database, runtime, settings, payload_path, repos=None, builder=ROOT /
     order = repository_order(settings)
     repositories = [(r, entries if r == 'omarchy' else read_repo(repos / f'{r}.db')) for r in order] \
         if repos else [('omarchy', entries)]
-    seeds = builder_seeds(builder, entries) + runtime_lists(runtime)
+    seeds = builder_arrays(builder) + runtime_lists(runtime)
     image = sorted(name for repository, name in resolve(repositories, chosen, seeds) if repository == 'omarchy')
     published = sorted({p['name'] for p in payload['packages']})
     matched = sorted(set(published) & set(image))

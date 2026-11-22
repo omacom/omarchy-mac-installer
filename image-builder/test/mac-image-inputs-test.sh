@@ -34,7 +34,7 @@ hex() { printf "$1%.0s" $(seq 64); }
 
 record() {
   cat <<EOF
-format=2
+format=3
 resolved_at=2026-09-25T10:41:01Z
 candidate_set=apple-test-fixture
 candidate_source_commit=$(printf 'a%.0s' $(seq 40))
@@ -44,8 +44,6 @@ candidate_manifest_sha256=$(hex 2)
 omarchy_channel=edge
 omarchy_server=https://pkgs.omarchy.org/edge/\$arch
 omarchy_db_sha256=${digest[omarchy]}
-asahi_alarm_server=https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64
-asahi_alarm_db_sha256=${digest[asahi-alarm]}
 alarm_server=https://ca.us.mirror.archlinuxarm.org/\$arch/\$repo
 alarm_core_db_sha256=${digest[core]}
 alarm_extra_db_sha256=${digest[extra]}
@@ -77,11 +75,34 @@ refuse "an http server" sed 's|^alarm_server=https|alarm_server=http|' "$work/in
 refuse "a server that climbs" sed 's|^omarchy_server=.*|omarchy_server=https://pkgs.omarchy.org/edge/../x|' "$work/inputs"
 refuse "an unknown channel" sed 's/^omarchy_channel=.*/omarchy_channel=beta/' "$work/inputs"
 refuse "a lowercase signer" sed 's/^candidate_signer=.*/candidate_signer=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/' "$work/inputs"
-refuse "the mx-mac record format" sed 's/^format=2$/format=1/' "$work/inputs"
+refuse "the mx-mac record format" sed 's/^format=3$/format=1/' "$work/inputs"
+
+# A format 2 record, resolved before omarchy-pkgs built asahi-alarm's
+# packages, also pins asahi-alarm; format 3 never does.
+asahi_lines="asahi_alarm_server=https://github.com/asahi-alarm/asahi-alarm/releases/download/aarch64
+asahi_alarm_db_sha256=${digest[asahi-alarm]}"
+record_v2() {
+  local line
+  while IFS= read -r line; do
+    printf '%s\n' "$line"
+    [[ $line != omarchy_db_sha256=* ]] || printf '%s\n' "$asahi_lines"
+  done < <(record | sed 's/^format=3$/format=2/')
+}
+record_v2 >"$work/inputs-v2"
+"$BASH" "$inputs" check "$work/inputs-v2" | cmp -s - "$work/inputs-v2" || fail "check prints a canonical format 2 record"
+pass "a canonical format 2 record, with its asahi-alarm pins, still checks"
+refuse "asahi-alarm pins in a format 3 record" bash -c 'sed "s/^format=2$/format=3/" "$1"' _ "$work/inputs-v2"
+refuse "a format 2 record without its asahi-alarm pins" sed 's/^format=3$/format=2/' "$work/inputs"
+refuse "a format 2 record with half its asahi-alarm pins" grep -v '^asahi_alarm_db_sha256=' "$work/inputs-v2"
+mkdir "$work/dbs-v2"
+"$BASH" "$inputs" dbs "$work/inputs-v2" "$work/dbs-v2" --cache "$work/cache" >/dev/null || fail "dbs of a format 2 record"
+[[ $(cd "$work/dbs-v2" && ls | sort | paste -sd' ' -) == "alarm.db asahi-alarm.db aur.db core.db extra.db omarchy.db" ]] ||
+  fail "dbs of a format 2 record puts every database it pins in place"
+pass "dbs of a format 2 record puts its asahi-alarm database in place too"
 
 mkdir "$work/dbs"
 "$BASH" "$inputs" dbs "$work/inputs" "$work/dbs" --cache "$work/cache" >/dev/null || fail "dbs from the cache"
-for repository in omarchy asahi-alarm core extra alarm aur; do
+for repository in omarchy core extra alarm aur; do
   cmp -s "$work/$repository.db" "$work/dbs/$repository.db" || fail "$repository.db is the pinned database"
 done
 pass "dbs puts every pinned database in place from the cache"
