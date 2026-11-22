@@ -98,8 +98,9 @@ def engine_document() -> dict:
 
 
 def installer_document() -> dict:
-    return {"minimumVersion": "2.1.0", "latestVersion": "2.1.0",
-            "downloadURL": f"{release_base('app-v2.1.0')}/Omarchy-Installer.dmg"}
+    # At least 2.3.17: edge offers apple,j616s, whose app_minimum is that.
+    return {"minimumVersion": "2.3.17", "latestVersion": "2.3.17",
+            "downloadURL": f"{release_base('app-v2.3.17')}/Omarchy-Installer.dmg"}
 
 
 def evidence_document(image_sha256: str = sha(PAYLOAD)) -> dict:
@@ -1201,7 +1202,7 @@ class WithdrawalTests(unittest.TestCase):
 
     def test_a_promotion_cannot_add_a_mac_the_source_lacks(self) -> None:
         promoted = self.promote()
-        extra = dict(promoted["models"][0], deviceIdentifier="apple,j616s")
+        extra = dict(promoted["models"][0], deviceIdentifier="apple,j815")
         promoted["models"] = promoted["models"] + [extra]
         with self.assertRaisesRegex(release.Refusal, "cannot add a Mac the source does not carry"):
             release.check_same_pins(self.source, promoted, "rc")
@@ -1276,10 +1277,17 @@ class PromotionTests(ReleaseTestCase):
             # The promoted catalog says which channel serves it.
             self.assertEqual(catalog["channel"], channel)
             self.assertEqual(edge_catalog["channel"], "edge")
-            # The same models, pins, digests and installer block as edge.
+            # Everything but the models is edge's, unchanged.
             for key in set(edge_catalog) | set(catalog):
-                if key not in ("sequence", "issuedAt", "channel"):
+                if key not in ("sequence", "issuedAt", "channel", "models"):
                     self.assertEqual(catalog.get(key), edge_catalog.get(key), key)
+            # Edge offers the M4 Pro; rc and stable do not, so promotion drops
+            # it and keeps every other model byte for byte.
+            edge_models = {model["deviceIdentifier"]: model for model in edge_catalog["models"]}
+            promoted_models = {model["deviceIdentifier"]: model for model in catalog["models"]}
+            self.assertEqual(set(edge_models) - set(promoted_models), {"apple,j616s"})
+            for identifier, model in promoted_models.items():
+                self.assertEqual(model, edge_models[identifier], identifier)
             for model in catalog["models"]:
                 self.assertEqual(model["payloadDigest"], f"sha256:{sha(PAYLOAD)}")
                 self.assertEqual(model["engineDigest"], f"sha256:{sha(ENGINE)}")

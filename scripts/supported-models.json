@@ -107,8 +107,9 @@
       "qualified": "stable"
     },
     "apple,j616s": {
-      "qualified": "developer",
-      "note": "MacBook Pro 16-inch (M4 Pro, 2024): developer catalog only, for hardware bring-up through aura's Mach-O Stage 1 on 26.6.2 firmware; not qualified. Qualifies for edge, and edge alone, once edge images carry a monitor-free aura."
+      "qualified": "edge",
+      "note": "MacBook Pro 16-inch (M4 Pro, 2024): the first M4 Mac on edge, installed through aura's Mach-O Stage 1 on 26.6.2 firmware. Qualified on edge only; rc and stable do not offer it.",
+      "app_minimum": "2.3.17"
     },
     "apple,j815": {
       "qualified": "developer",

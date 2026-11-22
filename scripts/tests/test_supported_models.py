@@ -24,26 +24,39 @@ def write(macs: dict, schema: int = supported_models.SCHEMA_VERSION) -> Path:
 
 
 class TodaysManifestTests(unittest.TestCase):
-    def test_all_three_channels_offer_the_same_35_macs_today(self) -> None:
+    def test_edge_offers_the_m4_pro_and_rc_and_stable_do_not(self) -> None:
         sets = {channel: supported_models.boards_for(channel) for channel in ("edge", "rc", "stable")}
         self.assertEqual(len(sets["stable"]), 35)
-        self.assertEqual(sets["edge"], sets["stable"])
         self.assertEqual(sets["rc"], sets["stable"])
-        # So the move to a per-board floor changes no published catalog.
+        self.assertEqual(set(sets["edge"]) - set(sets["stable"]), {"apple,j616s"})
+        self.assertTrue(set(sets["stable"]) <= set(sets["rc"]) <= set(sets["edge"]))
 
-    def test_the_bring_up_boards_are_in_no_channel_and_the_refused_stay_out(self) -> None:
+    def test_the_m4_pro_names_the_app_that_can_enrol_a_macho_stage_1(self) -> None:
+        # Older apps have no AuraStage1 in their native Recovery, so a catalog
+        # that admits one may not offer this board.
+        self.assertEqual(supported_models.app_minimums(), {"apple,j616s": "2.3.17"})
         self.assertEqual(
-            set(supported_models.developer_boards()), {"apple,j616s", "apple,j815"}
+            supported_models.app_minimum_errors("2.3.16", supported_models.boards_for("edge")),
+            ["apple,j616s needs app 2.3.17 or newer, but the catalog admits 2.3.16"],
         )
+        self.assertEqual(
+            supported_models.app_minimum_errors("2.3.17", supported_models.boards_for("edge")), []
+        )
+        # rc and stable do not offer it, so their floor is untouched.
+        self.assertEqual(
+            supported_models.app_minimum_errors("2.3.0", supported_models.boards_for("stable")), []
+        )
+
+    def test_the_remaining_bring_up_board_is_in_no_channel_and_the_refused_stay_out(self) -> None:
+        self.assertEqual(set(supported_models.developer_boards()), {"apple,j815"})
         for channel in ("edge", "rc", "stable"):
             offered = supported_models.boards_for(channel)
-            for identifier in ("apple,j616s", "apple,j815", "apple,j575d", "apple,j614s"):
+            for identifier in ("apple,j815", "apple,j575d", "apple,j614s"):
                 self.assertNotIn(identifier, offered, f"{identifier} in {channel}")
         self.assertEqual(set(supported_models.refused()), {"apple,j575d", "apple,j614s"})
 
-    def test_no_board_that_reached_stable_carries_a_note_or_an_app_minimum(self) -> None:
-        self.assertEqual(supported_models.notes(), {})
-        self.assertEqual(supported_models.app_minimums(), {})
+    def test_only_the_board_short_of_stable_carries_a_note(self) -> None:
+        self.assertEqual(list(supported_models.notes()), ["apple,j616s"])
 
     def test_the_manifest_on_disk_loads(self) -> None:
         self.assertEqual(len(supported_models.load(MANIFEST)), 39)
@@ -122,19 +135,25 @@ class CoverageTests(unittest.TestCase):
             wanted = supported_models.boards_for(channel, self.path)
             self.assertEqual(supported_models.coverage_errors(wanted, channel, self.path), [])
 
-    def test_a_private_catalog_takes_the_widest_set_plus_developer_boards(self) -> None:
-        widest = supported_models.boards_for("edge", self.path)
-        self.assertEqual(supported_models.private_coverage_errors(widest, self.path), [])
+    def test_a_private_catalog_owes_the_fully_qualified_macs_and_may_add_any_other(self) -> None:
+        required = supported_models.boards_for("stable", self.path)
+        self.assertEqual(supported_models.private_coverage_errors(required, self.path), [])
+        # Anything the manifest names may be added, including a developer board.
         self.assertEqual(
-            supported_models.private_coverage_errors(widest + ["apple,j815"], self.path), []
+            supported_models.private_coverage_errors(
+                required + ["apple,j700", "apple,j616s", "apple,j815"], self.path
+            ),
+            [],
         )
-        self.assertTrue(
-            supported_models.private_coverage_errors(["apple,j274"], self.path),
-            "a private catalog still owes every Mac edge offers",
+        # It is tied to the narrowest channel on purpose: a board reaching edge
+        # must not break every private catalog.
+        self.assertEqual(
+            supported_models.private_coverage_errors([], self.path),
+            ["every Mac qualified for stable must be enabled; missing apple,j274"],
         )
         self.assertIn(
             "apple,j575d is refused: no engine entry",
-            supported_models.private_coverage_errors(widest + ["apple,j575d"], self.path),
+            supported_models.private_coverage_errors(required + ["apple,j575d"], self.path),
         )
 
     def test_an_unknown_channel_is_refused_rather_than_guessed(self) -> None:
@@ -212,12 +231,16 @@ class CatalogErrorsTests(unittest.TestCase):
         self.assertTrue(any("stable may not offer it" in error for error in errors))
 
     def test_a_catalog_naming_no_channel_is_judged_as_a_private_one(self) -> None:
-        catalog = {"models": self.models("edge")}
-        self.assertEqual(supported_models.catalog_errors(catalog, path=self.path), [])
-        # A stable catalog that lost its channel fails closed rather than
-        # passing under looser rules: private coverage wants edge's whole set.
-        narrower = {"models": self.models("stable")}
-        self.assertTrue(supported_models.catalog_errors(narrower, path=self.path))
+        for channel in ("edge", "rc", "stable"):
+            catalog = {"models": self.models(channel)}
+            self.assertEqual(
+                supported_models.catalog_errors(catalog, path=self.path), [], channel
+            )
+        # Still closed to a Mac the manifest refuses or does not name.
+        stray = {"models": self.models("edge") + [
+            {"deviceIdentifier": "apple,j575d", "status": "enabled"}
+        ]}
+        self.assertTrue(supported_models.catalog_errors(stray, path=self.path))
 
     def test_a_disabled_model_is_named(self) -> None:
         catalog = {"channel": "edge", "models": self.models("edge")}

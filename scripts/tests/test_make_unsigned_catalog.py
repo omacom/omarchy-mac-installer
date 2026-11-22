@@ -250,7 +250,7 @@ class CatalogGeneratorTests(unittest.TestCase):
             for identifier in document["device_identifiers"]
             if identifier not in M3_MACS
         ]
-        self.assertRejected(document, "every Mac qualified for edge must be enabled")
+        self.assertRejected(document, "every Mac qualified for stable must be enabled")
 
     def test_refused_and_unknown_macs_are_rejected_with_a_reason(self) -> None:
         for identifier, fragment in (
@@ -280,13 +280,15 @@ class CatalogGeneratorTests(unittest.TestCase):
         )
         refused = {identifier for identifier, record in macs.items() if "refused" in record}
         self.assertEqual(refused, {"apple,j575d", "apple,j614s"})
-        # The M4 Pro and M5 Air bring-up boards, developer catalogs only.
+        # The M5 Air bring-up board, developer catalogs only. The M4 Pro j616s
+        # has since qualified for edge.
         developer = {
             identifier
             for identifier, record in macs.items()
             if record.get("qualified") == "developer"
         }
-        self.assertEqual(developer, {"apple,j616s", "apple,j815"})
+        self.assertEqual(developer, {"apple,j815"})
+        self.assertEqual(macs["apple,j616s"]["qualified"], "edge")
         for template in sorted(MANIFEST.parent.glob("release-inputs*.template.json")):
             identifiers = json.loads(template.read_text())["device_identifiers"]
             self.assertEqual(sorted(identifiers), sorted(stable), template.name)

@@ -173,19 +173,21 @@ def coverage_errors(identifiers: list[str], channel: str, path: Path = MANIFEST)
 
 def private_coverage_errors(identifiers: list[str], path: Path = MANIFEST) -> list[str]:
     """Why IDENTIFIERS is not a valid private or developer catalog. Such a
-    catalog is not published to a channel, so it must enable everything the
-    widest channel offers and may add developer boards on top, but nothing
-    refused and nothing the manifest does not name."""
+    catalog is not published to a channel, so it owes the fully qualified Macs
+    and may add any other the manifest names, developer boards included, but
+    nothing refused and nothing unknown. It is deliberately tied to the
+    narrowest channel: a board reaching edge must not break every private
+    catalog."""
     macs = load(path)
-    widest = boards_for(CHANNELS[0], path)
+    required = boards_for(CHANNELS[-1], path)
     errors = []
-    missing = [identifier for identifier in widest if identifier not in identifiers]
+    missing = [identifier for identifier in required if identifier not in identifiers]
     if missing:
         errors.append(
-            f"every Mac qualified for {CHANNELS[0]} must be enabled; missing " + ", ".join(missing)
+            f"every Mac qualified for {CHANNELS[-1]} must be enabled; missing " + ", ".join(missing)
         )
     for identifier in identifiers:
-        if identifier in widest:
+        if identifier in required:
             continue
         record = macs.get(identifier)
         if record is None:

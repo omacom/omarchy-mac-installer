@@ -185,10 +185,10 @@ def load_developer_models(document: dict) -> list[str]:
     groups = document["developer_models"]
     if not isinstance(groups, list) or not groups:
         raise SystemExit("inputs developer_models must be a non-empty list")
-    # The widest channel's Macs count towards the main group's coverage; a
-    # developer board does not, since no channel offers it.
-    offered = set(supported_models.boards_for(supported_models.CHANNELS[0]))
-    allowed = set(supported_models.developer_boards()) | offered
+    # The fully qualified Macs count towards the main group's coverage; a board
+    # that has not reached stable may appear but is owed by nobody.
+    offered = set(supported_models.boards_for(supported_models.CHANNELS[-1]))
+    allowed = set(supported_models.load()) - set(supported_models.refused())
     taken = []
     # Groups may share a payload; each metadata file belongs to one group.
     payloads = {document["payload_name"]}
