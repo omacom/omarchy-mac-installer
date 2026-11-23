@@ -42,6 +42,7 @@
     "apple,j614s": "MacBook Pro 14-inch (M4 Pro, 2024): no install through aura's Mach-O Stage 1 has been tried on a J614s; the J616s is the M4 Pro offered to developer catalogs"
   },
   "developer": {
+    "apple,j614c": "MacBook Pro 14-inch (M4 Max, 2024): developer catalog only, for hardware bring-up through aura's Mach-O Stage 1 on 26.6.2 firmware; not qualified. Moves to supported and untested (edge only) once edge images carry a monitor-free aura.",
     "apple,j616s": "MacBook Pro 16-inch (M4 Pro, 2024): developer catalog only, for hardware bring-up through aura's Mach-O Stage 1 on 26.6.2 firmware; not qualified. Moves to supported and untested (edge only) once edge images carry a monitor-free aura.",
     "apple,j815": "MacBook Air 15-inch (M5, 2026): developer catalog only, for hardware bring-up through aura's Mach-O Stage 1 on 26.5.1 or 26.6.2 firmware; not qualified; display and Wi-Fi not expected to work. Moves to supported and untested (edge only) once edge images carry a monitor-free aura."
   },
