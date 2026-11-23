@@ -40,7 +40,12 @@ class TodaysManifestTests(unittest.TestCase):
     def test_every_m4_names_the_app_that_can_enrol_a_macho_stage_1(self) -> None:
         # Older apps have no AuraStage1 in their native Recovery, so a catalog
         # that admits one may not offer these boards.
-        self.assertEqual(supported_models.app_minimums(), dict.fromkeys(M4_BOARDS, "2.3.17"))
+        # The M5 Air needs the same app for the same reason, and it is a
+        # developer board, which no channel offers.
+        self.assertEqual(
+            supported_models.app_minimums(),
+            dict.fromkeys(M4_BOARDS | {"apple,j815"}, "2.3.17"),
+        )
         self.assertEqual(
             supported_models.app_minimum_errors("2.3.16", supported_models.boards_for("edge")),
             [f"{board} needs app 2.3.17 or newer, but the catalog admits 2.3.16" for board in sorted(M4_BOARDS)],

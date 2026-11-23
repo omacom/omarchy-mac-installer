@@ -376,6 +376,27 @@ class CatalogGeneratorTests(unittest.TestCase):
             document["developer_models"][0]["device_identifiers"] = [identifier]
             self.assertRejected(document, fragment, developer=True)
 
+    def test_a_developer_group_cannot_duck_its_macs_app_floor(self) -> None:
+        # A board short of stable used to be left out of the list the floor was
+        # checked against, so a developer group was a way around its own Mac's
+        # app minimum.
+        document = self.with_neo()
+        (self.assets / "installer_data-m4.json").write_bytes(b"m4-metadata" * 8)
+        document["developer_models"].append({
+            "payload_name": self.inputs["payload_name"],
+            "metadata_name": "installer_data-m4.json",
+            "device_identifiers": ["apple,j614s"],
+        })
+        document["installer"].update(minimum_version="2.3.16", latest_version="2.3.17")
+        self.assertRejected(
+            document,
+            "apple,j614s needs app 2.3.17 or newer, but the catalog admits 2.3.16",
+            developer=True,
+        )
+        document["installer"]["minimum_version"] = "2.3.17"
+        result = self.generate(document, developer=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_a_developer_group_can_give_supported_macs_their_own_metadata(self) -> None:
         document = self.with_neo()
         airs = ["apple,j613", "apple,j615"]

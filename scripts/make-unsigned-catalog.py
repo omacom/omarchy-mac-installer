@@ -179,15 +179,14 @@ def load_developer_models(document: dict) -> list[str]:
     """Validate a developer catalog's extra groups, failing closed.
 
     A group may take developer boards, or supported Macs it moves out of the
-    main group (to give them their own metadata). Returns the supported Macs
-    the groups took, which count towards the main group's coverage.
+    main group (to give them their own metadata). Returns every Mac the groups
+    took: the fully qualified ones count towards the main group's coverage, and
+    all of them owe their own app minimum, which is why a board short of stable
+    cannot be left out of the list the floor is checked against.
     """
     groups = document["developer_models"]
     if not isinstance(groups, list) or not groups:
         raise SystemExit("inputs developer_models must be a non-empty list")
-    # The fully qualified Macs count towards the main group's coverage; a board
-    # that has not reached stable may appear but is owed by nobody.
-    offered = set(supported_models.boards_for(supported_models.CHANNELS[-1]))
     allowed = set(supported_models.load()) - set(supported_models.refused())
     taken = []
     # Groups may share a payload; each metadata file belongs to one group.
@@ -221,8 +220,7 @@ def load_developer_models(document: dict) -> list[str]:
                     f"{identifier} is not a developer board or a supported Mac "
                     "in scripts/supported-models.json"
                 )
-            if identifier in offered:
-                taken.append(identifier)
+            taken.append(identifier)
             boards.add(identifier)
     return taken
 

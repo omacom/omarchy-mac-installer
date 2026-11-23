@@ -487,12 +487,12 @@ def check_package_mtrees(root: Path, candidates: Candidates) -> str:
 def check_supported_models(root: Path, candidates: Candidates, report: dict, policy: dict | None = None,
                            channel: str | None = None) -> str:
     """Every Mac the image admits has its Aurora device tree in stage 2. The
-    trusted policy names them; the Aurora U-Boot ships no device trees. An edge
-    image also needs the trees of the Macs qualified for edge and no further,
-    which rc and stable never offer."""
+    trusted policy names them; the Aurora U-Boot ships no device trees. A
+    looser channel also needs the trees of the Macs that have only qualified
+    that far, which the tighter channels never offer."""
     policy = policy if policy is not None else candidate_set.load_policy()
     kernel_dtbs = {PurePosixPath(p).name for p in candidates.dtbs()}
-    trees = list(policy["device_trees"]) + (list(policy.get("edge_device_trees", [])) if channel == "edge" else [])
+    trees = candidate_set.device_trees(policy, channel)
     models = sorted(f"{tree}.dtb" for tree in trees)
     require(models, "the trust policy names no Mac")
     missing = [name for name in models if name not in kernel_dtbs]

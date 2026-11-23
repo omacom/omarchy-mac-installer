@@ -109,7 +109,16 @@ class InspectionTest(unittest.TestCase):
         self.assertEqual(report["m1n1_stage2"]["device_trees"], len(fixtures.MODELS) + 1)
         # An edge image (the fixture's lane) admits the edge-only Macs as well.
         self.assertEqual(report["supported_models"], sorted(fixtures.MODELS))
-        self.assertEqual(len(report["supported_models"]), 35 + len(fixtures.POLICY["edge_device_trees"]))
+        # Counted from the manifest rather than the policy the check reads, so a
+        # bucket losing a board cannot agree with itself.
+        qualified = [
+            identifier
+            for identifier, record in json.loads(
+                (fixtures.ROOT.parent / "scripts/supported-models.json").read_text()
+            )["macs"].items()
+            if record.get("qualified") in ("edge", "rc", "stable")
+        ]
+        self.assertEqual(len(report["supported_models"]), len(qualified))
         self.assertNotIn("hardware_profile", report)
         self.assertEqual(report["hardware_setup"], "build")
 
@@ -1482,27 +1491,35 @@ class DeviceTreeCoverageTest(unittest.TestCase):
     catalogs may offer (every board qualified for a channel in
     scripts/supported-models.json) and none beyond them. A board joins both
     together, so the image can never admit a Mac its kernel cannot describe, or
-    carry a tree no catalog offers. An edge-only tree belongs to a board
-    qualified for edge and no further, which rc and stable never offer."""
+    carry a tree no catalog offers. A rung's own bucket holds the trees of the
+    boards that have qualified that far and no further, which the tighter
+    channels never offer."""
 
     def test_every_supported_mac_has_exactly_one_policy_device_tree(self):
         macs = json.loads(
             (fixtures.ROOT.parent / "scripts/supported-models.json").read_text()
         )["macs"]
-        boards = {
-            identifier.removeprefix("apple,")
-            for identifier, record in macs.items()
-            if record.get("qualified") in ("edge", "rc", "stable")
-        }
-        untested = {
-            identifier.removeprefix("apple,")
-            for identifier, record in macs.items()
-            if record.get("qualified") == "edge"
-        }
-        edge_only = {tree.split("-", 1)[1] for tree in fixtures.POLICY.get("edge_device_trees", [])}
-        self.assertEqual(sorted(edge_only - untested), [], "an edge-only device tree for a tested Mac")
+
+        def at(*levels):
+            return {
+                identifier.removeprefix("apple,")
+                for identifier, record in macs.items()
+                if record.get("qualified") in levels
+            }
+
+        boards = at("edge", "rc", "stable")
+        for key, level in (("rc_device_trees", "rc"), ("edge_device_trees", "edge")):
+            bucket = {tree.split("-", 1)[1] for tree in fixtures.POLICY.get(key, [])}
+            self.assertEqual(
+                sorted(bucket - at(level)), [], f"a {level}-only device tree for another Mac"
+            )
+        every = (
+            fixtures.POLICY["device_trees"]
+            + fixtures.POLICY.get("rc_device_trees", [])
+            + fixtures.POLICY.get("edge_device_trees", [])
+        )
         trees = {}
-        for tree in fixtures.POLICY["device_trees"] + fixtures.POLICY.get("edge_device_trees", []):
+        for tree in every:
             found = re.fullmatch(r"t([0-9a-f]{4})-([jk][0-9]+[a-z]*)", tree)
             self.assertIsNotNone(found, f"{tree} is not t<chip>-<board>")
             self.assertNotIn(found[2], trees, f"{found[2]} has two device trees")
