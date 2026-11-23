@@ -605,10 +605,31 @@ class CatalogReleaseTests(ReleaseTestCase):
                 self.assertIn("a catalog offering an untested Mac needs installer.minimumVersion 2.3.17 or later, "
                               "the first app that can finish an install on one",
                               release.supported_models.catalog_errors(older, "edge"))
+        # With no untested Mac in the manifest, the same catalog without its notes needs no floor.
+        untested = release.supported_models.untested
+        release.supported_models.untested = lambda: {}
+        self.addCleanup(setattr, release.supported_models, "untested", untested)
         tested = dict(catalog, installer=dict(catalog["installer"], minimumVersion="2.1.0"),
                       models=[{k: v for k, v in model.items() if k != "previewNote"} for model in catalog["models"]])
         self.assertFalse(any("needs installer.minimumVersion" in error
                              for error in release.supported_models.catalog_errors(tested, "edge")))
+
+    def test_an_untested_mac_without_its_note_still_needs_the_floor_and_the_note(self) -> None:
+        # A hand-made catalog (make-unsigned-catalog.py) enabling an M4 with no previewNote
+        # must not let an older app partition it.
+        catalog = self.edge_catalog()
+        held = release.supported_models.untested()
+        self.assertTrue(held)
+        bare = dict(catalog, installer=dict(catalog["installer"], minimumVersion="2.3.0"),
+                    models=[{k: v for k, v in model.items() if k != "previewNote"} for model in catalog["models"]])
+        for channel in (None, "edge"):
+            with self.subTest(channel):
+                errors = release.supported_models.catalog_errors(bare, channel)
+                self.assertIn("a catalog offering an untested Mac needs installer.minimumVersion 2.3.17 or later, "
+                              "the first app that can finish an install on one", errors)
+                for identifier in held:
+                    self.assertIn(f"{identifier} is untested but carries no preview note: "
+                                  "a catalog shows each untested Mac its note", errors)
 
     def test_a_developer_board_is_named_as_one_in_any_channel_catalog(self) -> None:
         developer = release.supported_models.developer_boards

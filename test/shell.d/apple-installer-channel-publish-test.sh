@@ -212,10 +212,15 @@ import json
 import sys
 
 output, sequence, payload_url, payload_size, manifest = sys.argv[1:6]
+manifest = json.load(open(manifest))
+notes = manifest.get("untested", {})
 catalog = {
     "schemaVersion": 4,
     "sequence": int(sequence),
     "issuedAt": "2026-09-04T00:00:00Z",
+    # An untested Mac needs app 2.3.17 (supported_models.UNTESTED_APP_FLOOR).
+    "installer": {"minimumVersion": "2.3.17", "latestVersion": "2.3.17",
+                  "downloadURL": "https://example.invalid/app.dmg"},
     "models": [
         {
             "deviceIdentifier": identifier,
@@ -225,8 +230,9 @@ catalog = {
                 "fileName": "payload.zip",
                 "sizeBytes": int(payload_size),
             },
+            **({"previewNote": notes[identifier]} if identifier in notes else {}),
         }
-        for identifier in json.load(open(manifest))["supported"]
+        for identifier in manifest["supported"]
     ],
 }
 with open(output, "w", encoding="utf-8") as stream:
@@ -309,7 +315,9 @@ refused_envelope "a-missing-neo" "catalog['models'] = [m for m in models if m['d
 refused_envelope "only-m1-and-m2" "catalog['models'] = models[:23]" "missing apple,j433"
 refused_envelope "an-m3-ultra" "models.append(dict(models[0], deviceIdentifier='apple,j575d'))" "apple,j575d is refused"
 refused_envelope "an-m6-mac" "models.append(dict(models[0], deviceIdentifier='apple,j804'))" "apple,j804"
-pass "envelope refuses a catalog missing, disabling or overreaching any supported Mac"
+refused_envelope "an-m4-without-its-note" "[m.pop('previewNote', None) for m in models if m['deviceIdentifier'] == 'apple,j614s']" "apple,j614s is untested but carries no preview note"
+refused_envelope "an-app-older-than-the-m4s-need" "catalog['installer']['minimumVersion'] = '2.3.16'" "needs installer.minimumVersion 2.3.17"
+pass "envelope refuses a catalog missing, disabling or overreaching any supported Mac, or offering an untested one without its note or app floor"
 
 # --- promotion writes both channel objects and verifies them back -----------
 OMARCHY_PUBLISH_ASSUME_YES=os-v4.0.2-mac.1.20260902 "$PUBLISHER" os-promote --tag os-v4.0.2-mac.1.20260902 --to stable \

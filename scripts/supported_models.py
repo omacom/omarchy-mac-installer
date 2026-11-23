@@ -136,7 +136,18 @@ def catalog_errors(catalog: dict, channel: str | None = None) -> list[str]:
             for model in models
             if "previewNote" in model
         ]
-    if any("previewNote" in model for model in models):
+    # Edge shows each untested Mac its note (rc and stable refuse it above).
+    held = untested()
+    if channel not in RELEASE_CHANNELS:
+        errors += [
+            f"{model.get('deviceIdentifier')} is untested but carries no preview note: "
+            "a catalog shows each untested Mac its note"
+            for model in models
+            if model.get("deviceIdentifier") in held and "previewNote" not in model
+        ]
+    # The floor follows the Macs themselves, not only their notes: a catalog that
+    # enables an untested Mac without its note still lets an older app partition it.
+    if any("previewNote" in model or model.get("deviceIdentifier") in held for model in models):
         installer = catalog.get("installer")
         minimum = _version(installer.get("minimumVersion")) if isinstance(installer, dict) else None
         if minimum is None or minimum < _version(UNTESTED_APP_FLOOR):

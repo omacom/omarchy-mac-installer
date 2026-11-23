@@ -129,11 +129,27 @@ class CatalogGeneratorTests(unittest.TestCase):
     def test_an_engine_without_its_own_decoder_rejects_apps_before_2_3_0(self):
         self.inputs["installer"]["minimum_version"] = "2.2.0"
         self.assertRejected(self.inputs, "requires installer.minimum_version >= 2.3.0")
-        self.inputs["installer"]["minimum_version"] = "2.3.0"
+        self.inputs["installer"]["minimum_version"] = "2.3.17"
         self.assertEqual(self.generate(self.inputs).returncode, 0)
 
+    def test_untested_macs_need_the_app_that_can_finish_their_install(self) -> None:
+        # An app before 2.3.17 partitions an M4 and then stops in Recovery.
+        self.inputs["installer"]["minimum_version"] = "2.3.16"
+        self.assertRejected(self.inputs, "untested Macs need installer.minimum_version >= 2.3.17")
+
+    def test_an_untested_mac_carries_its_note(self) -> None:
+        result = self.generate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        notes = json.loads(MANIFEST.read_text())["untested"]
+        for model in json.loads((self.directory / "catalog.json").read_text())["models"]:
+            with self.subTest(model["deviceIdentifier"]):
+                if model["deviceIdentifier"] in notes:
+                    self.assertEqual(model["previewNote"], notes[model["deviceIdentifier"]])
+                else:
+                    self.assertNotIn("previewNote", model)
+
     def test_carries_the_installer_compatibility_block(self) -> None:
-        self.inputs["installer"]["minimum_version"] = "2.3.0"
+        self.inputs["installer"]["minimum_version"] = "2.3.17"
         self.inputs["installer"]["latest_version"] = "2.4.0"
         result = self.generate()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -141,7 +157,7 @@ class CatalogGeneratorTests(unittest.TestCase):
         self.assertEqual(
             catalog["installer"],
             {
-                "minimumVersion": "2.3.0",
+                "minimumVersion": "2.3.17",
                 "latestVersion": "2.4.0",
                 "downloadURL": self.inputs["installer"]["download_url"],
             },

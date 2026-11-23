@@ -10,8 +10,9 @@ Every per-release value comes from an inputs file (`--inputs`), so cutting a
 release never edits this script. `scripts/release-inputs.template.json` holds
 the current values. The engine is always the one `Engine/source-lock.json`
 pins. The inputs must list exactly the Macs in
-`scripts/supported-models.json`: every M1, M2 and M3 Mac and the MacBook Neo,
-none refused.
+`scripts/supported-models.json`: every M1, M2 and M3 Mac, the MacBook Neo and
+the untested M4 Macs, none refused. Each untested Mac carries its note, and
+the app floor is the one an untested Mac needs, so the catalog is an edge one.
 
 The catalog pins whole-file digests. When the payload was split for release
 delivery, the sibling `<payload>.partNN` files are emitted as an additional
@@ -327,6 +328,15 @@ def load_inputs(path: Path, developer: bool = False) -> dict:
         raise SystemExit("every catalog needs installer.minimum_version >= 2.1.0")
     if parse_version(installer["minimum_version"]) < parse_version(minimum_app):
         raise SystemExit(f"this engine requires installer.minimum_version >= {minimum_app}")
+    # Every catalog enables the untested Macs (edge alone publishes it), and an
+    # app before the floor partitions one and then stops in Recovery.
+    if supported_models.untested() and parse_version(installer["minimum_version"]) < parse_version(
+        supported_models.UNTESTED_APP_FLOOR
+    ):
+        raise SystemExit(
+            "untested Macs need installer.minimum_version >= "
+            f"{supported_models.UNTESTED_APP_FLOOR}, the first app that can finish an install on one"
+        )
     download_url = installer["download_url"]
     if not isinstance(download_url, str) or not download_url.startswith("https://"):
         raise SystemExit(f"inputs installer.download_url must be https: {download_url}")
@@ -422,8 +432,11 @@ def model_group(inputs: dict, group: dict, assets: Path, base_url: str) -> tuple
         "metadataArtifact": artifact(metadata, base_url),
         "payloadArtifact": payload_artifact,
     }
+    # The app shows an untested Mac its note (scripts/supported-models.json).
+    notes = supported_models.untested()
     models = [
         {"deviceIdentifier": device_identifier, **shared}
+        | ({"previewNote": notes[device_identifier]} if device_identifier in notes else {})
         for device_identifier in group["device_identifiers"]
     ]
     return models, len(parts)
