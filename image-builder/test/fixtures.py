@@ -25,9 +25,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "a" * 40
 BOOT_SOURCE = "b" * 40
 RELEASE = "7.0.0-1-ARCH"
-# Every supported Mac's kernel device tree, as the trust policy names them.
-MODELS = tuple(json.loads((Path(__file__).resolve().parents[1] / "builder/candidate-trust/policy.json")
-                          .read_text())["device_trees"])
+# Every supported Mac's kernel device tree, as the trust policy names them,
+# with the edge-only trees, which the 7.3 kernel carries for every lane.
+_POLICY = json.loads((Path(__file__).resolve().parents[1] / "builder/candidate-trust/policy.json").read_text())
+MODELS = tuple(_POLICY["device_trees"]) + tuple(_POLICY.get("edge_device_trees", []))
 # The runtime layouts the builder takes, by the omacom/omarchy commit that has
 # them: the Apple package list and the pacman template directories it ships,
 # and the directories build-mac-image installs pacman.conf and the mirror list

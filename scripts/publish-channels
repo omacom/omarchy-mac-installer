@@ -144,10 +144,13 @@ build_envelope() {
   local catalog=$1 signature=$2 output=$3
   require_file "$catalog"
   require_file "$signature"
-  # A catalog offering any Mac enables every supported Mac
-  # (scripts/supported-models.json); only an empty catalog lists none.
-  python3 "$script_directory/supported_models.py" check-catalog "$catalog" ||
-    die "$catalog does not enable every supported Mac"
+  # A catalog offering any Mac enables every supported Mac its channel offers
+  # (scripts/supported-models.json; rc and stable leave out untested Macs);
+  # only an empty catalog lists none. The channel is the file's: catalog-<channel>.json.
+  local channel=()
+  [[ ${catalog##*/} =~ ^catalog-(edge|rc|stable)\.json$ ]] && channel=("${BASH_REMATCH[1]}")
+  python3 "$script_directory/supported_models.py" check-catalog "$catalog" "${channel[@]}" ||
+    die "$catalog does not enable every supported Mac its channel offers"
   (( $(file_size "$signature") == 64 )) || die "a catalog signature must be 64 bytes"
   python3 - "$catalog" "$signature" "$output" <<'PY'
 import base64

@@ -282,12 +282,17 @@
         "j475c", "j475d", "j180d", "j433", "j434", "j504", "j613", "j615", "j514s", "j514c",
         "j514m", "j516s", "j516c", "j516m",
       ].map { "apple,\($0)" }
+      // The untested, edge-only M4 boards the engine names.
+      let edgeOnly = [
+        "j604", "j623", "j624", "j713", "j715", "j773g", "j614s", "j616s", "j773s", "j614c",
+        "j616c", "j575c",
+      ].map { "apple,\($0)" }
       // The templates' one payload is the image every Mac installs, the MacBook Neo's too.
-      XCTAssertEqual(identifiers, Set(everyM1M2M3Mac + ["apple,j700"]))
+      XCTAssertEqual(identifiers, Set(everyM1M2M3Mac + ["apple,j700"] + edgeOnly))
       let manifest = try JSONSerialization.jsonObject(
         with: Data(contentsOf: scripts.appendingPathComponent("supported-models.json")))
       let supported = try XCTUnwrap((manifest as? [String: Any])?["supported"] as? [String])
-      XCTAssertEqual(Set(supported), Set(everyM1M2M3Mac + ["apple,j700"]))
+      XCTAssertEqual(Set(supported), Set(everyM1M2M3Mac + ["apple,j700"] + edgeOnly))
       #if DEBUG
         XCTAssertEqual(
           InstallerSimulationEnvironment.simulatedCatalogDevices.sorted(),

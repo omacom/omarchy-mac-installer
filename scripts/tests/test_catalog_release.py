@@ -98,8 +98,9 @@ def engine_document() -> dict:
 
 
 def installer_document() -> dict:
-    return {"minimumVersion": "2.1.0", "latestVersion": "2.1.0",
-            "downloadURL": f"{release_base('app-v2.1.0')}/Omarchy-Installer.dmg"}
+    # 2.3.17 is the floor of a catalog that offers an untested Mac (supported_models.UNTESTED_APP_FLOOR).
+    return {"minimumVersion": "2.3.17", "latestVersion": "2.3.17",
+            "downloadURL": f"{release_base('app-v2.3.17')}/Omarchy-Installer.dmg"}
 
 
 def evidence_document(image_sha256: str = sha(PAYLOAD)) -> dict:
@@ -153,9 +154,31 @@ class ReleaseTestCase(unittest.TestCase):
         path.write_text(json.dumps(document))
         return path
 
+    script = SCRIPT
+
+    def use_tested_only_manifest(self) -> None:
+        """Run the CLI from a copy of scripts/ whose supported-models.json has no
+        untested Mac, as before any Mac went untested: rc and stable then take
+        every supported Mac, so edge can be promoted. The rest of the repository
+        is linked in unchanged."""
+        tree = self.directory / "repository"
+        tree.mkdir()
+        for entry in ROOT.iterdir():
+            if entry.name != "scripts":
+                (tree / entry.name).symlink_to(entry)
+        shutil.copytree(ROOT / "scripts", tree / "scripts", symlinks=True,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        manifest_path = tree / "scripts" / "supported-models.json"
+        manifest = json.loads(manifest_path.read_text())
+        untested = set(manifest.get("untested", {}))
+        manifest["supported"] = [identifier for identifier in manifest["supported"] if identifier not in untested]
+        manifest["untested"] = {}
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+        self.script = tree / "scripts" / "catalog_release.py"
+
     def run_tool(self, *arguments: str, environment: dict | None = None) -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, str(SCRIPT), *arguments],
+            [sys.executable, str(self.script), *arguments],
             capture_output=True, text=True, env=environment or self.environment,
         )
 
@@ -259,7 +282,10 @@ class CatalogReleaseTests(ReleaseTestCase):
     def test_the_app_fixture_verifies_and_covers_every_mac(self) -> None:
         trust_root = (FIXTURE / "trust-root.ed25519.pub").read_bytes()
         document = release.verify_envelope((FIXTURE / "catalog-edge.signed.json").read_bytes(), trust_root, OPENSSL)
-        self.assertEqual(release.supported_models.catalog_errors(document), [])
+        # The fixture was signed before the M4 and M5 Macs went untested on edge: it names every Mac
+        # that is not untested today, which is what a release channel offers.
+        self.assertEqual(sorted(model["deviceIdentifier"] for model in document["models"]),
+                         sorted(release.supported_models.channel_supported("stable")))
 
     # ── the evidence gate ────────────────────────────────────────────────────
 
@@ -523,6 +549,98 @@ class CatalogReleaseTests(ReleaseTestCase):
                     self.assertEqual(model["previewNote"], note)
                 else:
                     self.assertNotIn("previewNote", model)
+
+    def untested_mac(self, identifier: str = "apple,j700") -> str:
+        note = "Untested: qualified on edge next"
+        untested = release.supported_models.untested
+        release.supported_models.untested = lambda: {identifier: note}
+        self.addCleanup(setattr, release.supported_models, "untested", untested)
+        return note
+
+    def edge_catalog(self) -> dict:
+        return release.build_catalog(
+            "edge", IMAGE, payload_document(), engine_document(),
+            artifact(IMAGE, "installer_data.json", METADATA), evidence_document(), installer_document(),
+            datetime.datetime(2026, 10, 14, tzinfo=datetime.timezone.utc))
+
+    def test_rc_and_stable_leave_out_an_untested_mac(self) -> None:
+        self.untested_mac()
+        supported, _ = release.supported_models.load()
+        catalog = self.build_rc(*self.rc_inputs())
+        identifiers = [model["deviceIdentifier"] for model in catalog["models"]]
+        self.assertNotIn("apple,j700", identifiers)
+        self.assertEqual(identifiers, [identifier for identifier in supported if identifier != "apple,j700"])
+        self.assertFalse(any("previewNote" in model for model in catalog["models"]))
+        self.assertIn("apple,j700", [model["deviceIdentifier"] for model in self.edge_catalog()["models"]])
+
+    def test_an_rc_or_stable_catalog_with_an_untested_or_preview_mac_is_refused(self) -> None:
+        note = self.untested_mac()
+        edge = self.edge_catalog()
+        for channel in ("rc", "stable"):
+            with self.subTest(channel):
+                errors = release.supported_models.catalog_errors(edge, channel)
+                self.assertIn(f"apple,j700 is untested: {channel} offers only Macs installed on real hardware", errors)
+                self.assertIn(f"apple,j700 carries a preview note: {channel} offers no preview Mac", errors)
+        self.assertEqual(release.supported_models.catalog_errors(edge, "edge"), [])
+        self.assertEqual(release.supported_models.catalog_errors(edge), [])
+        self.assertTrue(note)
+
+    def test_the_envelope_check_takes_the_catalog_s_channel(self) -> None:
+        self.untested_mac()
+        rc = self.write("catalog-rc.json", self.build_rc(*self.rc_inputs()))
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(release.supported_models.main(["check-catalog", str(rc), "rc"]), 0)
+            self.assertEqual(release.supported_models.main(["check-catalog", str(rc)]), 1)
+            edge = self.write("catalog-edge.json", self.edge_catalog())
+            self.assertEqual(release.supported_models.main(["check-catalog", str(edge), "stable"]), 1)
+
+    def test_a_catalog_with_an_untested_mac_needs_an_app_that_can_finish_its_install(self) -> None:
+        # An app before 2.3.17 partitions an M4 and then refuses its Recovery payload inventory.
+        catalog = self.edge_catalog()
+        self.assertTrue(any("previewNote" in model for model in catalog["models"]))
+        self.assertEqual(release.supported_models.catalog_errors(catalog, "edge"), [])
+        for minimum in ("2.3.16", "2.1.0", "2.3", None):
+            with self.subTest(minimum):
+                older = dict(catalog, installer=dict(catalog["installer"], minimumVersion=minimum))
+                self.assertIn("a catalog offering an untested Mac needs installer.minimumVersion 2.3.17 or later, "
+                              "the first app that can finish an install on one",
+                              release.supported_models.catalog_errors(older, "edge"))
+        # With no untested Mac in the manifest, the same catalog without its notes needs no floor.
+        untested = release.supported_models.untested
+        release.supported_models.untested = lambda: {}
+        self.addCleanup(setattr, release.supported_models, "untested", untested)
+        tested = dict(catalog, installer=dict(catalog["installer"], minimumVersion="2.1.0"),
+                      models=[{k: v for k, v in model.items() if k != "previewNote"} for model in catalog["models"]])
+        self.assertFalse(any("needs installer.minimumVersion" in error
+                             for error in release.supported_models.catalog_errors(tested, "edge")))
+
+    def test_an_untested_mac_without_its_note_still_needs_the_floor_and_the_note(self) -> None:
+        # A hand-made catalog (make-unsigned-catalog.py) enabling an M4 with no previewNote
+        # must not let an older app partition it.
+        catalog = self.edge_catalog()
+        held = release.supported_models.untested()
+        self.assertTrue(held)
+        bare = dict(catalog, installer=dict(catalog["installer"], minimumVersion="2.3.0"),
+                    models=[{k: v for k, v in model.items() if k != "previewNote"} for model in catalog["models"]])
+        for channel in (None, "edge"):
+            with self.subTest(channel):
+                errors = release.supported_models.catalog_errors(bare, channel)
+                self.assertIn("a catalog offering an untested Mac needs installer.minimumVersion 2.3.17 or later, "
+                              "the first app that can finish an install on one", errors)
+                for identifier in held:
+                    self.assertIn(f"{identifier} is untested but carries no preview note: "
+                                  "a catalog shows each untested Mac its note", errors)
+
+    def test_a_developer_board_is_named_as_one_in_any_channel_catalog(self) -> None:
+        developer = release.supported_models.developer_boards
+        catalog = self.edge_catalog()
+        release.supported_models.developer_boards = lambda: {"apple,j804": "M6 Air, developer catalog only"}
+        self.addCleanup(setattr, release.supported_models, "developer_boards", developer)
+        catalog["models"].append(dict(catalog["models"][0], deviceIdentifier="apple,j804"))
+        for channel in (None, "edge", "rc", "stable"):
+            with self.subTest(channel):
+                self.assertIn("apple,j804 is a developer board: only a developer build's sealed catalog offers it",
+                              release.supported_models.catalog_errors(catalog, channel))
 
     # ── signing ──────────────────────────────────────────────────────────────
 
@@ -1089,6 +1207,7 @@ class EngineGateTests(ReleaseTestCase):
     def test_an_allowed_engine_never_waives_the_final_tag_refusal(self) -> None:
         # The held rc catalog's image is a final tag built on rc; promoting it to stable stays refused in
         # prepare and in the signing job's promotion gate, though the engine gate passes with its digest.
+        self.use_tested_only_manifest()
         source = self.catalog("rc", HELD_ENGINE, FINAL_ON_RC_IMAGE)
         self.assertEqual(self.sign(source, out="rc-signed").returncode, 0)
         envelope = self.directory / "rc-signed" / "catalog-rc.signed.json"
@@ -1143,6 +1262,8 @@ class PromotionTests(ReleaseTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.host = self.directory / "scratch-host"
+        # An edge catalog with an untested Mac is never promoted; these tests promote one without.
+        self.use_tested_only_manifest()
 
     def publish(self, channel: str, envelope: Path) -> subprocess.CompletedProcess:
         return self.run_tool("publish", "--channel", channel, "--envelope", str(envelope),
@@ -1322,6 +1443,28 @@ class PromotionTests(ReleaseTestCase):
         tampered = json.loads((out / "source.signed.json").read_text())
         tampered["signature"] = base64.b64encode(b"\0" * 64).decode()
         self.assert_refused(check(source=self.write("source.signed.json", tampered)), "does not verify")
+
+    def test_a_promotion_of_an_untested_or_preview_mac_is_refused(self) -> None:
+        now = datetime.datetime(2026, 10, 29, tzinfo=datetime.timezone.utc)
+        note = "Untested: qualified on edge next"
+        untested = release.supported_models.untested
+        release.supported_models.untested = lambda: {"apple,j700": note}
+        self.addCleanup(setattr, release.supported_models, "untested", untested)
+        source = release.build_catalog(
+            "edge", IMAGE, payload_document(), engine_document(),
+            artifact(IMAGE, "installer_data.json", METADATA), evidence_document(), installer_document(),
+            datetime.datetime(2026, 10, 14, tzinfo=datetime.timezone.utc))
+        for channel in ("rc", "stable"):
+            with self.subTest(channel), self.assertRaisesRegex(
+                    release.Refusal, f"not what {channel} offers: .*apple,j700 carries a preview note"):
+                release.promote_catalog(source, now, channel)
+        # Once the Mac leaves untested, a source that still carries its note stays refused.
+        release.supported_models.untested = lambda: {}
+        with self.assertRaisesRegex(release.Refusal, "apple,j700 carries a preview note"):
+            release.promote_catalog(source, now, "rc")
+        for model in source["models"]:
+            model.pop("previewNote", None)
+        self.assertEqual(release.promote_catalog(source, now, "rc")["models"], source["models"])
 
     def test_promotion_only_moves_forward(self) -> None:
         for channel, source in (("rc", "rc"), ("rc", "stable"), ("edge", "edge"), ("stable", "stable"),

@@ -148,7 +148,7 @@ class Ordering(unittest.TestCase):
         self.assertEqual(field(self.jobs["build"], "needs"), "plan")
         self.assertEqual(field(self.jobs["acceptance"], "needs"), "build")
         self.assertEqual(field(self.jobs["upload"], "needs"), "[build, acceptance, catalog-inputs]")
-        self.assertEqual(field(self.jobs["catalog-inputs"], "needs"), "acceptance")
+        self.assertEqual(field(self.jobs["catalog-inputs"], "needs"), "[plan, acceptance]")
         self.assertEqual(field(self.jobs["catalog"], "needs"), "[plan, build, acceptance, upload, catalog-inputs]")
         for job, workflow in (("build", "mac-image"), ("acceptance", "mac-acceptance"), ("upload", "mac-upload"),
                               ("catalog", "mac-catalog")):
@@ -1008,13 +1008,13 @@ class CatalogInputs(unittest.TestCase):
         self.engine = json.loads(CONFIG.read_text())["engine"]
         self.pinned = catalog.pipeline_engine(self.engine)
 
-    def run_step(self, installer, dry_run: str, engine=None) -> tuple[int, str]:
+    def run_step(self, installer, dry_run: str, engine=None, lane: str = "stable") -> tuple[int, str]:
         config = self.directory / "config.json"
         config.write_text(json.dumps({"engine": engine or self.engine, "installer": installer}))
         output = self.directory / "output"
         output.write_text("")
         env = {"PATH": os.environ["PATH"], "DRY_RUN": dry_run, "PIPELINE_CONFIG": str(config),
-               "GITHUB_OUTPUT": str(output)}
+               "GITHUB_OUTPUT": str(output), "LANE": lane}
         result = subprocess.run(["bash", "--noprofile", "--norc", "-c", step_script(PIPELINE, "Read the engine and app blocks")],
                                 cwd=ROOT, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
         return result.returncode, output.read_text() + result.stdout + result.stderr
@@ -1048,6 +1048,20 @@ class CatalogInputs(unittest.TestCase):
         with self.assertRaisesRegex(catalog.Refusal, "needs app 2.3.0 or later"):
             catalog.check_installer({**self.installer(), "minimumVersion": "2.2.0"}, normalized)
         self.assertEqual(catalog.check_installer(self.installer(), normalized)["minimumVersion"], "2.3.0")
+
+    def test_an_edge_run_with_untested_macs_needs_their_app_floor_before_the_upload(self):
+        # Edge offers untested Macs, so an app floor below 2.3.17 stops the run here, before
+        # anything is uploaded; rc and stable offer none and keep their own floor.
+        self.assertTrue(catalog.supported_models.untested())
+        status, output = self.run_step(self.installer(), "false", lane="edge")
+        self.assertNotEqual(status, 0)
+        self.assertIn("the edge catalog offers untested Macs, which need app 2.3.17 or later", output)
+        for lane in ("rc", "stable"):
+            self.assertEqual(self.run_step(self.installer(), "false", lane=lane)[0], 0, lane)
+        newer = {"minimumVersion": "2.3.17", "latestVersion": "2.3.17",
+                 "downloadURL": f"https://github.com/{catalog.stopgap_repo()}/releases/download/v2.3.17/app.dmg"}
+        status, output = self.run_step(newer, "false", lane="edge")
+        self.assertEqual(status, 0, output)
 
     def test_a_good_block_becomes_the_catalogs_inputs(self):
         status, output = self.run_step(self.installer(), "false")

@@ -105,9 +105,11 @@ class InspectionTest(unittest.TestCase):
         for check in CHECKS:
             self.assertEqual(report["checks"][check]["result"], "passed", (check, report["checks"][check]))
         self.assertEqual(report["result"], "passed")
-        self.assertEqual(report["m1n1_stage2"]["device_trees"], 36)
+        # The kernel carries the edge-only trees too; stage 2 takes every tree it ships.
+        self.assertEqual(report["m1n1_stage2"]["device_trees"], len(fixtures.MODELS) + 1)
+        # An edge image (the fixture's lane) admits the edge-only Macs as well.
         self.assertEqual(report["supported_models"], sorted(fixtures.MODELS))
-        self.assertEqual(len(report["supported_models"]), 35)
+        self.assertEqual(len(report["supported_models"]), 35 + len(fixtures.POLICY["edge_device_trees"]))
         self.assertNotIn("hardware_profile", report)
         self.assertEqual(report["hardware_setup"], "build")
 
@@ -266,7 +268,7 @@ class InspectionTest(unittest.TestCase):
             "another m1n1": dict(m1n1=b"some other m1n1 build"),
             "a missing device tree": dict(dtbs=sorted(["s8000-n66", *fixtures.MODELS], key=str.encode)[:-1]),
             "device trees out of C order": dict(dtbs=sorted(["s8000-n66", *fixtures.MODELS], key=str.encode, reverse=True)),
-            "an extra device tree": dict(dtbs=[*sorted(["s8000-n66", *fixtures.MODELS], key=str.encode), "t8132-j604"]),
+            "an extra device tree": dict(dtbs=[*sorted(["s8000-n66", *fixtures.MODELS], key=str.encode), "t8152-j804"]),
             "another U-Boot": dict(uboot=b"stock asahi u-boot"),
             "trailing bytes": dict(tail=b"\x00\x01binary"),
             "options the image does not set": dict(tail=b"chosen.bootargs=init=/bin/sh\n"),
@@ -321,18 +323,18 @@ class InspectionTest(unittest.TestCase):
         self.assertFails("boot-maintenance", "Limine loader")
 
     def test_mac_without_an_aurora_device_tree(self):
-        policy = dict(fixtures.POLICY, device_trees=[*fixtures.POLICY["device_trees"], "t8132-j604"])
+        policy = dict(fixtures.POLICY, device_trees=[*fixtures.POLICY["device_trees"], "t8152-j804"])
         report = {}
-        with self.assertRaisesRegex(inspection.InspectionError, "t8132-j604"):
+        with self.assertRaisesRegex(inspection.InspectionError, "t8152-j804"):
             inspection.check_supported_models(self.root, inspection.Candidates(self.candidates), report, policy)
 
     def test_an_edge_only_device_tree_is_required_on_edge_alone(self):
-        policy = dict(fixtures.POLICY, edge_device_trees=["t8142-j815"])
+        policy = dict(fixtures.POLICY, edge_device_trees=["t8152-j804"])
         candidates = inspection.Candidates(self.candidates)
         for channel in (None, "rc", "stable"):
             with self.subTest(channel):
                 inspection.check_supported_models(self.root, candidates, {}, policy, channel)
-        with self.assertRaisesRegex(inspection.InspectionError, "t8142-j815"):
+        with self.assertRaisesRegex(inspection.InspectionError, "t8152-j804"):
             inspection.check_supported_models(self.root, candidates, {}, policy, "edge")
 
     def test_limine_loader_menu_and_uki(self):
@@ -1174,7 +1176,8 @@ class ChannelImageInspectionTest(unittest.TestCase):
         self.assertEqual(report["runtime_sources"], {"omarchy-mac": fixtures.SOURCE, "omarchy-mac-boot": fixtures.SOURCE})
         self.assertNotIn("test image pin", report["checks"]["pacman-config"]["detail"])
         self.assertEqual(report["installed_versions"]["omarchy-dev"], fixtures.CHANNEL_VERSIONS["omarchy"])
-        self.assertEqual(len(report["supported_models"]), 35)
+        # An edge image admits the edge-only Macs as well.
+        self.assertEqual(len(report["supported_models"]), len(fixtures.MODELS))
         self.assertFalse({"lane-channel", "install-receipt"} & set(report["checks"]), "edge inspects as it always has")
         self.assertNotIn("install_receipt", report)
 

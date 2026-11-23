@@ -47,9 +47,13 @@ class AuroraPackageRolesTests(unittest.TestCase):
         self.assertIn("uboot-aurora", policy["boot_packages"])
         self.assertTrue({"m1n1", "aura", "m1n1-neo", "uboot-asahi"} <= set(policy["refused_packages"]))
         self.assertEqual(policy["minimum_versions"]["m1n1-aurora"], "1.6.1.aurora20-3")
-        # Every supported Mac's kernel device tree, one per board of scripts/supported-models.json.
-        supported = json.loads((ROOT / "scripts/supported-models.json").read_text())["supported"]
-        self.assertEqual(sorted("apple," + tree.split("-", 1)[1] for tree in policy["device_trees"]), sorted(supported))
+        # Every supported Mac's kernel device tree, one per board of scripts/supported-models.json:
+        # the tested ones in device_trees, the untested (edge-only) ones in edge_device_trees.
+        manifest = json.loads((ROOT / "scripts/supported-models.json").read_text())
+        supported, untested = manifest["supported"], manifest.get("untested", {})
+        board = lambda tree: "apple," + tree.split("-", 1)[1]
+        self.assertEqual(sorted(map(board, policy["device_trees"])), sorted(set(supported) - set(untested)))
+        self.assertEqual(sorted(map(board, policy.get("edge_device_trees", []))), sorted(untested))
         self.assertFalse((ROOT / "image-builder/audio").exists())
         self.assertFalse((ROOT / "image-builder/firmware-ordering").exists())
 

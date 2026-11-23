@@ -41,11 +41,23 @@
     "apple,j516s",
     "apple,j516c",
     "apple,j516m",
-    "apple,j700"
+    "apple,j700",
+    "apple,j604",
+    "apple,j623",
+    "apple,j624",
+    "apple,j713",
+    "apple,j715",
+    "apple,j773g",
+    "apple,j614s",
+    "apple,j616s",
+    "apple,j773s",
+    "apple,j614c",
+    "apple,j616c",
+    "apple,j575c"
   ],
   "installer": {
-    "minimum_version": "2.3.0",
-    "latest_version": "2.3.0",
-    "download_url": "https://downloads.aicodelabs.com.au/omarchy-mac/installer/2.3.0/Omarchy-Mac-Installer-2.3.0.zip"
+    "minimum_version": "2.3.17",
+    "latest_version": "2.3.17",
+    "download_url": "https://downloads.aicodelabs.com.au/omarchy-mac/installer/2.3.17/Omarchy-Mac-Installer-2.3.17.zip"
   }
 }
