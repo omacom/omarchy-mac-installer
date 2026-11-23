@@ -341,7 +341,7 @@ def snapshot(database, database_sha256, lane, packages, destination, trust=TRUST
                     require(candidate_set.HEX40.fullmatch(revision) is not None,
                             f'{entry["NAME"][0]} carries a malformed source revision')
                     commits[role] = revision
-    candidate_set.verify_payloads(payloads, policy, channel['boot_loader'])
+    candidate_set.verify_payloads(payloads, policy, channel['boot_loader'], channel['lane'])
     names = {role: entry['NAME'][0] for role, _, entry in chosen}
     versions = {role: entry['VERSION'][0] for role, _, entry in chosen}
     require(versions['omarchy'] == versions['omarchy-settings'], 'mixed desktop versions')

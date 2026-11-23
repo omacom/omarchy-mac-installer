@@ -23,26 +23,32 @@ def write(macs: dict, schema: int = supported_models.SCHEMA_VERSION) -> Path:
     return path
 
 
+M4_BOARDS = {
+    f"apple,{board}"
+    for board in ("j604", "j623", "j624", "j713", "j715", "j773g", "j614s", "j616s", "j773s", "j614c", "j616c", "j575c")
+}
+
+
 class TodaysManifestTests(unittest.TestCase):
-    def test_edge_offers_the_m4_pro_and_rc_and_stable_do_not(self) -> None:
+    def test_edge_offers_every_m4_and_rc_and_stable_do_not(self) -> None:
         sets = {channel: supported_models.boards_for(channel) for channel in ("edge", "rc", "stable")}
         self.assertEqual(len(sets["stable"]), 35)
         self.assertEqual(sets["rc"], sets["stable"])
-        self.assertEqual(set(sets["edge"]) - set(sets["stable"]), {"apple,j616s"})
+        self.assertEqual(set(sets["edge"]) - set(sets["stable"]), M4_BOARDS)
         self.assertTrue(set(sets["stable"]) <= set(sets["rc"]) <= set(sets["edge"]))
 
-    def test_the_m4_pro_names_the_app_that_can_enrol_a_macho_stage_1(self) -> None:
+    def test_every_m4_names_the_app_that_can_enrol_a_macho_stage_1(self) -> None:
         # Older apps have no AuraStage1 in their native Recovery, so a catalog
-        # that admits one may not offer this board.
-        self.assertEqual(supported_models.app_minimums(), {"apple,j616s": "2.3.17"})
+        # that admits one may not offer these boards.
+        self.assertEqual(supported_models.app_minimums(), dict.fromkeys(M4_BOARDS, "2.3.17"))
         self.assertEqual(
             supported_models.app_minimum_errors("2.3.16", supported_models.boards_for("edge")),
-            ["apple,j616s needs app 2.3.17 or newer, but the catalog admits 2.3.16"],
+            [f"{board} needs app 2.3.17 or newer, but the catalog admits 2.3.16" for board in sorted(M4_BOARDS)],
         )
         self.assertEqual(
             supported_models.app_minimum_errors("2.3.17", supported_models.boards_for("edge")), []
         )
-        # rc and stable do not offer it, so their floor is untouched.
+        # rc and stable do not offer them, so their floor is untouched.
         self.assertEqual(
             supported_models.app_minimum_errors("2.3.0", supported_models.boards_for("stable")), []
         )
@@ -51,15 +57,15 @@ class TodaysManifestTests(unittest.TestCase):
         self.assertEqual(set(supported_models.developer_boards()), {"apple,j815"})
         for channel in ("edge", "rc", "stable"):
             offered = supported_models.boards_for(channel)
-            for identifier in ("apple,j815", "apple,j575d", "apple,j614s"):
+            for identifier in ("apple,j815", "apple,j575d"):
                 self.assertNotIn(identifier, offered, f"{identifier} in {channel}")
-        self.assertEqual(set(supported_models.refused()), {"apple,j575d", "apple,j614s"})
+        self.assertEqual(set(supported_models.refused()), {"apple,j575d"})
 
-    def test_only_the_board_short_of_stable_carries_a_note(self) -> None:
-        self.assertEqual(list(supported_models.notes()), ["apple,j616s"])
+    def test_only_the_boards_short_of_stable_carry_a_note(self) -> None:
+        self.assertEqual(set(supported_models.notes()), M4_BOARDS)
 
     def test_the_manifest_on_disk_loads(self) -> None:
-        self.assertEqual(len(supported_models.load(MANIFEST)), 39)
+        self.assertEqual(len(supported_models.load(MANIFEST)), 49)
 
 
 class LadderTests(unittest.TestCase):

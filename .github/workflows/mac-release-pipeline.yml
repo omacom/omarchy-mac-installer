@@ -189,7 +189,7 @@ jobs:
 
   catalog-inputs:
     name: Catalog inputs
-    needs: acceptance
+    needs: [plan, acceptance]
     if: needs.acceptance.outputs.result == 'pass'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -206,6 +206,7 @@ jobs:
         id: read
         env:
           DRY_RUN: ${{ inputs.dry-run }}
+          LANE: ${{ needs.plan.outputs.lane }}
         run: |
           set -euo pipefail
           config=${PIPELINE_CONFIG:-.github/mac-release-pipeline.json}
@@ -220,7 +221,7 @@ jobs:
           # The engine is the one Engine/source-lock.json pins; the config adds
           # only its downstreamRevision. The catalog's own checks run on both
           # blocks, so a malformed one stops here too.
-          engine=$(python3 -I - "$config" <<'PY'
+          engine=$(python3 -I - "$config" "$LANE" <<'PY'
           import importlib.util, json, sys
           spec = importlib.util.spec_from_file_location("catalog_release", "scripts/catalog_release.py")
           release = importlib.util.module_from_spec(spec)
@@ -230,6 +231,8 @@ jobs:
               engine = release.pipeline_engine(config["engine"])
               if config["installer"] is not None:
                   release.check_installer(config["installer"], engine)
+                  # A Mac this lane offers needs its app floor before the upload, not at signing.
+                  release.check_app_floor(config["installer"], sys.argv[2])
           except (release.Refusal, KeyError, TypeError) as error:
               sys.exit(f"::error::{sys.argv[1]}: {error}")
           print(json.dumps(engine, separators=(",", ":")))

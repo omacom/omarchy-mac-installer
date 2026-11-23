@@ -325,6 +325,16 @@ def check_installer(document: object, engine: dict | None = None) -> dict:
     return document
 
 
+def check_app_floor(installer: dict, channel: str) -> None:
+    """Refuse, before anything is uploaded, an app floor below what a Mac
+    CHANNEL offers needs (supported_models.catalog_errors refuses the catalog
+    itself later)."""
+    errors = supported_models.app_minimum_errors(
+        installer["minimumVersion"], supported_models.boards_for(channel))
+    if errors:
+        raise Refusal("; ".join(errors))
+
+
 def check_image_name(name: object, channel: str, payload_sha256: str | None = None) -> str:
     """NAME, an image built for CHANNEL. A name with an image id must name
     PAYLOAD_SHA256 when given; an older name without one is accepted as is.

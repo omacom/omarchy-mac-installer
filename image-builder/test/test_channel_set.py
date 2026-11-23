@@ -171,6 +171,20 @@ class ChannelSetTest(unittest.TestCase):
                     del contents["m1n1-aurora"]["usr/share/m1n1-aurora/stage1/m1n1-raw.bin"]
                 database, sha256 = self.snapshot(contents=contents, unsigned=("aura",) if defect == "unsigned" else ())
                 self.refused(message, database, sha256)
+    def test_only_the_edge_set_needs_the_edge_only_macs_device_trees(self):
+        tree = "t6040-j616s"
+        for lane, tag in (("edge", None), ("rc", fixtures.RC_RELEASE), ("stable", fixtures.STABLE_RELEASE)):
+            with self.subTest(lane=lane):
+                self.work = Path(tempfile.mkdtemp(dir=self.base))
+                contents = fixtures.channel_contents()
+                del contents["linux-aurora"][f"usr/lib/modules/{fixtures.RELEASE}/dtbs/{tree}.dtb"]
+                database, sha256 = self.snapshot(contents=contents, lane=lane)
+                if lane == "edge":
+                    self.refused("lacks the device trees of " + tree, database, sha256)
+                else:
+                    channel_set.snapshot(database, sha256, lane, self.work / "edge/packages", self.work / "set",
+                                         self.trust, tag)
+
     def test_an_edge_set_on_a_7_3_or_newer_kernel_boots_on_aura(self):
         # The #3025 pairing: the kernel guard never fires, since edge installs aura, not m1n1-aurora.
         for kernel in ("7.3.0.aurora0testedgeC-1", "7.4.1.aurora2-1"):

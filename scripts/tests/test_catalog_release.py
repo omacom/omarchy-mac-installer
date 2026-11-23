@@ -98,7 +98,7 @@ def engine_document() -> dict:
 
 
 def installer_document() -> dict:
-    # At least 2.3.17: edge offers apple,j616s, whose app_minimum is that.
+    # At least 2.3.17: edge offers the M4 Macs, whose app_minimum is that.
     return {"minimumVersion": "2.3.17", "latestVersion": "2.3.17",
             "downloadURL": f"{release_base('app-v2.3.17')}/Omarchy-Installer.dmg"}
 
@@ -1281,11 +1281,12 @@ class PromotionTests(ReleaseTestCase):
             for key in set(edge_catalog) | set(catalog):
                 if key not in ("sequence", "issuedAt", "channel", "models"):
                     self.assertEqual(catalog.get(key), edge_catalog.get(key), key)
-            # Edge offers the M4 Pro; rc and stable do not, so promotion drops
-            # it and keeps every other model byte for byte.
+            # Edge offers the M4 Macs; rc and stable do not, so promotion drops
+            # them and keeps every other model byte for byte.
             edge_models = {model["deviceIdentifier"]: model for model in edge_catalog["models"]}
             promoted_models = {model["deviceIdentifier"]: model for model in catalog["models"]}
-            self.assertEqual(set(edge_models) - set(promoted_models), {"apple,j616s"})
+            self.assertEqual(set(edge_models) - set(promoted_models),
+                             set(release.supported_models.boards_for("edge")) - set(release.supported_models.boards_for(channel)))
             for identifier, model in promoted_models.items():
                 self.assertEqual(model, edge_models[identifier], identifier)
             for model in catalog["models"]:

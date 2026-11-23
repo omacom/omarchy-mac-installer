@@ -329,6 +329,9 @@ def load_inputs(path: Path, developer: bool = False) -> dict:
         raise SystemExit("every catalog needs installer.minimum_version >= 2.1.0")
     if parse_version(installer["minimum_version"]) < parse_version(minimum_app):
         raise SystemExit(f"this engine requires installer.minimum_version >= {minimum_app}")
+    floor = supported_models.app_minimum_errors(installer["minimum_version"], identifiers + taken)
+    if floor:
+        raise SystemExit("inputs installer.minimum_version: " + "; ".join(floor))
     download_url = installer["download_url"]
     if not isinstance(download_url, str) or not download_url.startswith("https://"):
         raise SystemExit(f"inputs installer.download_url must be https: {download_url}")

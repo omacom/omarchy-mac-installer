@@ -1,6 +1,6 @@
 # Mac release pipeline
 
-`.github/workflows/mac-release-pipeline.yml` runs one edge image from build to a signed edge catalog. It is the one Aurora image every supported Mac installs, M1, M2, M3 and the MacBook Neo alike ([hardware scope](../image-builder/README.md#hardware-scope)), and the catalog pins it for all 35 boards. `edge-dispatch.yml` starts it (`dry-run=false`, on `main`) when an edge publish changes a package the image installs. You can also start it by hand, and a manual run is a dry run unless you say otherwise. The only manual step is the owner's approval of the catalog signature.
+`.github/workflows/mac-release-pipeline.yml` runs one edge image from build to a signed edge catalog. It is the one Aurora image every supported Mac installs, M1, M2, M3 and the MacBook Neo alike, and on edge the M4 Macs ([hardware scope](../image-builder/README.md#hardware-scope)), and the catalog pins it for every board its channel offers (47 on edge, 35 on rc and stable). `edge-dispatch.yml` starts it (`dry-run=false`, on `main`) when an edge publish changes a package the image installs. You can also start it by hand, and a manual run is a dry run unless you say otherwise. The only manual step is the owner's approval of the catalog signature.
 
 | Job | Workflow | Runs when | Gates it keeps |
 | --- | --- | --- | --- |
