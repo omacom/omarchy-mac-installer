@@ -2,7 +2,7 @@
 
 # Builds an Apple Silicon image payload from a signed candidate set: the
 # Omarchy runtime, its Apple add-on and boot packages, the Aurora stack (the
-# kernel with every Mac's device tree, m1n1-aurora's Stage 2 and Stage 1, the Aurora
+# kernel with every Mac's device tree, m1n1-aurora's Stage 2 and Stage 1 (on edge aura's Stage 2 and m1n1-aurora's Stage 1), the Aurora
 # U-Boot and the Aurora support packages) exactly as the set signed them, the rest from the package
 # databases the inputs record pins, set up by the runtime's own system setup
 # inside an isolated chroot, with a sealed @factory snapshot, first boot armed
@@ -32,8 +32,9 @@ ESP_SIZE=524288000
 BOOT_SIZE=2147483648
 ROOT_SIZE=34359738368
 # Every Mac's OS firmware: the engine's per-device table picks each Mac's
-# (13.5 for M1 and M2, 14.8.3 for M3, 26.6.2 for the MacBook Neo).
-SUPPORTED_FW=(13.5 14.8.3 26.6.2)
+# (13.5 for M1 and M2, 14.8.3 for M3, 26.6.2 for the MacBook Neo and the M4
+# family, 26.5.1 for an M5 MacBook Air J815 whose system firmware is still 26.5.1).
+SUPPORTED_FW=(13.5 14.8.3 26.5.1 26.6.2)
 ICON_SHA256=cf26ed5d2831db99c00d62ca046040e01a18e08e63363d629340d04ac6ec8c23
 KERNEL=linux-aurora
 # The hardware this image is for. It is written to the image-target manifest
@@ -613,7 +614,7 @@ prepare_repositories() {
   while read -r archive; do
     cp "$candidates/$archive" "$candidates/$archive.sig" "$repos/omarchy-candidates/"
     archives+=("./$archive")
-  done < <(jq -r '.packages[].filename' "$candidates/import.json")
+  done < <(installed_set '.filename')
   (cd "$repos/omarchy-candidates" && repo-add -q omarchy-candidates.db.tar.gz "${archives[@]}") \
     >>"$logs/repositories.log" 2>&1 || fail "could not publish the candidate set (logs/repositories.log)"
   rm -f "$repos/omarchy-candidates/omarchy-candidates.db"
@@ -827,6 +828,28 @@ candidate_names() {
   jq -r --arg group "$1" '.packages[] | select(.group == $group) | .name' "$candidates/import.json"
 }
 
+# FIELDS (a jq expression) of every set package the image installs: all but a
+# Stage 1 source, which the set carries for its raw Stage 1 alone.
+installed_set() {
+  jq -r ".packages[] | select(.group != \"stage1\") | $1" "$candidates/import.json"
+}
+
+# The set's boot loader (channel_set.py records the lane's): the package that
+# installs Stage 2 and the one whose raw Stage 1 the MacBook Neo enrolls. A
+# candidate set records none and takes m1n1-aurora for both.
+boot_loader() {
+  jq -r --arg part "$1" '.boot_loader[$part] // "m1n1-aurora"' "$candidates/import.json"
+}
+
+# What the image must never install: the policy's refused packages and the boot
+# loader package the set does not install, but never its own Stage 2 package
+# (candidate_set.py's refused_packages).
+refused_names() {
+  jq -r --arg stage2 "$(boot_loader stage2)" \
+    '[.refused_packages[], "m1n1-aurora", "aura"] | unique | map(select(. != $stage2)) | .[]' \
+    "$ROOT/builder/candidate-trust/policy.json"
+}
+
 # A set package's archive by its name or, for a channel set's runtime, its role
 # (omarchy-dev fills the omarchy role).
 candidate_archive() {
@@ -935,8 +958,8 @@ precheck_transaction() {
   printf '%s\n' "$resolved" >"$logs/precheck.log"
   while read -r name; do
     grep -Eq "^omarchy-candidates $name " <<<"$resolved" || fail "$name does not resolve from the candidate set"
-  done < <(jq -r '.packages[].name' "$candidates/import.json")
-  for refused in $(jq -r '.refused_packages[]' "$ROOT/builder/candidate-trust/policy.json"); do
+  done < <(installed_set '.name')
+  for refused in $(refused_names); do
     ! grep -Eq "^[^ ]+ $refused " <<<"$resolved" || fail "the package set pulls in the refused $refused"
   done
 }
@@ -1076,7 +1099,10 @@ install_apple_set() {
   installed=$(pacman --dbpath "$target/var/lib/pacman" -Q)
   while read -r name version; do
     grep -Fxq "$name $version" <<<"$installed" || fail "$name $version from the candidate set is not installed"
-  done < <(jq -r '.packages[] | "\(.name) \(.version)"' "$candidates/import.json")
+  done < <(installed_set '"\(.name) \(.version)"')
+  while read -r name; do
+    ! grep -Eq "^$name " <<<"$installed" || fail "$name is installed, but the set carries it only for its raw Stage 1"
+  done < <(candidate_names stage1)
   ! grep -Eq '^linux-asahi ' <<<"$installed" || fail "linux-asahi is installed beside $KERNEL"
 }
 
@@ -1379,6 +1405,7 @@ configure_image() {
     fail "update-m1n1 failed (logs/update-m1n1.log)"
   activate_limine
   stage_board_boot_payloads
+  stage_confined_boot_payloads
   stage_recovery_app
   arm_first_boot
   # Recorded once the boot setup, which could change packages, is done.
@@ -1409,19 +1436,101 @@ stage_recovery_app() {
     fail "could not stage the pinned Recovery app"
 }
 
-# Board payloads come from the same authenticated m1n1-aurora package as Stage 2.
+# Board payloads come from the set's authenticated boot loader packages.
 # The engine's per-board contract (BOARD_STAGE1, BOARD_STAGE2): the MacBook
 # Neo boots its raw Stage 1 as esp/aurora/stage1-j700.bin and takes
 # esp/m1n1/boot-j700.bin, the same bundle as m1n1/boot.bin, in its place.
-# Every other Mac drops boot-j700.bin.
+# Every other Mac drops boot-j700.bin. The raw Stage 1 is the installed boot
+# loader's, or, when the lane names a Stage 1 source apart from it (edge: aura
+# installs Stage 2, m1n1-aurora supplies the Neo's Stage 1), that source's,
+# read from its frozen archive, since it conflicts with the installed loader.
 stage_board_boot_payloads() {
-  local stage1="$target/usr/share/m1n1-aurora/stage1/m1n1-raw.bin"
+  local source path archive stage1
   local stage2="$target/boot/efi/m1n1/boot.bin"
-  [[ -s $stage1 && ! -L $stage1 && -s $stage2 && ! -L $stage2 ]] ||
-    fail "the image lacks matched m1n1-aurora Stage 1 and Stage 2 payloads for the MacBook Neo"
+  source=$(boot_loader stage1)
+  case $source in
+    m1n1-aurora) path=usr/share/m1n1-aurora/stage1/m1n1-raw.bin ;;
+    aura) path=usr/share/aura/stage1/aura-raw.bin ;;
+    *) fail "the set names an unknown Stage 1 source: $source" ;;
+  esac
   mkdir -p "$target/boot/efi/aurora" "$target/boot/efi/m1n1"
+  if [[ $source == "$(boot_loader stage2)" ]]; then
+    stage1="$target/$path"
+  else
+    archive=$(jq -r --arg name "$source" \
+      'first(.packages[] | select(.name == $name and .group == "stage1") | .filename) // empty' "$candidates/import.json")
+    [[ -n $archive ]] || fail "the set does not carry $source for its raw Stage 1"
+    stage1="$work/stage1-j700.bin"
+    bsdtar -xOf "$candidates/$archive" "$path" >"$stage1" || fail "could not read $source's raw Stage 1"
+  fi
+  [[ -s $stage1 && ! -L $stage1 && -s $stage2 && ! -L $stage2 ]] ||
+    fail "the image lacks matched $source Stage 1 and Stage 2 payloads for the MacBook Neo"
   install -m 0644 "$stage1" "$target/boot/efi/aurora/stage1-j700.bin"
   install -m 0644 "$stage2" "$target/boot/efi/m1n1/boot-j700.bin"
+}
+
+# Execute-window chips (M4, A18 Pro, M5 and later; scripts/stage1-execute-window.json)
+# boot aura's Mach-O Stage 1, which loads the confined Stage 2 m1n1/boot-ctxr.bin
+# (the engine's confined_stage1). Only an image whose Stage 2 is aura carries
+# them: aura ships the Mach-O beside its raw Stage 1, and the confined Stage 2 is
+# the same assembled bundle as m1n1/boot.bin, inside the 16 MiB slot aura keeps
+# for it. Only a monitor-free aura runs the kernel in that window (it needs a
+# linux-aurora built with CONFIG_ARM64_CTXR_EXECMEM), as aurora-silicon/
+# alarm-aurora's prepare-ctxr-stage2.py requires. Any other image carries
+# neither file, and the engine refuses an M4 on it.
+CONFINED_STAGE2_MAX_BYTES=$(( 16 << 20 ))
+# aura 1.0.0b7 is the first without the EL2 monitor (aura#77).
+MONITOR_FREE_AURA=1.0.0b7
+
+# Whether the image's aura is monitor-free: Aurora's packages say so with
+# /usr/share/aura/monitor-free; omarchy-pkgs' aura (whose policy minimum on
+# edge is 1.0.0b13) by its version in the image's package database.
+monitor_free_aura() {
+  [[ -f $target/usr/share/aura/monitor-free ]] && return 0
+  command -v vercmp >/dev/null 2>&1 || return 1
+  local desc version
+  for desc in "$target"/var/lib/pacman/local/aura-[0-9]*/desc; do
+    [[ -f $desc ]] || continue
+    version=$(sed -n '/^%VERSION%$/{n;p;q;}' "$desc")
+    [[ -n $version ]] && (( $(vercmp "$version" "$MONITOR_FREE_AURA") >= 0 )) && return 0
+  done
+  return 1
+}
+# The kernel an execute-window Mac runs inside the CTXR window: linux-aurora 7.3
+# or later (CONFIG_ARM64_CTXR_EXECMEM, omacom/omarchy-pkgs#3025). Its pkgver's
+# major.minor, without epoch or pkgrel, as the edge kernel guard compares it.
+ctxr_kernel() {
+  local desc version
+  for desc in "$target"/var/lib/pacman/local/linux-aurora-[0-9]*/desc; do
+    [[ -f $desc ]] || continue
+    version=$(sed -n '/^%VERSION%$/{n;p;q;}' "$desc")
+    version=${version#*:}
+    [[ $version =~ ^([0-9]+)\.([0-9]+) ]] || return 1
+    (( BASH_REMATCH[1] > 7 || (BASH_REMATCH[1] == 7 && BASH_REMATCH[2] >= 3) ))
+    return
+  done
+  return 1
+}
+# aura's Mach-O Stage 1 is its fileset boot object, build/aura-boot.macho
+# (tools/macho_boot_object.py: build/aura.bin in __TEXT_EXEC, the segments
+# kmutil requires), which an aura package installs here. Its build/aura.macho,
+# also packaged as usr/share/aura/stage1/aura.macho, is the linker's Mach-O for
+# chainloading: no __TEXT or __TEXT_EXEC, so neither kmutil nor the engine
+# takes it as a boot object.
+stage_confined_boot_payloads() {
+  local stage1="$target/usr/share/aura/stage1/aura-boot.macho"
+  local stage2="$target/boot/efi/m1n1/boot.bin"
+  [[ -e $stage1 || -L $stage1 ]] || return 0
+  monitor_free_aura || return 0
+  ctxr_kernel ||
+    fail "the image's aura boots M4 and later Macs, but its linux-aurora is not 7.3 or later, the kernel they run inside the CTXR window"
+  [[ -s $stage1 && ! -L $stage1 && -s $stage2 && ! -L $stage2 ]] ||
+    fail "the image lacks matched aura Mach-O Stage 1 and Stage 2 payloads for M4 and later Macs"
+  (( $(wc -c <"$stage2") <= CONFINED_STAGE2_MAX_BYTES )) ||
+    fail "m1n1/boot.bin is over the 16 MiB slot aura keeps for the confined Stage 2"
+  mkdir -p "$target/boot/efi/aurora" "$target/boot/efi/m1n1"
+  install -m 0644 "$stage1" "$target/boot/efi/aurora/stage1.macho"
+  install -m 0644 "$stage2" "$target/boot/efi/m1n1/boot-ctxr.bin"
 }
 
 # Repository names in pacman configuration FILE, in its order.
@@ -1732,7 +1841,9 @@ write_provenance() {
     for name in "${TOOLCHAIN[@]}"; do
       printf 'toolchain=%s\n' "$(pacman -Q "$name" | tr ' ' '|')"
     done
-    jq -r '.packages[] | "candidate=\(.name)|\(.version)|\(.filename)|\(.sha256)"' "$candidates/import.json"
+    installed_set '"candidate=\(.name)|\(.version)|\(.filename)|\(.sha256)"'
+    jq -r '.packages[] | select(.group == "stage1") | "stage1_source=\(.name)|\(.version)|\(.filename)|\(.sha256)"' \
+      "$candidates/import.json"
     jq -r '.packages[] | select(.group == "runtime" and .source_commit != null) | "candidate_source=\(.name)|\(.source_commit)"' \
       "$candidates/import.json"
     printf 'hardware_setup=%s\n' "$hardware_setup"

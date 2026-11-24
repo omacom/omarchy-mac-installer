@@ -183,6 +183,28 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse((app / "Contents/Resources/AuraPayloads").exists())
         self.assertTrue(all("--verify" in command for command in self.commands))
 
+    def test_an_m4_stages_its_macho_stage1_and_the_confined_stage2(self):
+        (self.esp / "m1n1/boot-ctxr.bin").write_bytes(b"actual-confined-stage2")
+        result = recovery.stage(self.installer, ESP, str(self.esp), run=self.fake_run, boot_mode="macho")
+        config = result["configuration"]
+        self.assertEqual((config["bootMode"], config["stage2Path"]), ("macho", "m1n1/boot-ctxr.bin"))
+        payloads = self.system / recovery.INSTALL_DATA_DIRECTORY / "AuraPayloads"
+        self.assertEqual((payloads / "macho/aura-boot.macho").read_bytes(), self.boot.read_bytes())
+        self.assertFalse((payloads / "raw/aura-raw.bin").exists())
+        self.assertEqual((payloads / "raw/boot.bin").read_bytes(), b"actual-confined-stage2")
+        manifest = json.loads((payloads / "manifest.json").read_text())
+        self.assertEqual(manifest["defaultMode"], "macho")
+        self.assertEqual(manifest["modes"], {"macho": {"espPath": "m1n1/boot-ctxr.bin"}})
+
+    def test_an_m4_without_its_confined_stage2_publishes_nothing(self):
+        with self.assertRaises(recovery.RecoveryError):
+            recovery.stage(self.installer, ESP, str(self.esp), run=self.fake_run, boot_mode="macho")
+        self.assertFalse((self.system / recovery.APP_NAME).exists())
+
+    def test_an_unknown_boot_mode_is_refused(self):
+        with self.assertRaisesRegex(recovery.RecoveryError, "boot mode"):
+            recovery.stage(self.installer, ESP, str(self.esp), run=self.fake_run, boot_mode="padded")
+
     def test_neo_configuration_explicitly_allows_custom_boot_arguments(self):
         self.installer.sysinfo = SimpleNamespace(device_class="j700ap")
         result = self.stage()

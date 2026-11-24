@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fixtures  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+MACHO_FIXTURE = fixtures.load("macho_fixture", "../Engine/overlay/tests/macho_fixture.py")
 loader = importlib.machinery.SourceFileLoader("mac_image_check", str(ROOT / "bin/mac-image-check"))
 spec = importlib.util.spec_from_loader("mac_image_check", loader)
 check = importlib.util.module_from_spec(spec)
@@ -138,6 +140,28 @@ def build(out: Path, packages=PACKAGES, candidates=PACKAGES[:2], inspection="pas
     if image_edit:
         image = image_edit(image)
     (out / "IMAGE").write_text("\n".join(image) + "\n")
+
+
+class RuntimeProvidersTest(unittest.TestCase):
+    """The names an image's packages fill under another name, from its set's import.json."""
+
+    def providers(self, **summary):
+        support = [{"name": n, "group": "support"} for n in ("aurora-audio", "alsa-ucm-conf-aurora", "speakerguardd",
+                                                              "omarchy-aurora-firmware")]
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "import.json").write_text(json.dumps(dict(summary, packages=summary["packages"] + support)))
+            return check.runtime_providers(Path(directory))
+
+    def test_an_edge_image_s_aura_fills_m1n1_aurora(self):
+        edge = self.providers(boot_loader={"stage2": "aura", "stage1": "m1n1-aurora"},
+                              packages=[{"name": "aura", "group": "boot"}, {"name": "m1n1-aurora", "group": "stage1"}])
+        self.assertEqual(edge["m1n1-aurora"], "aura")
+        rc = self.providers(boot_loader={"stage2": "m1n1-aurora", "stage1": "m1n1-aurora"},
+                            packages=[{"name": "m1n1-aurora", "group": "boot"}])
+        self.assertNotIn("m1n1-aurora", rc)
+        with self.assertRaisesRegex(check.CheckError, "boot loader aura is not among its boot packages"):
+            self.providers(boot_loader={"stage2": "aura", "stage1": "m1n1-aurora"},
+                           packages=[{"name": "m1n1-aurora", "group": "stage1"}])
 
 
 class ChannelBuildDirectoryTest(unittest.TestCase):
@@ -281,7 +305,7 @@ class ChannelBuildDirectoryTest(unittest.TestCase):
         target = metadata["os_list"][0]
         self.assertNotIn("allowed_device_classes", target)
         self.assertNotIn("excluded_device_classes", target)
-        self.assertEqual(target["supported_fw"], ["13.5", "14.8.3", "26.6.2"])
+        self.assertEqual(target["supported_fw"], ["13.5", "14.8.3", "26.5.1", "26.6.2"])
         for member in ("esp/aurora/stage1-j700.bin", "esp/m1n1/boot-j700.bin"):
             with self.subTest(member):
                 fixtures.write_payload(self.out / NAME, check.BOOT_UUID, check.ROOT_UUID, omit=(member,),
@@ -289,12 +313,83 @@ class ChannelBuildDirectoryTest(unittest.TestCase):
                 with self.assertRaisesRegex(check.CheckError, "missing members"):
                     check.check_payload("edge", self.out / NAME, self.out / "installer_data.json")
 
+    @staticmethod
+    def boot_object(subtype=0, **changes):
+        """The engine tests' aura-shaped fileset boot object (Engine/overlay/tests/macho_fixture.py),
+        with CPU subtype SUBTYPE."""
+        data = bytearray(MACHO_FIXTURE.macho_stage1(fixtures.raw_stage1(), **changes))
+        struct.pack_into("<I", data, 8, subtype)
+        return bytes(data)
+
+    @staticmethod
+    def linker_macho():
+        """aura edgeB2's packaged usr/share/aura/stage1/aura.macho: a fileset header, linker segments."""
+        names = ("_HDR", "TEXT", "RODA", "DATA", "PYLD")
+        commands = b"".join(MACHO_FIXTURE.segment(name, 0, 0, 0, 0) for name in names)
+        header = struct.pack("<IIIIIIII", 0xFEEDFACF, 0x0100000C, 2, 12, len(names), len(commands), 0, 0)
+        return header + commands + fixtures.raw_stage1()
+
+    def confined_payload(self, **changes):
+        extra = {"esp/aurora/stage1.macho": self.boot_object(),
+                 "esp/m1n1/boot-ctxr.bin": b"m1n1" * 64}
+        extra.update(changes)
+        fixtures.write_payload(self.out / NAME, check.BOOT_UUID, check.ROOT_UUID, recovery_app=self.recovery,
+                               extra={name: data for name, data in extra.items() if data is not None})
+
+    def test_the_builders_macho_check_is_the_engines(self):
+        # The build container mounts only image-builder/, so the check carries a copy.
+        self.assertEqual((ROOT / "builder/omarchy_macho.py").read_bytes(),
+                         (ROOT.parent / "Engine/overlay/src/omarchy_macho.py").read_bytes(),
+                         "builder/omarchy_macho.py must stay a copy of the engine's")
+
+    def test_a_payload_may_carry_the_m4_macho_stage1_and_confined_stage2(self):
+        self.build()
+        self.confined_payload()
+        check.check_payload("edge", self.out / NAME, self.out / "installer_data.json")
+        # aura writes CPU_SUBTYPE_ARM64E with kernel capability bits; a plain arm64 object passes too.
+        for subtype in (0xC0000002, 0x2, 0):
+            with self.subTest(subtype=hex(subtype)):
+                self.confined_payload(**{"esp/aurora/stage1.macho": self.boot_object(subtype)})
+                check.check_payload("edge", self.out / NAME, self.out / "installer_data.json")
+        # An empty __TEXT_BOOT_EXEC gives kcbz 0, as the engine allows.
+        self.confined_payload(**{"esp/aurora/stage1.macho": self.boot_object(
+            extra_segments=(("__TEXT_BOOT_EXEC", 0),))})
+        check.check_payload("edge", self.out / NAME, self.out / "installer_data.json")
+
+    def test_the_m4_boot_payloads_are_refused_unless_matched_and_well_formed(self):
+        self.build()
+        cases = {
+            "need esp/aurora/stage1.macho": {"esp/aurora/stage1.macho": None},
+            "needs esp/m1n1/boot-ctxr.bin": {"esp/m1n1/boot-ctxr.bin": None},
+            "not a 64-bit Arm Mach-O image": {"esp/aurora/stage1.macho": fixtures.raw_stage1()},
+            "not a fileset boot object": {"esp/aurora/stage1.macho": self.boot_object(filetype=2)},
+            "it has no __TEXT segment": {"esp/aurora/stage1.macho": self.linker_macho()},
+            "16 MiB slot": {"esp/m1n1/boot-ctxr.bin": bytes((16 << 20) + 1)},
+            "esp/m1n1/boot-ctxr-j713.bin is a per-board confined Stage 2": {"esp/m1n1/boot-ctxr-j713.bin": b"m1n1 j713"},
+            "__TEXT_BOOT_EXEC, so iBoot would start SPTM": {"esp/aurora/stage1.macho": self.boot_object(
+                extra_segments=(("__TEXT_BOOT_EXEC", 0x4000),))},
+            "its entry point is outside __TEXT_EXEC": {"esp/aurora/stage1.macho": self.boot_object(
+                entry_offset=0x10000)},
+            "does not enter aura at its entry point": {"esp/aurora/stage1.macho": self.boot_object(
+                entry_offset=0x804)},
+            "does not start with aura": {"esp/aurora/stage1.macho": self.boot_object(load_header=None)},
+            "duplicate segment __LINKEDIT": {"esp/aurora/stage1.macho": self.boot_object(
+                extra_segments=(("__LINKEDIT", 0x4000),))},
+            "is not file-backed at its virtual offset": {
+                "esp/aurora/stage1.macho": self.boot_object()[:0x8000]},
+        }
+        for message, changes in cases.items():
+            with self.subTest(message):
+                self.confined_payload(**changes)
+                with self.assertRaisesRegex(check.CheckError, message):
+                    check.check_payload("edge", self.out / NAME, self.out / "installer_data.json")
+
     def test_the_payload_passes_the_engine_contract(self):
         self.build()
         metadata = json.loads((self.out / "installer_data.json").read_text())
         engine = json.loads((ROOT.parent / "Engine/installer_data.json").read_text())
         # A public image adds only the native Recovery declaration to the engine's template.
-        engine["os_list"][0].update(package=NAME, supported_fw=["13.5", "14.8.3", "26.6.2"],
+        engine["os_list"][0].update(package=NAME, supported_fw=["13.5", "14.8.3", "26.5.1", "26.6.2"],
                                     recovery_gui="omarchy-native-v1")
         self.assertEqual(metadata, engine)
 
@@ -479,6 +574,23 @@ class BuildDirectoryTest(unittest.TestCase):
         build(self.out)
         with self.assertRaisesRegex(check.CheckError, "only a public image"):
             check.image_name("edge", self.out)
+
+    def test_an_edge_stage1_source_is_recorded_and_never_installed(self):
+        # An edge set's m1n1-aurora: carried for the Neo's raw Stage 1 beside the installed aura.
+        source = "stage1_source=m1n1-aurora|1.6.1.aurora23-4|m1n1-aurora-1.6.1.aurora23-4-aarch64.pkg.tar.zst|" + "e" * 64
+        build(self.out, provenance_edit=lambda lines: lines + [source])
+        check.check_provenance("edge", self.out)
+        installed = PACKAGES[0][0]
+        for lines, message in (([source, source], "malformed Stage 1 source"),
+                               ([source.rsplit("|", 1)[0] + "|bad"], "malformed Stage 1 source"),
+                               ([source.replace("m1n1-aurora|", f"{installed}|", 1)],
+                                f"installs {installed}, which the set carries only for its raw Stage 1")):
+            with self.subTest(message=message):
+                shutil.rmtree(self.out)
+                self.out.mkdir()
+                build(self.out, provenance_edit=lambda base, extra=lines: base + extra)
+                with self.assertRaisesRegex(check.CheckError, message):
+                    check.check_provenance("edge", self.out)
 
     def test_a_candidate_installed_from_another_repository(self):
         packages = [PACKAGES[0], ("uboot-aurora", "2026.07-1", "asahi-alarm", PACKAGES[1][3], PACKAGES[1][4]), PACKAGES[2]]

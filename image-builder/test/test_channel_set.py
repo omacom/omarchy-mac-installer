@@ -57,8 +57,9 @@ class ChannelSetTest(unittest.TestCase):
         self.assertEqual(summary["database_sha256"], sha256)
         self.assertEqual(summary["signer"], self.channel.fingerprint.upper())
         packages = {p["name"]: p for p in summary["packages"]}
-        expected = {fixtures.CHANNEL_NAMES.get(role, role) for role in fixtures.VERSIONS}
-        self.assertEqual(set(packages), expected, "the set is the policy's runtime and boot packages, nothing else")
+        expected = {fixtures.CHANNEL_NAMES.get(role, role) for role in fixtures.VERSIONS} | {"aura"}
+        self.assertEqual(set(packages), expected,
+                         "the set is the policy's runtime and boot packages and the Stage 1 source, nothing else")
         for name, package in packages.items():
             self.assertEqual(package["sha256"], candidate_set.digest(self.work / "edge/packages" / package["filename"]))
             self.assertEqual(package["origin"], "channel")
@@ -80,10 +81,12 @@ class ChannelSetTest(unittest.TestCase):
         policy, channel = channel_set.load_policy()
         for role, name in channel["runtime_packages"].items():
             entries[name] = {"NAME": [name], "ARCH": ["aarch64"], "PROVIDES": [role]}
-        for name in fixtures.POLICY["boot_packages"] + fixtures.POLICY["support_packages"]:
+        for name in fixtures.POLICY["boot_packages"] + fixtures.POLICY["support_packages"] + ["aura"]:
             entries[name] = {"NAME": [name], "ARCH": ["aarch64"]}
         chosen = channel_set.resolve(entries, policy, channel)
         self.assertEqual({entry["NAME"][0] for _, _, entry in chosen}, set(entries))
+        self.assertEqual({entry["NAME"][0]: group for _, group, entry in chosen if entry["NAME"][0] in ("aura", "m1n1-aurora")},
+                         {"aura": "boot", "m1n1-aurora": "stage1"})
         self.assertEqual(sum(group == "support" for _, group, _ in chosen), len(fixtures.POLICY["support_packages"]))
         for name in ("m1n1-aurora", "uboot-aurora", "mesa-aurora", "vulkan-aurora", "aurora-bless", "speakerguardd"):
             self.assertIn(name, entries)
@@ -97,9 +100,8 @@ class ChannelSetTest(unittest.TestCase):
         names = {p.get("role", p["name"]): p["name"] for p in summary["packages"]}
         self.assertEqual(names["omarchy"], "omarchy-dev")
         self.assertEqual(names["omarchy-settings"], "omarchy-settings-dev")
-        for package in ("m1n1-aurora", "uboot-aurora", "mesa-aurora", "vulkan-aurora", "aurora-bless"):
+        for package in ("aura", "m1n1-aurora", "uboot-aurora", "mesa-aurora", "vulkan-aurora", "aurora-bless"):
             self.assertIn(package, names)
-        self.assertNotIn("aura", names)
         self.assertNotIn("uboot-asahi", names)
         self.assertEqual(set(channel_set.files(database, "edge", self.trust)),
                          {p["filename"] for p in summary["packages"]})
@@ -118,25 +120,65 @@ class ChannelSetTest(unittest.TestCase):
         database, sha256 = self.snapshot(versions={"m1n1-aurora": "1.6.1.aurora1-3"})
         self.refused("m1n1-aurora 1.6.1.aurora1-3 is below the minimum 1.6.1.aurora20-3", database, sha256)
 
-    def test_an_edge_set_pairing_a_7_3_or_newer_kernel_with_m1n1_aurora_is_refused(self):
-        # omacom/omarchy-pkgs#3025 moves edge to 7.3 behind aura; m1n1-aurora with it is not qualified.
-        for kernel in ("7.3-1", "7.3rc1-1", "7.3.aurora1-1", "7.3.0-1", "7.3.0.aurora0testedgeC-1",
-                       "7.3.2.aurora1-1", "7.4.1.aurora2-1", "1:7.3.0.aurora1-1"):
-            with self.subTest(kernel=kernel):
-                self.work = Path(tempfile.mkdtemp(dir=self.base))
-                database, sha256 = self.snapshot(versions={"linux-aurora": kernel, "linux-aurora-headers": kernel})
-                self.refused(f"edge pairs linux-aurora {kernel} with m1n1-aurora", database, sha256)
-                self.assertFalse((self.work / "set/import.json").exists(), "a refused set records nothing")
+    def test_edge_installs_aura_and_takes_the_neo_stage1_from_m1n1_aurora(self):
+        # omacom/omarchy-pkgs#3025: on edge aura is the boot loader (with the 7.3 kernel). New
+        # installs keep m1n1-aurora's raw Stage 1, the one every edge Neo updated to aura runs.
+        database, sha256 = self.snapshot(extra=[("m1n1-neo", "1.6.1.aurora16-1")])
+        summary = self.freeze(database, sha256)
+        groups = {p["name"]: p["group"] for p in summary["packages"]}
+        self.assertEqual((groups["aura"], groups["m1n1-aurora"]), ("boot", "stage1"))
+        self.assertNotIn("m1n1-neo", groups)
+        self.assertEqual(summary["boot_loader"], {"stage2": "aura", "stage1": "m1n1-aurora"})
 
-    def test_an_edge_set_on_a_7_2_kernel_is_built(self):
-        # Today's edge kernel, the last 7.2 before it, and a 7.2 rollback re-pinned above 7.3 by an epoch.
-        for kernel in ("7.2.11.aurora16-1", "7.2.99-1", "1:7.2.11.aurora16-2"):
+    def test_rc_and_stable_keep_m1n1_aurora_and_never_take_aura(self):
+        for lane, tag in (("rc", fixtures.RC_RELEASE), ("stable", fixtures.STABLE_RELEASE)):
+            with self.subTest(lane=lane):
+                self.work = Path(tempfile.mkdtemp(dir=self.base))
+                database, sha256 = fixtures.make_channel(self.work / "edge", self.channel, lane=lane)
+                summary = channel_set.snapshot(database, sha256, lane, self.work / "edge/packages", self.work / "set",
+                                               self.trust, tag)
+                groups = {p["name"]: p["group"] for p in summary["packages"]}
+                self.assertEqual(groups["m1n1-aurora"], "boot")
+                self.assertNotIn("aura", groups)
+                self.assertNotIn("stage1", groups.values())
+                self.assertEqual(summary["boot_loader"], {"stage2": "m1n1-aurora", "stage1": "m1n1-aurora"})
+
+    def test_an_edge_database_with_the_old_aura_is_refused(self):
+        # Before #3025 publishes, edge serves aura 0.1.0, which m1n1-aurora replaces on update.
+        database, sha256 = self.snapshot(versions={"aura": "0.1.0.r20261023-2"})
+        self.refused(r"aura 0.1.0.r20261023-2 is below the minimum 1.0.0b13.r20261118-1", database, sha256)
+
+    def test_an_edge_database_without_m1n1_aurora_is_refused(self):
+        # The Neo's Stage 1 comes from m1n1-aurora's archive: an edge without it builds no image.
+        policy, channel = channel_set.load_policy()
+        entries = {name: {"NAME": [name], "ARCH": ["aarch64"], "PROVIDES": [role]}
+                   for role, name in channel["runtime_packages"].items()}
+        for name in fixtures.POLICY["boot_packages"] + fixtures.POLICY["support_packages"] + ["aura"]:
+            entries[name] = {"NAME": [name], "ARCH": ["aarch64"]}
+        del entries["m1n1-aurora"]
+        with self.assertRaisesRegex(ValueError, "the channel database does not list m1n1-aurora, the Stage 1 source"):
+            channel_set.resolve(entries, policy, channel)
+
+    def test_the_edge_set_refuses_an_aura_without_its_stage2_or_signature(self):
+        for defect, message in (("unsigned", "unsigned package: aura-"), ("wrong-payload", "usr/lib/asahi-boot/m1n1.bin is not in aura"),
+                                ("stage1-payload", "usr/share/m1n1-aurora/stage1/m1n1-raw.bin is not in m1n1-aurora")):
+            with self.subTest(defect=defect):
+                self.work = Path(tempfile.mkdtemp(dir=self.base))
+                contents = fixtures.channel_contents()
+                if defect == "wrong-payload":
+                    del contents["aura"]["usr/lib/asahi-boot/m1n1.bin"]
+                elif defect == "stage1-payload":
+                    del contents["m1n1-aurora"]["usr/share/m1n1-aurora/stage1/m1n1-raw.bin"]
+                database, sha256 = self.snapshot(contents=contents, unsigned=("aura",) if defect == "unsigned" else ())
+                self.refused(message, database, sha256)
+    def test_an_edge_set_on_a_7_3_or_newer_kernel_boots_on_aura(self):
+        # The #3025 pairing: the kernel guard never fires, since edge installs aura, not m1n1-aurora.
+        for kernel in ("7.3.0.aurora0testedgeC-1", "7.4.1.aurora2-1"):
             with self.subTest(kernel=kernel):
                 self.work = Path(tempfile.mkdtemp(dir=self.base))
                 database, sha256 = self.snapshot(versions={"linux-aurora": kernel, "linux-aurora-headers": kernel})
-                packages = {p["name"]: p for p in self.freeze(database, sha256)["packages"]}
-                self.assertEqual(packages["linux-aurora"]["version"], kernel)
-                self.assertIn("m1n1-aurora", packages)
+                groups = {p["name"]: p["group"] for p in self.freeze(database, sha256)["packages"]}
+                self.assertEqual((groups["aura"], groups["m1n1-aurora"]), ("boot", "stage1"))
 
     def test_rc_and_stable_sets_are_left_alone_by_the_edge_kernel_guard(self):
         # They change only through promotion; the guard is edge's alone.
@@ -169,11 +211,6 @@ class ChannelSetTest(unittest.TestCase):
         for lane in ("rc", "stable"):
             channel_set.refuse_untested_boot_pair(chosen("7.3.0.aurora0testedgeC-1"), lane)
 
-    def test_aura_and_m1n1_neo_left_in_the_database_are_never_chosen(self):
-        database, sha256 = self.snapshot(extra=[("aura", "0.1.0.r20261023-1"), ("m1n1-neo", "1.6.1.aurora16-1")])
-        names = {p["name"] for p in self.freeze(database, sha256)["packages"]}
-        self.assertIn("m1n1-aurora", names)
-        self.assertFalse({"aura", "m1n1-neo"} & names)
 
     def test_the_channel_rejects_missing_unsigned_and_wrong_boot_payloads(self):
         for defect in ("missing", "unsigned", "wrong-key", "wrong-payload", "replaced"):
@@ -355,8 +392,10 @@ class ChannelSetTest(unittest.TestCase):
                                          "packages"})
         self.assertEqual((manifest["schema"], manifest["kind"], manifest["channel"], manifest["repository"]),
                          (1, "channel", "edge", "omarchy"))
+        # Plus the lane's boot loader (omacom/omarchy-pkgs#3025 made aura edge's).
         self.assertEqual(set(summary), {"schema", "kind", "set", "candidate_only", "channel", "source_commit",
-                                        "signer", "database_sha256", "manifest_sha256", "set_sha256", "packages"})
+                                        "signer", "database_sha256", "manifest_sha256", "set_sha256", "packages",
+                                        "boot_loader"})
         self.assertEqual(summary["set"], f"omarchy-edge-{sha256[:12]}")
         roles = {p["name"]: p.get("role") for p in summary["packages"] if p["group"] == "runtime"}
         self.assertEqual(roles, {"omarchy-dev": "omarchy", "omarchy-settings-dev": "omarchy-settings",
@@ -406,7 +445,8 @@ class ChannelTrustTest(unittest.TestCase):
 
     def test_the_policy_enables_edge_with_the_dev_runtime_and_rc_and_stable_with_the_clean_one(self):
         lanes = json.loads((ROOT / "builder/candidate-trust/policy.json").read_text())["channel"]["lanes"]
-        self.assertEqual(lanes, {"edge": {"runtime_packages": EDGE_RUNTIME},
+        self.assertEqual(lanes, {"edge": {"runtime_packages": EDGE_RUNTIME,
+                                          "boot_loader": {"stage2": "aura", "stage1": "m1n1-aurora"}},
                                  "rc": {"runtime_packages": {role: role for role in EDGE_RUNTIME}},
                                  "stable": {"runtime_packages": {role: role for role in EDGE_RUNTIME}}})
 

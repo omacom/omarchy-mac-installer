@@ -241,6 +241,8 @@ def installed_package_names(root: Path) -> set[str]:
 # role must not satisfy image inspection. Candidate signature/source checks
 # still happen independently before this installed-system check.
 AURORA_REPLACEMENTS = {
+    # The edge boot loader: aura provides m1n1-aurora (the trust policy's lane boot_loader).
+    "aura": {"m1n1-aurora"},
     "uboot-aurora": {"uboot-asahi"},
     "mesa-aurora": {"mesa"}, "vulkan-aurora": {"vulkan-asahi"},
     "aurora-bless": {"asahi-bless"},

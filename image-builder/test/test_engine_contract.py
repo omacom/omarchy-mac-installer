@@ -96,7 +96,7 @@ def engine_metadata(package: str) -> dict:
     assert len(templates) == 1, "Engine/installer_data.json has exactly one full-OS target"
     # The image adds the MacBook Neo's 26.6.2, which the engine's per-device
     # table gives only to the M3 Airs and the Neo (UnifiedFirmwareTest).
-    templates[0].update(package=package, supported_fw=["13.5", "14.8.3", "26.6.2"])
+    templates[0].update(package=package, supported_fw=["13.5", "14.8.3", "26.5.1", "26.6.2"])
     return metadata
 
 
@@ -158,7 +158,7 @@ class UnifiedFirmwareTest(unittest.TestCase):
         return [ipsw.version for ipsw in avail]
 
     def test_every_mac_takes_its_own_firmware_from_the_one_image(self):
-        self.assertEqual(self.supported_fw, ["13.5", "14.8.3", "26.6.2"])
+        self.assertEqual(self.supported_fw, ["13.5", "14.8.3", "26.5.1", "26.6.2"])
         # A default install takes the last available entry, in the table's order.
         for device_class, chip_id, firmware in (("j313ap", 0x8103, "13.5"), ("j413ap", 0x8112, "13.5"),
                                                 ("j433ap", 0x8122, "14.8.3"), ("j514sap", 0x6030, "14.8.3"),
@@ -167,6 +167,16 @@ class UnifiedFirmwareTest(unittest.TestCase):
             with self.subTest(device_class):
                 self.assertEqual(self.choose(device_class, chip_id)[-1], firmware)
         self.assertEqual(self.choose("j700ap", 0x8140, expert=True), ["26.6.2"], "the Neo can take nothing else")
+
+    def test_an_m4_takes_26_6_2_and_a_26_5_1_j815_takes_26_5_1_from_the_one_image(self):
+        for device_class, chip_id in (("j713ap", 0x8132), ("j616sap", 0x6040), ("j616cap", 0x6041)):
+            with self.subTest(device_class):
+                self.assertEqual(self.choose(device_class, chip_id), ["26.6.2"])
+        sysinfo = SimpleNamespace(device_class="j815ap", chip_id=0x8142, **self.table.ON_26_5_1)
+        device = SimpleNamespace(min_ver=self.minimums["j815ap"])
+        _, avail = self.table.available_ipsws(self.table.IPSW_VERSIONS, self.chips, sysinfo, device,
+                                              self.supported_fw, False, self.table.split_ver)
+        self.assertEqual([ipsw.version for ipsw in avail], ["26.5.1"])
 
 
 class EngineContractTest(unittest.TestCase):
@@ -198,7 +208,7 @@ class EngineContractTest(unittest.TestCase):
                                        ("j700ap", "26.6.2")):
             with self.subTest(device_class):
                 self.assertEqual(engine_admits(metadata, payload, device_class, firmware),
-                                 [["13.5", "14.8.3", "26.6.2"]])
+                                 [["13.5", "14.8.3", "26.5.1", "26.6.2"]])
         # The engine boots a J613 on 26.6.2 through a J613 Stage 1 the image does not carry; the
         # table never makes 26.6.2 its default, and a forced pick is refused before any disk change.
         with self.assertRaisesRegex(omarchy_asahi.AsahiAdapterError, "no esp/aurora/stage1-j613.bin"):
@@ -213,7 +223,7 @@ class EngineContractTest(unittest.TestCase):
         payload = self.out / NAME
         fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID, recovery_app=recovery)
         check.check_payload("edge", payload, metadata, recovery_digest=digest)
-        self.assertEqual(engine_admits(metadata, payload, "j700ap"), [["13.5", "14.8.3", "26.6.2"]])
+        self.assertEqual(engine_admits(metadata, payload, "j700ap"), [["13.5", "14.8.3", "26.5.1", "26.6.2"]])
         executable = recovery / fixtures.recovery_app.APP / "Contents/MacOS/OmarchyRecovery"
         executable.write_bytes(b"changed executable")
         fixtures.write_payload(payload, check.BOOT_UUID, check.ROOT_UUID, recovery_app=recovery)

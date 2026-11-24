@@ -105,6 +105,9 @@
     let message: String
     /// The message already says what changed, so nothing is appended to it.
     var complete = false
+    /// The disk was checked after the failure and is exactly as approved, so
+    /// the removal record can go.
+    var nothingDeleted = false
     var errorDescription: String? { message }
   }
 
@@ -407,12 +410,14 @@
               try record(phase)
               recorded = true
             }
-          } catch let error where !recorded {
+          } catch let error
+            where !recorded || (error as? RemovalFailure)?.nothingDeleted == true
+          {
             let detail = (error as? RemovalFailure)?.message ?? error.localizedDescription
             throw RemovalFailure(
               message:
                 "\(detail) Your Mac now starts up from macOS “\(plan.macOSName)”. Nothing was deleted.",
-              complete: true)
+              complete: true, nothingDeleted: recorded)
           }
           return
         }
@@ -433,7 +438,9 @@
         try record("removing-\(member.uuid)")
         if index == 0 {
           // Without a new name, current macOS deletes the physical store too.
-          try disks.deleteContainer(target, disk: current.disk)
+          do { try disks.deleteContainer(target, disk: current.disk) } catch {
+            throw refusedDelete(plan, error)
+          }
         } else {
           try disks.erasePartition(target, disk: current.disk)
         }
@@ -457,6 +464,18 @@
       try disks.growContainer(macOS, disk: current.disk)
       try plan.validate(disks.snapshot(), removed: removed, expanded: true)
       try record("complete")
+    }
+
+    /// diskutil refuses a busy container before deleting anything. Only a disk
+    /// that still matches the approved layout and evidence counts as untouched.
+    private func refusedDelete(_ plan: OmarchyRemovalPlan, _ error: Error) -> Error {
+      guard let installation = plan.installation, let now = try? disks.snapshot(),
+        (try? plan.validate(now, removed: [])) != nil, let live = installation.live(in: now),
+        (try? disks.evidence(for: live, disk: now.disk)) == plan.evidence
+      else { return error }
+      return RemovalFailure(
+        message: (error as? RemovalFailure)?.message ?? error.localizedDescription,
+        nothingDeleted: true)
     }
 
     /// Nothing is deleted unless macOS then reports the running macOS as both

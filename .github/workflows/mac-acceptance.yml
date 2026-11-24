@@ -99,9 +99,9 @@ permissions: {}
 
 env:
   HARNESS_REPOSITORY: omacom/omarchy-mac-pkgs
-  # omarchy-mac-pkgs main, 2026-10-25 (the commit of pull request #62). Bump by hand
+  # omarchy-mac-pkgs main, 2026-11-22 (the merge of pull request #180). Bump by hand
   # after the harness changes; the evidence record names it.
-  HARNESS_COMMIT: 4c320babc7f39e24e4331ec0f02f759ac29d8cc0
+  HARNESS_COMMIT: 9c6ebe252ff53444c3f5b86a8c7dd5a06d98ce98
 
 defaults:
   run:
@@ -272,6 +272,9 @@ jobs:
           OMARCHY_VM_RUN_ID: ${{ env.VM_RUN_ID }}
           OMARCHY_VM_IMAGE_STATE_DIR: ${{ env.ROOT }}/state
           OMARCHY_VM_EVIDENCE_DIR: ${{ env.ROOT }}/evidence
+          # Empty keeps the harness's archive URL; set the repository variable to a
+          # mirror while archive.archlinux.org is down. The digest stays pinned.
+          OMARCHY_VM_UEFI_URL: ${{ vars.OMARCHY_VM_UEFI_URL }}
         run: |
           # The bash shell runs with -e; this step must reach its end.
           set +e -uo pipefail

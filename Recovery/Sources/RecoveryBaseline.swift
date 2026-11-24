@@ -11,6 +11,9 @@ enum RecoveryBaseline {
     "vendorfw/firmware.tar", "vendorfw/firmware.cpio", "vendorfw/manifest.txt",
   ]
   static let stage2Path = "m1n1/boot.bin"
+  /// The Stage 2 a raw Stage 1 loads, and the confined one an execute-window
+  /// chip's Mach-O Stage 1 loads (AuraBootMode.espStage2Path).
+  static let stage2Paths: Set<String> = [stage2Path, "m1n1/boot-ctxr.bin"]
   static let optionalVendorPath = "vendorfw/u-boot/asmedia/asm2214a-apple.bin"
 
   static func hash(_ data: Data) -> String {
@@ -109,8 +112,13 @@ enum RecoveryBaseline {
   // attempted file in rollback because a writer can fail after replacing it.
   static func restore(
     files: [String: Data], root: URL, backup: URL,
+    stage2Path: String = RecoveryBaseline.stage2Path,
     write: (Data, URL) throws -> Void
   ) throws {
+    guard stage2Paths.contains(stage2Path) else {
+      throw RecoveryBaselineFailure(
+        message: "Recovery may restore only Stage 2 and its device firmware package.")
+    }
     let required = Set([stage2Path] + vendorPaths)
     let names = files.keys.sorted()
     guard required.isSubset(of: Set(names)),

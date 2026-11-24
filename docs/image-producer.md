@@ -49,9 +49,9 @@ image-builder/bin/build-mac-image --inputs FILE --candidates DIR [--cache DIR] [
 Candidate set, as the importer accepts it:
 
 - **Runtime group** (built from the pinned `quattro-upstream` commit, which each archive also records): `omarchy`, `omarchy-settings`, `omarchy-mac`, `omarchy-mac-boot`
-- **Boot group** (built from omacom/omarchy-pkgs): `linux-aurora`, `linux-aurora-headers`, `m1n1-aurora`, `uboot-aurora`, `limine-mkinitcpio-hook`
-- **Minimum versions**, in the policy since the manifest records none: `omarchy-mac-boot` 20260921-10, `limine-mkinitcpio-hook` 1.39.0-2, `m1n1-aurora` 1.6.1.aurora20-3.
-- **Refused outright:** `omarchy-apple-boot`, `omarchy-first-boot`, `linux-asahi`, `grub`, the Asahi `m1n1`, `aura`, `m1n1-neo` and `uboot-asahi`.
+- **Boot group** (built from omacom/omarchy-pkgs): `linux-aurora`, `linux-aurora-headers`, `m1n1-aurora`, `uboot-aurora`, `limine-mkinitcpio-hook`. An edge channel set installs `aura` in `m1n1-aurora`'s place and carries `m1n1-aurora`'s archive only for the MacBook Neo's raw Stage 1 (the policy's `channel.lanes.edge.boot_loader`)
+- **Minimum versions**, in the policy since the manifest records none: `omarchy-mac-boot` 20260921-10, `limine-mkinitcpio-hook` 1.39.0-2, `m1n1-aurora` 1.6.1.aurora20-3, `aura` 1.0.0b13.r20261118-1 (where a lane installs it).
+- **Refused outright:** `omarchy-apple-boot`, `omarchy-first-boot`, `linux-asahi`, `grub`, the Asahi `m1n1`, `m1n1-neo` and `uboot-asahi`; on rc and stable also `aura`, and on edge `m1n1-aurora` as an installed package (its archive is carried only for the Neo's raw Stage 1).
 - **Not in the set:** `limine`, `limine-snapper-sync`, `aurora-scripts` and `aurora-fwextract`, from the pinned Arch Linux ARM and Omarchy databases.
 
 Build order inside the container:

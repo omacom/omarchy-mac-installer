@@ -17,7 +17,7 @@ FILTER = ROOT / "bin/edge-dispatch-filter"
 _loader = importlib.machinery.SourceFileLoader("edge_dispatch_filter", str(FILTER))
 edge_filter = importlib.util.module_from_spec(importlib.util.spec_from_loader("edge_dispatch_filter", _loader))
 _loader.exec_module(edge_filter)
-SET_NAMES = [fixtures.CHANNEL_NAMES.get(role, role) for role in fixtures.VERSIONS]
+SET_NAMES = [fixtures.CHANNEL_NAMES.get(role, role) for role in fixtures.VERSIONS] + ["aura"]
 
 
 def write_repo(path: Path, packages: dict[str, dict]) -> Path:
@@ -124,7 +124,7 @@ class EdgeDispatchFilterTest(unittest.TestCase):
 
     def test_a_channel_set_package_is_relevant(self):
         # The unified image's set: the runtime and every Aurora boot and support package.
-        for name in ("linux-aurora", "m1n1-aurora", "uboot-aurora", "aurora-audio", "alsa-ucm-conf-aurora", "speakerguardd",
+        for name in ("linux-aurora", "aura", "m1n1-aurora", "uboot-aurora", "aurora-audio", "alsa-ucm-conf-aurora", "speakerguardd",
                      "omarchy-aurora-firmware", "mesa-aurora", "vulkan-aurora", "aurora-bless", "omarchy-dev",
                      "omarchy-settings-dev", "omarchy-mac", "omarchy-mac-boot"):
             decision = self.decide(name, "claude-code")
@@ -132,7 +132,12 @@ class EdgeDispatchFilterTest(unittest.TestCase):
             self.assertEqual(decision["matched"], [name])
 
     def test_the_replaced_asahi_boot_chain_does_not_trigger_an_image(self):
-        self.assertFalse(self.decide("aura", "m1n1-neo", "uboot-asahi")["relevant"])
+        self.assertFalse(self.decide("m1n1-neo", "uboot-asahi")["relevant"])
+
+    def test_the_edge_boot_loader_and_its_stage1_source_trigger_an_image(self):
+        # Edge installs aura and stages m1n1-aurora's raw Stage 1: a publish of either changes the image.
+        for name in ("aura", "m1n1-aurora"):
+            self.assertEqual(self.decide(name)["matched"], [name], name)
 
     def test_runtime_lists_builder_packages_and_their_dependencies_are_relevant(self):
         self.assertEqual(self.decide("zram-generator")["matched"], ["zram-generator"], "the runtime's aarch64 list")

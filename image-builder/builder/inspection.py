@@ -75,8 +75,6 @@ def _load(name: str, file: str):
 candidate_set = _load("candidate_set", "candidate_set.py")
 limine = _load("apple_limine", "apple_limine.py")
 installed_system = _load("verify_installed_system", "verify_installed_system.py")
-# The raw Stage 1 the engine enrolls on a MacBook Neo.
-STAGE1 = "usr/share/m1n1-aurora/stage1/m1n1-raw.bin"
 test_image_pin = _load("test_image_pin", "test_image_pin.py")
 channel_set = _load("channel_set", "channel_set.py")
 
@@ -100,10 +98,18 @@ class Candidates:
         self.summary = json.loads((directory / "import.json").read_text())
         self.packages = {p["name"]: p for p in self.summary["packages"]}
         self.kind = self.summary.get("kind", "candidate")
-        self.boot_owners = candidate_set.REQUIRED_OWNERS
+        # Which package installs Stage 2 and which one's raw Stage 1 the Neo
+        # enrolls (a channel lane may name its own; inspect() holds it to the policy).
+        self.loader = self.summary.get("boot_loader", candidate_set.DEFAULT_BOOT_LOADER)
+        require(candidate_set.valid_boot_loader(self.loader), "the set names an invalid boot loader")
+        self.boot_owners = candidate_set.required_owners(self.loader)
+        # The raw Stage 1 the engine enrolls on a MacBook Neo.
+        self.stage1 = candidate_set.STAGE1_PATHS[self.loader["stage1"]]
         require("hardware_profile" not in self.summary, "the set records a retired hardware profile")
         require(self.kind in ("candidate", "channel"), f"the set is of an unknown kind: {self.kind}")
         self.roles = {p.get("role", p["name"]): p["name"] for p in self.summary["packages"]}
+        # The set's packages the image installs: all but a Stage 1 source carried for its archive alone.
+        self.installed = {name: p for name, p in self.packages.items() if p.get("group") != "stage1"}
         self._listings: dict[str, list[str]] = {}
 
     def target_fields(self) -> tuple[str, ...]:
@@ -156,10 +162,12 @@ def installed_versions(root: Path) -> dict[str, str]:
 def check_candidate_versions(root: Path, candidates: Candidates, report: dict) -> str:
     versions = installed_versions(root)
     report["installed_versions"] = {name: versions.get(name) for name in sorted(candidates.packages)}
-    for name, package in candidates.packages.items():
+    for name, package in candidates.installed.items():
         require(versions.get(name) == package["version"],
                 f"{name} is {versions.get(name) or 'not installed'}, the set has {package['version']}")
-    return f"all {len(candidates.packages)} candidate packages installed at the set's versions"
+    for name in sorted(set(candidates.packages) - set(candidates.installed)):
+        require(name not in versions, f"{name} is installed, but the set carries it only for its raw Stage 1")
+    return f"all {len(candidates.installed)} candidate packages installed at the set's versions"
 
 
 def check_runtime_sources(root: Path, candidates: Candidates, report: dict) -> str:
@@ -228,10 +236,16 @@ def check_apple_packages(root: Path, report: dict) -> str:
     return f"all {len(names)} packages of {path.name} installed"
 
 
-def check_minimum_versions(root: Path, policy: dict) -> str:
+def check_minimum_versions(root: Path, policy: dict, loader: dict = candidate_set.DEFAULT_BOOT_LOADER) -> str:
+    """Every minimum holds for the installed package. The boot loader packages LOADER does not
+    install are exempt: one is refused, and a Stage 1 source's archive met its minimum when the set
+    was frozen."""
     versions = installed_versions(root)
     details = []
+    exempt = set(candidate_set.STAGE1_PATHS) - {loader["stage2"]}
     for name, minimum in sorted(policy["minimum_versions"].items()):
+        if name in exempt:
+            continue
         installed = versions.get(name)
         require(installed is not None, f"{name} is not installed")
         require(candidate_set.vercmp(installed, minimum) >= 0, f"{name} {installed} is below the minimum {minimum}")
@@ -279,10 +293,24 @@ def check_speaker_routing(root: Path) -> str:
             "speakersafetyd skips the J700")
 
 
-def check_refused(root: Path, policy: dict) -> str:
-    present = sorted(set(policy["refused_packages"]) & set(installed_versions(root)))
+def check_refused(root: Path, policy: dict, loader: dict = candidate_set.DEFAULT_BOOT_LOADER) -> str:
+    refused = candidate_set.refused_packages(policy, loader)
+    present = sorted(set(refused) & set(installed_versions(root)))
     require(not present, "refused packages are installed: " + ", ".join(present))
-    return "none of " + ", ".join(policy["refused_packages"]) + " installed"
+    return "none of " + ", ".join(refused) + " installed"
+
+
+def check_boot_loader(candidates: Candidates, policy: dict) -> str:
+    """The set's boot loader is the one the policy gives its lane (a candidate set's is the default)."""
+    lane = candidates.summary.get("channel") if candidates.kind == "channel" else None
+    expected = candidate_set.boot_loader(policy, lane)
+    require(candidates.loader == expected,
+            f"the set's boot loader {candidates.loader} is not the policy's {expected}")
+    source = candidate_set.stage1_only(expected)
+    require(source is None or candidates.packages.get(source, {}).get("group") == "stage1",
+            f"the set does not carry {source} for its raw Stage 1")
+    return (f"Stage 2 from {expected['stage2']}, the MacBook Neo's raw Stage 1 from {expected['stage1']}"
+            + (" (its archive; never installed)" if source else ""))
 
 
 def check_installed_payloads(root: Path, candidates: Candidates) -> str:
@@ -301,12 +329,44 @@ def check_installed_payloads(root: Path, candidates: Candidates) -> str:
     stage1 = root / "boot/efi/aurora/stage1-j700.bin"
     stage2 = root / "boot/efi/m1n1/boot-j700.bin"
     require(stage1.is_file() and not stage1.is_symlink()
-            and stage1.read_bytes() == candidates.member(candidates.boot_owners[STAGE1], STAGE1),
-            "the J700 Stage 1 does not match the authenticated m1n1-aurora package")
+            and stage1.read_bytes() == candidates.member(candidates.loader["stage1"], candidates.stage1),
+            f"the J700 Stage 1 does not match the authenticated {candidates.loader['stage1']} package")
     require(stage2.is_file() and not stage2.is_symlink()
             and stage2.read_bytes() == (root / "boot/efi/m1n1/boot.bin").read_bytes(),
             "the J700 Stage 2 does not match the inspected common bundle")
     return f"m1n1, U-Boot, the kernel and {len(candidates.dtbs())} device trees match the set's archives"
+
+
+# What U-Boot with aurora-silicon/u-boot#32 (62ee4709) carries: it reads the
+# window an execute-window Mac's kernel must run in. Without it U-Boot places
+# the kernel wherever its allocator likes, and the kernel keeps every CPU but
+# the boot CPU offline (a J616s on the confined Stage 2, 2026-11-20).
+CTXR_WINDOW_PROPERTY = b"aurora,ctxr-exec-window"
+
+
+def check_ctxr_uboot(root: Path, candidates: Candidates) -> str:
+    """An image that boots M4-and-later Macs through the confined Stage 2
+    (esp/m1n1/boot-ctxr.bin) carries a U-Boot that keeps Linux in the window."""
+    confined = root / "boot/efi/m1n1/boot-ctxr.bin"
+    if not confined.exists() and not confined.is_symlink():
+        return "no confined Stage 2: no execute-window Mac boots this image"
+    # The staged copies are what an execute-window Mac loads: the confined Stage 2 is the
+    # inspected common bundle, and the Mach-O Stage 1 is the authenticated aura's.
+    require(confined.is_file() and not confined.is_symlink()
+            and confined.read_bytes() == (root / "boot/efi/m1n1/boot.bin").read_bytes(),
+            "the confined Stage 2 does not match the inspected common bundle")
+    require(candidates.loader["stage2"] == "aura",
+            f"the image carries the confined Stage 2, but its Stage 2 comes from {candidates.loader['stage2']}, not aura")
+    macho, path = root / "boot/efi/aurora/stage1.macho", "usr/share/aura/stage1/aura-boot.macho"
+    require(macho.is_file() and not macho.is_symlink()
+            and macho.read_bytes() == candidates.member(candidates.loader["stage2"], path),
+            f"the Mach-O Stage 1 does not match the authenticated {candidates.loader['stage2']} package")
+    path = "usr/lib/asahi-boot/u-boot-nodtb.bin"
+    uboot = candidates.member(candidates.boot_owners[path], path)
+    require(CTXR_WINDOW_PROPERTY in uboot,
+            "the image boots execute-window Macs, but its U-Boot does not read "
+            "aurora,ctxr-exec-window (aurora-silicon/u-boot#32): their kernels would run on the boot CPU alone")
+    return "U-Boot keeps Linux inside the CTXR window (aurora-silicon/u-boot#32)"
 
 
 def m1n1_stage2(root: Path, candidates: Candidates, report: dict) -> str:
@@ -365,7 +425,7 @@ def check_candidate_files(root: Path, candidates: Candidates, report: dict) -> s
     versions and archives (candidate-versions, PROVENANCE): the runtime may
     change their files, as it restyles the Yaru icons."""
     counts, changed = 0, []
-    planned = sorted(name for name, p in candidates.packages.items() if p.get("group", "runtime") != "closure")
+    planned = sorted(name for name, p in candidates.installed.items() if p.get("group", "runtime") != "closure")
     with tempfile.TemporaryDirectory(prefix="inspect-") as scratch:
         for name in planned:
             unpacked = extract(candidates, name, Path(scratch))
@@ -409,7 +469,7 @@ def mtree_digests(root: Path, package: str) -> dict[str, str]:
 def check_package_mtrees(root: Path, candidates: Candidates) -> str:
     """The installed integrity references must come from the frozen archives."""
     versions = installed_versions(root)
-    for name in sorted(candidates.packages):
+    for name in sorted(candidates.installed):
         require(".MTREE" in candidates.listing(name), f"{name}: source package has no .MTREE")
         expected = candidates.member(name, ".MTREE")
         path = root / "var/lib/pacman/local" / f"{name}-{versions.get(name, '')}" / "mtree"
@@ -421,15 +481,19 @@ def check_package_mtrees(root: Path, candidates: Candidates) -> str:
         require(source.startswith(b"#mtree\n") and b"sha256digest=" in source,
                 f"{name}: mtree has no file checksums")
         require(source == installed, f"{name}: installed mtree differs from its source package")
-    return f"all {len(candidates.packages)} package mtree references match their frozen archives"
+    return f"all {len(candidates.installed)} package mtree references match their frozen archives"
 
 
-def check_supported_models(root: Path, candidates: Candidates, report: dict, policy: dict | None = None) -> str:
+def check_supported_models(root: Path, candidates: Candidates, report: dict, policy: dict | None = None,
+                           channel: str | None = None) -> str:
     """Every Mac the image admits has its Aurora device tree in stage 2. The
-    trusted policy names them; the Aurora U-Boot ships no device trees."""
+    trusted policy names them; the Aurora U-Boot ships no device trees. An edge
+    image also needs the trees of the edge-only (untested) Macs, which rc and
+    stable never offer."""
     policy = policy if policy is not None else candidate_set.load_policy()
     kernel_dtbs = {PurePosixPath(p).name for p in candidates.dtbs()}
-    models = sorted(f"{tree}.dtb" for tree in policy["device_trees"])
+    trees = list(policy["device_trees"]) + (list(policy.get("edge_device_trees", [])) if channel == "edge" else [])
+    models = sorted(f"{tree}.dtb" for tree in trees)
     require(models, "the trust policy names no Mac")
     missing = [name for name in models if name not in kernel_dtbs]
     require(not missing, "the Aurora kernel lacks device trees for " + ", ".join(missing))
@@ -445,6 +509,45 @@ def check_limine(root: Path, candidates: Candidates, report: dict) -> str:
     report["uki"] = {"release": release, "initramfs_bytes": len(sections[".initrd"]),
                      "cmdline": sections[".cmdline"].rstrip(b"\0 \n").decode(errors="replace")}
     return f"Limine at BOOTAA64.EFI boots omarchy_{KERNEL}.efi ({release}) with the set's kernel"
+
+
+# The modules the kernel's display gate waits for before the root is up
+# (omarchy-mac-boot 92-omarchy-mac-display-gate.conf). An image's initramfs is
+# built away from the Mac, so autodetect cannot pick them: without the M4 PHY a
+# J616s's first boot gave up on the gate and its external DCPs failed with -110.
+DISPLAY_GATE_MODULES = ("phy-apple-t6040-usb2", "mux-apple-display-crossbar", "atc-t6050-dp", "phy-apple-atc",
+                        "phy-apple-dptx")
+MODULE_SUFFIX = re.compile(r"\.ko(\.(zst|xz|gz))?$")
+
+
+def module_names(paths) -> set[str]:
+    """Module names (dashes for underscores) of the .ko files among PATHS."""
+    return {MODULE_SUFFIX.sub("", PurePosixPath(p).name).replace("_", "-")
+            for p in paths if MODULE_SUFFIX.search(PurePosixPath(p).name)}
+
+
+DISPLAY_GATE_DROPIN = "etc/mkinitcpio.conf.d/92-omarchy-mac-display-gate.conf"
+
+
+def check_display_gate_modules(root: Path, candidates: Candidates) -> str:
+    """With omarchy-mac-boot's display gate drop-in installed, every display gate
+    module the set's kernel ships as a module is in the UKI's initramfs. An image
+    without the drop-in (omarchy-mac-boot before omacom/omarchy-mac-pkgs#174) has
+    no display gate to hold, and no lane's omarchy-mac-boot carries it yet."""
+    dropin = root / DISPLAY_GATE_DROPIN
+    if not dropin.exists() and not dropin.is_symlink():
+        return "no display gate drop-in: the image's omarchy-mac-boot predates the display gate"
+    shipped = module_names(candidates.listing(KERNEL)) & set(DISPLAY_GATE_MODULES)
+    if not shipped:
+        return "the kernel ships none of the display gate's modules"
+    sections = limine.pe_sections(root / f"boot/efi/EFI/Linux/omarchy_{KERNEL}.efi")
+    names = []
+    for chunk in limine.initramfs_archives(sections.get(".initrd") or b""):
+        names += [limine.unescape(n) for n in limine._bsdtar(chunk, "-t").decode(errors="replace").splitlines()]
+    missing = sorted(shipped - module_names(names))
+    require(not missing, "the UKI's initramfs lacks the display gate's " + ", ".join(missing)
+            + " (omarchy-mac-boot 92-omarchy-mac-display-gate.conf)")
+    return "the UKI's initramfs carries " + ", ".join(sorted(shipped))
 
 
 def check_embedded_initramfs(root: Path, report: dict) -> str:
@@ -802,16 +905,19 @@ def inspect(root: Path, candidates_dir: Path, channel: str, factory: Path | None
     checks = [
         ("candidate-versions", lambda: check_candidate_versions(root, candidates, report)),
         ("runtime-sources", lambda: check_runtime_sources(root, candidates, report)),
-        ("minimum-versions", lambda: check_minimum_versions(root, policy)),
-        ("refused-packages", lambda: check_refused(root, policy)),
+        ("boot-loader", lambda: check_boot_loader(candidates, policy)),
+        ("minimum-versions", lambda: check_minimum_versions(root, policy, candidates.loader)),
+        ("refused-packages", lambda: check_refused(root, policy, candidates.loader)),
         ("apple-packages", lambda: check_apple_packages(root, report)),
         ("installed-boot-payloads", lambda: check_installed_payloads(root, candidates)),
         ("candidate-files", lambda: check_candidate_files(root, candidates, report)),
         ("package-mtrees", lambda: check_package_mtrees(root, candidates)),
         ("m1n1-stage2", lambda: m1n1_stage2(root, candidates, report)),
-        ("aurora-device-trees", lambda: check_supported_models(root, candidates, report, policy)),
+        ("ctxr-uboot", lambda: check_ctxr_uboot(root, candidates)),
+        ("aurora-device-trees", lambda: check_supported_models(root, candidates, report, policy, channel)),
         ("limine-uki", lambda: check_limine(root, candidates, report)),
         ("embedded-initramfs", lambda: check_embedded_initramfs(root, report)),
+        ("display-gate-modules", lambda: check_display_gate_modules(root, candidates)),
         ("boot-splash", lambda: check_boot_splash(root, report)),
         ("boot-maintenance", lambda: check_maintenance(root)),
         ("image-target", lambda: check_image_target(root, candidates, profile, report)),

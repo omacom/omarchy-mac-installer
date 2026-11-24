@@ -320,7 +320,11 @@ final class InstallerModel {
   }
 
   private var installationTask: Task<Void, Never>?
-  var bootSelection: BootSelection { BootSelection() }
+  /// The mode the engine recorded for this Mac's chip; raw when unreadable,
+  /// which install() then refuses against the configuration.
+  var bootSelection: BootSelection {
+    BootSelection(mode: (try? RecoveryActions.configuration.get())?.mode ?? .raw)
+  }
 
   var steps: [String] {
     recoveryInterface

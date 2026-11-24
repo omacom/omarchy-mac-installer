@@ -91,6 +91,7 @@ public enum RecoveryInstallData {
   ) throws -> (Data, Data, [String: Data]) {
     let config = try read(resources.appendingPathComponent("install-config.json"), 65536)
     try validateTarget(config, target)
+    let stage1 = try stage1Payload(config)
     let payloads = resources.appendingPathComponent("AuraPayloads")
     try requireDirectory(payloads)
     let manifest = try read(payloads.appendingPathComponent("manifest.json"), 1 << 20)
@@ -99,7 +100,7 @@ public enum RecoveryInstallData {
       let files = value["files"] as? [String: [String: Any]]
     else { throw AccountSetupFailure("The old Recovery payload manifest is invalid.") }
     let required: Set<String> = [
-      "raw/aura-raw.bin", "raw/boot.bin", "vendorfw/firmware.tar",
+      stage1, "raw/boot.bin", "vendorfw/firmware.tar",
       "vendorfw/firmware.cpio", "vendorfw/manifest.txt",
     ]
     let allowed = required.union(["vendorfw/u-boot/asmedia/asm2214a-apple.bin"])
@@ -124,6 +125,22 @@ public enum RecoveryInstallData {
       verified[name] = bytes
     }
     return (config, manifest, verified)
+  }
+
+  /// The Stage 1 payload an installation of this boot mode keeps
+  /// (AuraBootMode.stage1Path; omarchy_recovery.py BOOT_MODES): the raw image
+  /// on M1 to M3 and the Neo, aura's Mach-O boot object on an execute-window
+  /// chip (M4 and later). An installation recorded before boot modes is raw.
+  static func stage1Payload(_ config: Data) throws -> String {
+    guard let object = try JSONSerialization.jsonObject(with: config) as? [String: Any] else {
+      throw AccountSetupFailure("The Recovery data belongs to another installation.")
+    }
+    guard let value = object["bootMode"] else { return "raw/aura-raw.bin" }
+    switch value as? String {
+    case "raw"?: return "raw/aura-raw.bin"
+    case "macho"?: return "macho/aura-boot.macho"
+    default: throw AccountSetupFailure("The old Recovery payload manifest is invalid.")
+    }
   }
 
   private static func validateTarget(_ config: Data, _ target: RecoveryAccountTarget) throws {

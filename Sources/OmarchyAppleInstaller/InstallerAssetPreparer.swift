@@ -111,8 +111,6 @@
   }
 
   public struct InstallerAssetPreparer: Sendable {
-    private static let explicitlyUnsupportedDevices = ["apple,j614s"]
-
     private let trustCore: AppleInstallerTrustCore
     private let stager: VerifiedArtifactStager
 
@@ -322,11 +320,7 @@
       if case .blocked(let reason) = host.eligibility {
         throw InstallerAssetPreparationError.hostBlocked(reason)
       }
-      let deviceIdentifier = host.identity.deviceIdentifier
-      guard !Self.explicitlyUnsupportedDevices.contains(deviceIdentifier) else {
-        throw InstallerAssetPreparationError.unsupportedDevice(deviceIdentifier)
-      }
-      return deviceIdentifier
+      return host.identity.deviceIdentifier
     }
   }
 #endif

@@ -64,9 +64,12 @@ REVISION_FILES = {
     'omarchy-mac-boot': 'usr/share/omarchy-mac/boot-source-revision',
 }
 # Boot payloads the image is assembled and inspected from, and the one package
-# that may carry each: every Mac boots the Aurora stack.
+# that may carry each: every Mac boots the Aurora stack. These are the default
+# boot loader's (m1n1-aurora's); a lane that names another (boot_loader below)
+# takes its Stage 2 and Stage 1 from the packages it names.
+STAGE2 = 'usr/lib/asahi-boot/m1n1.bin'
 REQUIRED_OWNERS = {
-    'usr/lib/asahi-boot/m1n1.bin': 'm1n1-aurora',
+    STAGE2: 'm1n1-aurora',
     'usr/share/m1n1-aurora/stage1/m1n1-raw.bin': 'm1n1-aurora',
     'usr/lib/asahi-boot/u-boot-nodtb.bin': 'uboot-aurora',
     'usr/lib/omarchy/initcpio/omarchy-mac-encrypt': 'omarchy-mac-boot',
@@ -74,6 +77,56 @@ REQUIRED_OWNERS = {
     'usr/share/libalpm/scripts/limine-apple-gate': 'limine-mkinitcpio-hook',
     'usr/share/omarchy/default/limine/limine.conf': 'omarchy-settings',
 }
+# The boot loader packages and the raw Stage 1 each ships, which the image
+# stages as the MacBook Neo's esp/aurora/stage1-j700.bin. Each installs its
+# Stage 2 at STAGE2 and conflicts with the other, so only one is installed.
+STAGE1_PATHS = {
+    'm1n1-aurora': 'usr/share/m1n1-aurora/stage1/m1n1-raw.bin',
+    'aura': 'usr/share/aura/stage1/aura-raw.bin',
+}
+DEFAULT_BOOT_LOADER = {'stage2': 'm1n1-aurora', 'stage1': 'm1n1-aurora'}
+
+
+def valid_boot_loader(loader):
+    """LOADER names the package that installs Stage 2 and the one whose raw Stage 1 the image stages."""
+    return (isinstance(loader, dict) and set(loader) == {'stage2', 'stage1'}
+            and loader['stage2'] in STAGE1_PATHS and loader['stage1'] in STAGE1_PATHS)
+
+
+def boot_loader(policy, lane=None):
+    """The boot loader LANE's images take: the channel lane's boot_loader, else m1n1-aurora's.
+    A candidate set (no lane) keeps the default."""
+    if lane is None:
+        return dict(DEFAULT_BOOT_LOADER)
+    loader = policy['channel']['lanes'][lane].get('boot_loader', DEFAULT_BOOT_LOADER)
+    require(valid_boot_loader(loader), f'invalid {lane} lane boot loader')
+    return dict(loader)
+
+
+def boot_packages(policy, loader):
+    """The policy's boot packages with LOADER's Stage 2 package in m1n1-aurora's place."""
+    return [loader['stage2'] if name == 'm1n1-aurora' else name for name in policy['boot_packages']]
+
+
+def stage1_only(loader):
+    """The package the set carries only for its raw Stage 1, never installed, or None."""
+    return None if loader['stage1'] == loader['stage2'] else loader['stage1']
+
+
+def refused_packages(policy, loader):
+    """What an image with LOADER must never install: the policy's refused packages and the boot
+    loader it does not install, but never its own Stage 2 package."""
+    return sorted((set(policy['refused_packages']) | set(STAGE1_PATHS)) - {loader['stage2']})
+
+
+def required_owners(loader):
+    """REQUIRED_OWNERS for LOADER: Stage 2 from its stage2 package, the raw Stage 1 from its stage1 one."""
+    owners = {path: owner for path, owner in REQUIRED_OWNERS.items() if path not in STAGE1_PATHS.values()}
+    owners[STAGE2] = loader['stage2']
+    owners[STAGE1_PATHS[loader['stage1']]] = loader['stage1']
+    return owners
+
+
 # A package the set took from an Omarchy channel's aarch64 repository, by its own file name.
 CHANNEL_URL = re.compile(r'https://pkgs\.omarchy\.org/(edge|rc|stable)/aarch64/([^/]+)')
 BAD_STATUS = re.compile(r'\b(BADSIG|ERRSIG|REVKEYSIG|EXPKEYSIG|EXPSIG|KEYREVOKED|KEYEXPIRED|SIGEXPIRED)\b')
@@ -218,16 +271,22 @@ def from_channel(origin, filename):
             and origin.get('channel') == f'omacom {match[1]} aarch64' and 'commit' not in origin)
 
 
-def verify_payloads(payloads, policy):
-    """Every file has one owner, each boot payload the image needs its expected
-    one, and the kernel carries every supported Mac's device tree."""
+def verify_payloads(payloads, policy, loader=DEFAULT_BOOT_LOADER):
+    """Every installed file has one owner, each boot payload the image needs its
+    expected one (LOADER's for Stage 2 and the raw Stage 1), and the kernel
+    carries every supported Mac's device tree. A Stage 1 source the image never
+    installs owns no installed file: it only has to carry its raw Stage 1."""
     owners = {}
+    source = stage1_only(loader)
     for name, paths in sorted(payloads.items()):
+        if name == source:
+            continue
         for path in paths:
             require(path not in owners, f'candidate payload ownership conflict: {path} ({owners.get(path)}, {name})')
             owners[path] = name
-    for path, owner in REQUIRED_OWNERS.items():
-        require(owners.get(path) == owner, f'{path} is not in {owner}')
+    for path, owner in required_owners(loader).items():
+        carried = path in payloads.get(owner, ()) if owner == source else owners.get(path) == owner
+        require(carried, f'{path} is not in {owner}')
     kernels = [p for p in payloads.get('linux-aurora', ()) if PurePosixPath(p).match('usr/lib/modules/*/vmlinuz')]
     require(len(kernels) == 1, 'linux-aurora does not carry one kernel')
     release = PurePosixPath(kernels[0]).parts[3]

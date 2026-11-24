@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "about": "Chip IDs whose CPUs run kernel-mode code only inside a configured execute window. On these generations (M4, A18 Pro, M5 and later) Stage 1 is enrolled as a Mach-O padded to cover that window and loads the confined Stage 2, m1n1/boot-ctxr.bin; every earlier chip keeps its existing Stage 1. Chip IDs rise with each generation, so each range runs from that generation's first chip to the end of its family. Ported from aurora-silicon/aurora-installer macOS/scripts/stage1-execute-window.json (7be5339, MIT, Ryan Murray). Read by Engine/overlay/src/omarchy_chip.py and Recovery/Sources/Account/AuraStage1.swift (each through a test) and by image-builder/builder/inspection.py.",
+  "chip_id_ranges": [
+    {"family": "T81xx", "first": "0x8130", "last": "0x8fff"},
+    {"family": "T6xxx", "first": "0x6040", "last": "0x6fff"}
+  ]
+}

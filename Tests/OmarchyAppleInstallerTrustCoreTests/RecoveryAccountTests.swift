@@ -98,6 +98,71 @@
           system: system, appName: appName, target: target, read: fixtureRead))
     }
 
+    /// Install data as omarchy_recovery.stage writes it for BOOT_MODE, holding NAMES.
+    private func writeInstallData(
+      system: URL, bootMode: String?, names: [String]
+    ) throws {
+      let fm = FileManager.default
+      let data = try RecoveryInstallData.directory(system: system)
+      let payloads = data.appendingPathComponent("AuraPayloads")
+      try fm.createDirectory(at: payloads, withIntermediateDirectories: true)
+      var config: [String: Any] = [
+        "schema": 2, "systemUUID": target.systemUUID, "groupUUID": target.groupUUID,
+        "prebootUUID": target.prebootUUID,
+      ]
+      if let bootMode { config["bootMode"] = bootMode }
+      try JSONSerialization.data(withJSONObject: config).write(
+        to: data.appendingPathComponent("install-config.json"))
+      var entries: [String: [String: Any]] = [:]
+      for name in names {
+        let path = payloads.appendingPathComponent(name)
+        let bytes = Data(name.utf8)
+        try fm.createDirectory(
+          at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try bytes.write(to: path)
+        entries[name] = [
+          "bytes": bytes.count,
+          "sha256": SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined(),
+        ]
+      }
+      try JSONSerialization.data(withJSONObject: ["schema": 2, "files": entries]).write(
+        to: payloads.appendingPathComponent("manifest.json"))
+    }
+
+    func testAnExecuteWindowInstallationsBaselineKeepsItsMachOStage1() throws {
+      // An M4 install stages macho/aura-boot.macho (omarchy_recovery.py BOOT_MODES), never raw.
+      let fm = FileManager.default
+      let appName = InstallerProductIdentity.recoveryAppBundleName
+      let firmware = [
+        "raw/boot.bin", "vendorfw/firmware.tar", "vendorfw/firmware.cpio", "vendorfw/manifest.txt",
+      ]
+      let cases: [(String?, [String], Bool)] = [
+        ("macho", ["macho/aura-boot.macho"] + firmware, true),
+        ("raw", ["raw/aura-raw.bin"] + firmware, true),
+        (nil, ["raw/aura-raw.bin"] + firmware, true),
+        ("macho", ["raw/aura-raw.bin"] + firmware, false),
+        ("raw", ["macho/aura-boot.macho"] + firmware, false),
+        ("macho", ["macho/aura-boot.macho", "raw/aura-raw.bin"] + firmware, false),
+        ("vm", ["raw/aura-raw.bin"] + firmware, false),
+      ]
+      for (bootMode, names, accepted) in cases {
+        let system = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: system) }
+        try writeInstallData(system: system, bootMode: bootMode, names: names)
+        let attempt = {
+          try RecoveryInstallData.migrateLegacy(
+            system: system, appName: appName, target: self.target, read: self.fixtureRead)
+        }
+        if accepted {
+          XCTAssertEqual(
+            try attempt(), try RecoveryInstallData.directory(system: system),
+            "\(bootMode ?? "unrecorded") with \(names[0])")
+        } else {
+          XCTAssertThrowsError(try attempt(), "\(bootMode ?? "unrecorded") with \(names)")
+        }
+      }
+    }
+
     func testTokenAuthorityWaitsForNativePersistence() throws {
       let id = UUID().uuidString
       let hashes = [Data("fixture-hash".utf8)]

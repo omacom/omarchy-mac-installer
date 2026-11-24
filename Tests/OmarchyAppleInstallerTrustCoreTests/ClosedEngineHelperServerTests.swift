@@ -261,7 +261,9 @@
         try importedEntries(in: fixture.destination).map(\.lastPathComponent), ["diagnostics"])
     }
 
-    func testM4PackageIsRejectedBeforeExecution() async throws {
+    /// The helper refuses no board by name: the package was bound to a signed
+    /// catalog and an engine plan before it got here.
+    func testAnM4PackageIsNotRefusedByName() async throws {
       let fixture = try makeFixture(deviceIdentifier: "apple,j614s")
       defer { try? FileManager.default.removeItem(at: fixture.root) }
       let source = try openDirectory(fixture.source)
@@ -273,20 +275,13 @@
         credentialValidator: AcceptingMachineOwnerCredentialValidator()
       )
 
-      await assertThrowsErrorAsync(
-        try await server.submit(
-          packageDirectory: source,
-          authorization: try machineOwnerAuthorization()
-        )
-      ) {
-        XCTAssertEqual(
-          $0 as? ClosedEngineHelperError,
-          .unsupportedDevice("apple,j614s")
-        )
-      }
+      let result = try await server.submit(
+        packageDirectory: source,
+        authorization: try machineOwnerAuthorization()
+      )
       let executionCount = await executor.executionCount
-      XCTAssertEqual(executionCount, 0)
-      XCTAssertTrue(try importedEntries(in: fixture.destination).isEmpty)
+      XCTAssertEqual(result, fixture.transcript)
+      XCTAssertEqual(executionCount, 1)
     }
 
     func testTranscriptForSubstitutedPlanIsRejected() async throws {
@@ -580,7 +575,7 @@
         : payloadDigest
       let transcriptPlanDigest = lengthPrefixedDigest(
         [
-          "apple,j314s", "disk0", layoutDigest, "free", "disk0s3",
+          deviceIdentifier, "disk0", layoutDigest, "free", "disk0s3",
           "447750000000", "107374182400", engineVersion,
           transcriptEngineDigest, transcriptMetadataDigest,
           transcriptPayloadDigest,
@@ -622,9 +617,9 @@
       )
 
       var lines = [
-        #"{"schema_version":1,"sequence":1,"type":"inspection","payload":{"device_identifier":"apple,j314s","support":"supported"}}"#,
+        #"{"schema_version":1,"sequence":1,"type":"inspection","payload":{"device_identifier":"\#(deviceIdentifier)","support":"supported"}}"#,
         #"{"schema_version":1,"sequence":2,"type":"inventory","payload":{"layout_digest":"\#(layoutDigest)","system_store_identifier":"disk0","candidates":[{"kind":"free","source_identifier":"disk0s3","offset_bytes":447750000000,"length_bytes":107374182400,"minimum_install_bytes":67501226240,"minimum_container_bytes":0}]}}"#,
-        #"{"schema_version":1,"sequence":3,"type":"plan","payload":{"plan_digest":"\#(transcriptPlanDigest)","device_identifier":"apple,j314s","store_identifier":"disk0","layout_digest":"\#(layoutDigest)","candidate_kind":"free","source_identifier":"disk0s3","offset_bytes":447750000000,"length_bytes":107374182400,"engine_version":"\#(engineVersion)","engine_digest":"\#(transcriptEngineDigest)","metadata_digest":"\#(transcriptMetadataDigest)","payload_digest":"\#(transcriptPayloadDigest)","required_human_steps":["enterOneTrueRecovery","authenticateMachineOwner"]}}"#,
+        #"{"schema_version":1,"sequence":3,"type":"plan","payload":{"plan_digest":"\#(transcriptPlanDigest)","device_identifier":"\#(deviceIdentifier)","store_identifier":"disk0","layout_digest":"\#(layoutDigest)","candidate_kind":"free","source_identifier":"disk0s3","offset_bytes":447750000000,"length_bytes":107374182400,"engine_version":"\#(engineVersion)","engine_digest":"\#(transcriptEngineDigest)","metadata_digest":"\#(transcriptMetadataDigest)","payload_digest":"\#(transcriptPayloadDigest)","required_human_steps":["enterOneTrueRecovery","authenticateMachineOwner"]}}"#,
       ]
       if includeCompletion {
         lines.append(

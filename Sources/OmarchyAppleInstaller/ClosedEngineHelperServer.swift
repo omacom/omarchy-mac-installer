@@ -127,8 +127,6 @@
   }
 
   public actor ClosedEngineHelperServer {
-    private static let explicitlyUnsupportedDevices = ["apple,j614s"]
-
     private let workingDirectory: URL
     private let credentialValidator: any MachineOwnerCredentialValidating
     private let executor: any ImportedEngineHandoffExecuting
@@ -320,6 +318,14 @@
           }
           return OmarchyRemovalReply(completed: true, message: message)
         } catch {
+          if (error as? RemovalFailure)?.nothingDeleted == true,
+            (try? FileManager.default.removeItem(at: journalURL)) != nil
+          {
+            // Once the file is gone the reply says so. A failed fsync can at
+            // worst bring the record back, which only blocks until reviewed.
+            phase = "checking"
+            try? synchronizeDirectory(workingDirectory)
+          }
           let detail = (error as? RemovalFailure)?.message ?? "macOS could not complete removal."
           let message: String
           if phase == "checking" {
@@ -404,16 +410,6 @@
         try importer.prepare(from: packageDirectory, in: workingDirectory)
       }
       defer { try? FileManager.default.removeItem(at: package.packageURL) }
-
-      guard
-        !Self.explicitlyUnsupportedDevices.contains(
-          package.deviceIdentifier
-        )
-      else {
-        throw ClosedEngineHelperError.unsupportedDevice(
-          package.deviceIdentifier
-        )
-      }
 
       var tailer: EngineJournalTailer?
       if let progress,

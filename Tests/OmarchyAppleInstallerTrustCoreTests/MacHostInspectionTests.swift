@@ -5,20 +5,6 @@
   @testable import OmarchyAppleInstallerTrustCore
 
   final class MacHostInspectionTests: XCTestCase {
-    func testTheModelCheckAloneRefusesOnlyTheBlockedModel() throws {
-      let unused = FixtureReadOnlyCommandRunner(root: Data(), limits: Data(), power: Data())
-      let cases = [("J614s", true), ("apple,j614s", true), ("J613", false), ("J314s", false)]
-      for (target, blocked) in cases {
-        let inspector = AppleSiliconHostInspector(
-          hardware: FixtureHardwarePropertyReader(values: [
-            "hw.model": "Mac", "machdep.cpu.brand_string": "Apple", "hw.targettype": target,
-          ]),
-          commands: unused,
-          operatingSystem: ProcessInfoOperatingSystemVersionReader())
-        XCTAssertEqual(try inspector.isBlockedModel(), blocked, target)
-      }
-    }
-
     func testSupportedM1InspectionRemainsCatalogGated() throws {
       let inspector = makeInspector(target: "J314s")
 
@@ -44,7 +30,7 @@
       XCTAssertEqual(result.eligibility, .requiresSignedCatalog)
     }
 
-    func testM4InspectionIsBlockedBeforeCatalogOrAuthorization() throws {
+    func testM4InspectionRemainsCatalogGated() throws {
       let inspector = makeInspector(
         model: "Mac16,8",
         chip: "Apple M4 Pro",
@@ -54,12 +40,7 @@
       let result = try inspector.inspect()
 
       XCTAssertEqual(result.identity.deviceIdentifier, "apple,j614s")
-      XCTAssertEqual(
-        result.eligibility,
-        .blocked(
-          reason: "This installer doesn’t support this Mac model yet."
-        )
-      )
+      XCTAssertEqual(result.eligibility, .requiresSignedCatalog)
     }
 
     func testUnsafeContainerIdentifierStopsBeforeLimitsQuery() {

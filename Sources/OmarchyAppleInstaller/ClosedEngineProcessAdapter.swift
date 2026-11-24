@@ -72,7 +72,6 @@ public enum ClosedEngineProcessError: Error, Equatable, Sendable {
 }
 
 public struct ClosedEngineProcessAdapter: Sendable {
-  private static let explicitlyUnsupportedDevices = ["apple,j614s"]
   private let trustCore: AppleInstallerTrustCore
 
   public init() {
@@ -126,9 +125,9 @@ public struct ClosedEngineProcessAdapter: Sendable {
       request.planningTranscript
     )
 
-    guard transcript.support == .supported,
-      !Self.explicitlyUnsupportedDevices.contains(transcript.deviceIdentifier)
-    else {
+    // Which Macs install is the engine's chip and board tables and the signed
+    // catalog's decision; no board is refused by name here.
+    guard transcript.support == .supported else {
       throw ClosedEngineProcessError.unsupportedDevice(
         transcript.deviceIdentifier
       )
@@ -175,9 +174,7 @@ public struct ClosedEngineProcessAdapter: Sendable {
     guard transcript.deviceIdentifier == invocation.plan.deviceIdentifier else {
       throw ClosedEngineProcessError.transcriptDeviceMismatch
     }
-    guard transcript.support == .supported,
-      !Self.explicitlyUnsupportedDevices.contains(transcript.deviceIdentifier)
-    else {
+    guard transcript.support == .supported else {
       throw ClosedEngineProcessError.unsupportedDevice(
         transcript.deviceIdentifier
       )

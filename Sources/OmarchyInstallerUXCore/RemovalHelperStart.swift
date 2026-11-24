@@ -17,20 +17,12 @@
     /// The person switched the helper off in Login Items: ask for the
     /// account first and offer to turn it back on with it.
     case switchedOff
-    /// This Mac model is refused outright; nothing privileged is set up.
-    case blockedModel
     /// The helper is busy with another job; try again later.
     case busy
 
     /// - Parameter helper: the status from asking the helper itself, so a
     ///   switched-off helper shows as `.disabled`.
-    /// - Parameter blockedModel: this Mac is a model the installer refuses;
-    ///   it wins over every helper state, so no helper is ever installed.
-    public init(helper: HelperDisplay, blockedModel: Bool = false) {
-      if blockedModel {
-        self = .blockedModel
-        return
-      }
+    public init(helper: HelperDisplay) {
       switch helper.status {
       case .current:
         self = .scan
@@ -150,8 +142,6 @@
       "The removal service didn’t answer, so removal didn’t start. No disk changes were made. Close this window and try again."
     public static let removalServiceBusy =
       "The removal service is busy with another request. Close this window and try again when it finishes. If it stays busy, an installation or removal may still be running, perhaps in another user’s session: let it finish, and don’t restart or shut down this Mac while it runs. No disk changes were made."
-    public static let removalBlockedModel =
-      "Removal is not supported on this Mac model. No disk changes were made."
     public static let removalSwitchedOff =
       "The removal service is switched off in Login Items, and it’s needed to look for Omarchy. Enter your macOS administrator account and choose Turn On & Continue to switch it back on, or switch it on in Login Items yourself and reopen this window."
     public static let removalTurnOnAndContinue = "Turn On & Continue"

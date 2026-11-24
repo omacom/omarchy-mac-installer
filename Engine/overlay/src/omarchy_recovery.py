@@ -25,6 +25,14 @@ INSTALL_DATA_DIRECTORY = "Aurora/Recovery/InstallData"
 PAYLOAD_DIRECTORY = "aurora/recovery"
 MANIFEST_NAME = "omarchy-recovery-app.json"
 STAGE2_PATH = "m1n1/boot.bin"
+# What Recovery enrolls and which Stage 2 the enrolled Stage 1 loads, by boot
+# mode. "macho" is aura's Mach-O Stage 1 for an execute-window chip (M4 and
+# later), which Recovery pads for the window and enrolls with --compress; it
+# loads the confined Stage 2. As aurora-installer's AuraBootMode (7be5339, MIT).
+BOOT_MODES = {
+    "raw": {"stage1": "raw/aura-raw.bin", "stage2Path": STAGE2_PATH},
+    "macho": {"stage1": "macho/aura-boot.macho", "stage2Path": "m1n1/boot-ctxr.bin"},
+}
 VENDOR_FIRMWARE = ("vendorfw/firmware.tar", "vendorfw/firmware.cpio", "vendorfw/manifest.txt")
 OPTIONAL_VENDOR_FIRMWARE = "vendorfw/u-boot/asmedia/asm2214a-apple.bin"
 UUID_PATTERN = re.compile(r"[0-9A-F]{8}(?:-[0-9A-F]{4}){3}-[0-9A-F]{12}\Z")
@@ -235,7 +243,10 @@ def source_bootstrap(dutil, source_os, authorized_owner=None, target_group=None)
                  "sourceGroupUUID": source_group, "ownerUUIDs": [selected]}
 
 
-def target_config(installer, esp_uuid, esp_root, source_os=None, authorized_owner=None, expected_bootstrap=None):
+def target_config(installer, esp_uuid, esp_root, source_os=None, authorized_owner=None, expected_bootstrap=None,
+                  boot_mode="raw"):
+    if boot_mode not in BOOT_MODES:
+        raise RecoveryError("unknown Recovery boot mode")
     osi = installer.osi
     system = Path(osi.system)
     info = installer.dutil.get("info", "-plist", str(system))
@@ -261,7 +272,7 @@ def target_config(installer, esp_uuid, esp_root, source_os=None, authorized_owne
     return {
         "schema": 2, "volumeName": name, "systemUUID": identifier(info.get("VolumeUUID")),
         "groupUUID": group, "prebootUUID": preboot_uuid, "espUUID": esp_uuid,
-        "bootMode": "raw", "stage2Path": STAGE2_PATH, "bootstrap": bootstrap,
+        "bootMode": boot_mode, "stage2Path": BOOT_MODES[boot_mode]["stage2Path"], "bootstrap": bootstrap,
         "allowCustomBootArguments": getattr(getattr(installer, "sysinfo", None), "device_class", "") == "j700ap",
     }
 
@@ -360,7 +371,7 @@ def _payload(path, maximum=256 << 20):
 
 def stage(installer, esp_uuid, esp_root, app_source=None,
           manifest_path=None, run=subprocess.run, source_os=None,
-          requirement=None, authorized_owner=None, expected_bootstrap=None):
+          requirement=None, authorized_owner=None, expected_bootstrap=None, boot_mode="raw"):
     """Called after OS/ESP installation and common stage-1 target patching.
 
     Preserve upstream's Finish Installation resource paths for resume checks;
@@ -371,11 +382,13 @@ def stage(installer, esp_uuid, esp_root, app_source=None,
     app_source = Path(app_source) if app_source is not None else template_root / APP_NAME
     manifest_path = Path(manifest_path) if manifest_path is not None else template_root / MANIFEST_NAME
     template = validate_source(app_source, manifest_path, run, requirement=requirement)
-    config = target_config(installer, esp_uuid, esp_root, source_os, authorized_owner, expected_bootstrap)
+    config = target_config(installer, esp_uuid, esp_root, source_os, authorized_owner, expected_bootstrap,
+                           boot_mode)
+    mode = BOOT_MODES[boot_mode]
     system = Path(installer.osi.system)
     esp_root = Path(esp_root)
     stage1 = _payload(installer.boot_obj_path)
-    stage2 = _payload(esp_root / STAGE2_PATH)
+    stage2 = _payload(esp_root / mode["stage2Path"])
     # Copy only this installation's finalized package. Never put these
     # per-device inputs in the distributable application template.
     firmware = {
@@ -404,11 +417,13 @@ def stage(installer, esp_uuid, esp_root, app_source=None,
         'resources=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'
         'exec "$resources/../../../Omarchy Installer.app/Contents/MacOS/OmarchyRecovery" "$@"\n'
     )
-    files = {"raw/aura-raw.bin": stage1, "raw/boot.bin": stage2, **firmware}
+    # Recovery keeps the Stage 2 under one name in both modes; espPath says
+    # where it goes.
+    files = {mode["stage1"]: stage1, "raw/boot.bin": stage2, **firmware}
     install_data = _install_data_root(system)
     payload_manifest = {
-        "schema": 2, "defaultMode": "raw", "nestedVirtualization": False,
-        "modes": {"raw": {"espPath": STAGE2_PATH}},
+        "schema": 2, "defaultMode": boot_mode, "nestedVirtualization": False,
+        "modes": {boot_mode: {"espPath": mode["stage2Path"]}},
         "vendorFirmware": sorted(firmware),
         "files": {name: {"sha256": digest(data), "bytes": len(data)} for name, data in files.items()},
     }

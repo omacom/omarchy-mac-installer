@@ -29,9 +29,12 @@ import omarchy_mesa
 import omarchy_mt7932
 import omarchy_mt7932_policy
 import omarchy_als
+import omarchy_chip
 import omarchy_isp
+import omarchy_macho
 import omarchy_recovery
 import omarchy_planner
+import omarchy_wifi
 from omarchy_image import (
     WRITE_VERIFICATION, flush_device, hash_target, open_target, timing, write_image,
 )
@@ -451,6 +454,30 @@ BOARD_STAGE1 = {
 
 
 def fill_aurora_stage1(image, uuid, path, window_ms):
+    if not image.endswith(b"STACKBOT"):
+        raise AsahiAdapterError("Aurora Stage 1 does not end at STACKBOT")
+    return _fill_stage1_block(image, uuid, path, window_ms, len(image) - 8)
+
+
+def fill_macho_stage1(image, uuid, path):
+    """Aura's Mach-O Stage 1 with its configuration block filled in place.
+
+    The boot object carries the raw Stage 1 at the start of __TEXT_EXEC, so
+    its one configuration block reads and fills as in the raw image (aura
+    src/stage1_config.c); every other byte, and the length, are unchanged. The
+    native Recovery pads __TEXT_EXEC for the execute window just before
+    enrollment, so the object here is the unpadded one.
+    """
+    try:
+        start, end = omarchy_macho.text_exec_range(image)
+    except omarchy_macho.MachOError as error:
+        raise AsahiAdapterError(f"Aurora Mach-O Stage 1 is invalid: {error}") from error
+    if image.count(STAGE1_MAGIC) == 1 and not start <= image.index(STAGE1_MAGIC) < end:
+        raise AsahiAdapterError("Aurora Stage 1 config block is outside __TEXT_EXEC")
+    return _fill_stage1_block(image, uuid, path, 0, end)
+
+
+def _fill_stage1_block(image, uuid, path, window_ms, limit):
     if not CANONICAL_UUID.fullmatch(uuid):
         raise AsahiAdapterError("ESP PARTUUID must be canonical lowercase")
     if not path or any(not 0x20 <= ord(c) < 0x7F or c in ";\\" for c in path) or any(
@@ -462,12 +489,10 @@ def fill_aurora_stage1(image, uuid, path, window_ms):
         raise AsahiAdapterError("Stage 2 path is too long")
     if not 0 <= window_ms <= 99999:
         raise AsahiAdapterError("proxy window must be 0..99999 ms")
-    if not image.endswith(b"STACKBOT"):
-        raise AsahiAdapterError("Aurora Stage 1 does not end at STACKBOT")
     if image.count(STAGE1_MAGIC) != 1:
         raise AsahiAdapterError("Aurora Stage 1 config block must occur exactly once")
     offset = image.index(STAGE1_MAGIC)
-    if offset + STAGE1_BLOCK > len(image) - 8:
+    if offset + STAGE1_BLOCK > limit:
         raise AsahiAdapterError("Aurora Stage 1 config block extends past the image")
     if struct.unpack_from("<I", image, offset + len(STAGE1_MAGIC))[0] != 1:
         raise AsahiAdapterError("unsupported Aurora Stage 1 config version")
@@ -486,6 +511,59 @@ def board_stage1(device_class, os_firmware, members=(), *, common_allowed=False)
     if board is None or board.os_firmware not in (None, os_firmware):
         return None
     return board
+
+
+# Execute-window chips (omarchy_chip.uses_execute_window: M4, A18 Pro, M5 and
+# later) boot aura's Mach-O Stage 1, padded for the window by the native
+# Recovery and enrolled with `kmutil configure-boot --compress`. It loads the
+# confined Stage 2, m1n1/boot-ctxr.bin, which aura keeps a 16 MiB slot for.
+# The payload supplies it from esp/m1n1/boot-ctxr-<board>.bin if it has one,
+# otherwise from esp/m1n1/boot-ctxr.bin; other chips never receive it. The
+# choice is by chip, never by a board list; a board in BOARD_STAGE1 (the Neo)
+# keeps the Stage 1 it was qualified with. Ported from aurora-installer
+# 7be5339 (AuraStage1Format, assemble-distribution-payload.py), MIT.
+MACHO_STAGE1 = "esp/aurora/stage1.macho"
+CONFINED_STAGE2 = "m1n1/boot-ctxr.bin"
+MAX_CONFINED_STAGE2_BYTES = 16 << 20
+_CONFINED_MEMBER = re.compile(r"esp/m1n1/boot-ctxr(?:-[jk][0-9]+[a-z]*)?\.bin\Z")
+ConfinedStage1 = collections.namedtuple("ConfinedStage1", "member stage2_member")
+
+
+def confined_stage1(device_class, chip_id, members):
+    """The Mach-O Stage 1 and confined Stage 2 this Mac boots, or None when
+    its chip has no execute window or its board keeps a qualified Stage 1.
+    Refuses an execute-window Mac the payload cannot boot."""
+    if device_class in BOARD_STAGE1 or not omarchy_chip.uses_execute_window(chip_id):
+        return None
+    members = set(members)
+    if MACHO_STAGE1 not in members:
+        raise AsahiAdapterError(f"this image has no {MACHO_STAGE1} for an M4 or later Mac")
+    board = device_class[:-2] if device_class.endswith("ap") else device_class
+    own = f"{ESP_SOURCE}/m1n1/boot-ctxr-{board}.bin"
+    shared = f"{ESP_SOURCE}/{CONFINED_STAGE2}"
+    stage2 = own if own in members else shared if shared in members else None
+    if stage2 is None:
+        raise AsahiAdapterError(f"this image has no {shared} for an M4 or later Mac")
+    return ConfinedStage1(MACHO_STAGE1, stage2)
+
+
+def read_macho_stage1(confined, read_member):
+    """The Mach-O Stage 1 from the payload, refused unless fillable and unless the
+    native Recovery can pad its execute window (before any disk change)."""
+    image = read_member(confined.member)
+    try:
+        omarchy_macho.check_execute_window(image)
+    except omarchy_macho.MachOError as error:
+        raise AsahiAdapterError(f"Aurora Mach-O Stage 1 is invalid: {error}") from error
+    fill_macho_stage1(image, PLACEHOLDER_UUID, CONFINED_STAGE2)
+    return image
+
+
+def install_macho_stage1(confined, read_member, esp_uuid, boot_object):
+    """Write this Mac's filled Mach-O Stage 1 as the boot object Recovery enrolls."""
+    filled = fill_macho_stage1(read_macho_stage1(confined, read_member), esp_uuid.lower(), CONFINED_STAGE2)
+    with open(boot_object, "wb") as fd:
+        fd.write(filled)
 
 
 def common_stage1_allowed(template, device_class, os_firmware):
@@ -540,8 +618,12 @@ ESP_STAGE2 = "esp/m1n1/boot.bin"
 BOARD_STAGE2 = {"j700ap": "esp/m1n1/boot-j700.bin"}
 
 
-def esp_board_layout(device_class, members, *, common_allowed=False):
-    """Each payload ESP member's path on this board's ESP; absent ones are not installed."""
+def esp_board_layout(device_class, members, *, common_allowed=False, confined=None):
+    """Each payload ESP member's path on this board's ESP; absent ones are not installed.
+
+    CONFINED (from confined_stage1) puts its Stage 2 at m1n1/boot-ctxr.bin
+    beside m1n1/boot.bin; every other ESP gets no confined Stage 2 and no
+    Mach-O Stage 1, which only the boot object carries."""
     members = set(members)
     common = common_allowed and COMMON_STAGE1.member in members
     if common and ESP_STAGE2 not in members:
@@ -558,6 +640,10 @@ def esp_board_layout(device_class, members, *, common_allowed=False):
             raise AsahiAdapterError("ESP member is outside the ESP source")
         if member == own:
             layout[member] = ESP_STAGE2[len(prefix):]
+        elif confined is not None and member == confined.stage2_member:
+            layout[member] = CONFINED_STAGE2
+        elif member == MACHO_STAGE1 or _CONFINED_MEMBER.fullmatch(member):
+            continue
         elif (member == COMMON_STAGE1.member and not common
               or member in BOARD_STAGE2.values()
               or (common and member in {board.member for board in BOARD_STAGE1.values()})
@@ -568,9 +654,9 @@ def esp_board_layout(device_class, members, *, common_allowed=False):
     return layout
 
 
-def install_esp_board_layout(device_class, members, esp_root, *, common_allowed=False):
+def install_esp_board_layout(device_class, members, esp_root, *, common_allowed=False, confined=None):
     """Turn the copied payload ESP into this board's ESP."""
-    layout = esp_board_layout(device_class, members, common_allowed=common_allowed)
+    layout = esp_board_layout(device_class, members, common_allowed=common_allowed, confined=confined)
     prefix = ESP_SOURCE + "/"
     installed = set(layout.values())
     for member in sorted(set(members)):
@@ -679,6 +765,20 @@ def _neo_peripheral_collectors(installer):
             stub.AlsFWCollection, stub.ISPFWCollection, stub.subprocess = old_als, old_isp, old_process
 
 
+@contextlib.contextmanager
+def _installed_macos_wifi(installer):
+    """Collect BCM4388 rev C2 Wi-Fi, from the installed macOS when Recovery
+    lacks this Mac's board (omarchy_wifi)."""
+    upstream = getattr(asahi_firmware, "wifi", None)
+    if upstream is None or not hasattr(stub, "WiFiFWCollection"):
+        yield None
+        return
+    device = getattr(getattr(installer, "sysinfo", None), "device_class", "")
+    machine = device[:-2] if device.endswith("ap") else device
+    with omarchy_wifi.collectors(stub, upstream, machine) as radios:
+        yield radios
+
+
 def stub_installer(sysinfo, dutil, osinfo):
     """A StubInstaller that reads macOS 26 firmware's bootcaches.plist and
     writes Omarchy's own step2.sh as its Recovery setup."""
@@ -697,8 +797,14 @@ def stub_installer(sysinfo, dutil, osinfo):
     collect_firmware = installer.collect_firmware
 
     def collect_firmware_from_an_encrypted_recovery(pkg):
-        with _newer_trackpad_keys(), _neo_peripheral_collectors(installer):
+        with _newer_trackpad_keys(), _neo_peripheral_collectors(installer), \
+                _installed_macos_wifi(installer) as radios:
             result = _collect_firmware(pkg)
+            if radios is not None:
+                try:
+                    radios.require()
+                except omarchy_wifi.WiFiError as error:
+                    raise AsahiAdapterError(f"Wi-Fi firmware collection failed: {error}") from error
         required = getattr(installer, "required_neo_peripherals", [])
         _collect_neo_radios(installer, pkg, required="radio" in required)
         _collect_neo_touch_id(installer, pkg, required="touch-id" in required)
@@ -707,6 +813,13 @@ def stub_installer(sysinfo, dutil, osinfo):
         return result
 
     def _collect_firmware(pkg):
+        try:
+            return _collect_firmware_once(pkg)
+        except BaseException:
+            _detach_recovery_ramdisk()
+            raise
+
+    def _collect_firmware_once(pkg):
         image = os.path.join(
             installer.osi.recovery,
             installer.osi.vgid,
@@ -737,6 +850,24 @@ def stub_installer(sysinfo, dutil, osinfo):
 
     installer.install_files = install_files_with_decrypted_images_and_omarchys_step2
     return installer
+
+
+def _detach_recovery_ramdisk(mountpoint="recovery"):
+    """Detach the ramdisk stub's collect_firmware attached at its relative
+    "recovery" mountpoint, which it detaches only when the collection
+    succeeds. A ramdisk left attached makes the next attach of the same image
+    fail. Only this run's own mountpoint, in the engine's working directory, is
+    touched, and a detach that fails never hides the collection's error."""
+    path = os.path.abspath(mountpoint)
+    if not os.path.ismount(path):
+        return
+    for command in (["hdiutil", "detach", "-quiet", path], ["hdiutil", "detach", "-quiet", "-force", path]):
+        try:
+            if subprocess.run(command, check=False).returncode == 0:
+                return
+        except OSError:
+            return
+    logging.warning(f"could not detach the recovery ramdisk at {path}")
 
 
 def _validate_neo_firmware_package(pkg):
@@ -1243,6 +1374,7 @@ class AsahiStage1Adapter:
         self.template = None
         self.osins = None
         self.os_firmware = None
+        self.confined = None
         self.target_part = None
         self.store_receipt = None
         self.preflight_complete = False
@@ -1339,7 +1471,21 @@ class AsahiStage1Adapter:
         if board is not None:
             read_board_stage1(board, self.osins.pkg.read, self.template["next_object"])
         device_class = self.installer.sysinfo.device_class
-        esp_board_layout(device_class, esp_members, common_allowed=self.common_stage1)
+        self.confined = confined_stage1(
+            device_class, getattr(self.installer.sysinfo, "chip_id", None), esp_members)
+        if self.confined is not None:
+            if self.common_stage1:
+                raise AsahiAdapterError("an M4 or later Mac never boots the raw common Stage 1")
+            if not self.native_recovery_gui:
+                # Only the native Recovery pads the Mach-O for the window.
+                raise AsahiAdapterError("an M4 or later Mac needs the native Recovery")
+            read_macho_stage1(self.confined, self.osins.pkg.read)
+            size = self.osins.pkg.getinfo(self.confined.stage2_member).file_size
+            if not 0 < size <= MAX_CONFINED_STAGE2_BYTES:
+                raise AsahiAdapterError(
+                    f"{self.confined.stage2_member} must hold 1 byte to 16 MiB, the slot aura keeps for it")
+        esp_board_layout(device_class, esp_members, common_allowed=self.common_stage1,
+                         confined=self.confined)
         stage2 = ESP_STAGE2 if self.common_stage1 else BOARD_STAGE2.get(device_class)
         if stage2 is not None and self.osins.pkg.getinfo(stage2).file_size <= 0:
             raise AsahiAdapterError(f"this image has an empty {stage2}")
@@ -1502,20 +1648,29 @@ class AsahiStage1Adapter:
             self.osins.firmware_package = firmware_package
 
         self.osins.install(self.installer.ins)
-        install_board_stage1(
-            self.installer.sysinfo.device_class,
-            self.os_firmware,
-            self.osins.pkg.read,
-            self.osins.efi_part.uuid,
-            self.installer.ins.boot_obj_path,
-            self.template.get("next_object", "m1n1/boot.bin"),
-            common_allowed=self.common_stage1,
-        )
+        if self.confined is not None:
+            install_macho_stage1(
+                self.confined,
+                self.osins.pkg.read,
+                self.osins.efi_part.uuid,
+                self.installer.ins.boot_obj_path,
+            )
+        else:
+            install_board_stage1(
+                self.installer.sysinfo.device_class,
+                self.os_firmware,
+                self.osins.pkg.read,
+                self.osins.efi_part.uuid,
+                self.installer.ins.boot_obj_path,
+                self.template.get("next_object", "m1n1/boot.bin"),
+                common_allowed=self.common_stage1,
+            )
         install_esp_board_layout(
             self.installer.sysinfo.device_class,
             self._esp_members(),
             self.installer.dutil.mount(self.osins.efi_part.name),
             common_allowed=self.common_stage1,
+            confined=self.confined,
         )
         # Removal recognises an installation by these ESP records, so write
         # them before any later step can fail, and again once it is complete.
@@ -1531,6 +1686,7 @@ class AsahiStage1Adapter:
                 requirement=self.recovery_requirement if self.use_helper_recovery else None,
                 authorized_owner=self.authorized_owner if self.use_helper_recovery else None,
                 expected_bootstrap=self.source_bootstrap if self.use_helper_recovery else None,
+                boot_mode="macho" if self.confined is not None else "raw",
             )
         self._record_installation(log_only=True)
         self._clean_esp()
@@ -2013,6 +2169,7 @@ class AsahiStage1Adapter:
                 self.installer.sysinfo.device_class,
                 (member.filename for member in members),
                 common_allowed=self.common_stage1,
+                confined=self.confined,
             )
         else:
             layout = {

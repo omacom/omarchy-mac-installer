@@ -19,6 +19,9 @@ struct InstallConfiguration: Decodable {
   let bootstrap: BootstrapAuthorization?
   let allowCustomBootArguments: Bool?
 
+  /// The boot mode the engine chose for this Mac's chip; decode() admits only these.
+  var mode: AuraBootMode { AuraBootMode(rawValue: bootMode)! }
+
   static func decode(_ data: Data) throws -> InstallConfiguration {
     let keys: Set<String> = [
       "schema", "volumeName", "systemUUID", "groupUUID", "prebootUUID", "espUUID",
@@ -29,7 +32,10 @@ struct InstallConfiguration: Decodable {
         && (object["allowCustomBootArguments"] == nil || object["allowCustomBootArguments"] is Bool)
     else { throw InstallConfigurationError.invalid }
     let config = try JSONDecoder().decode(Self.self, from: data)
-    guard config.schema == 2, config.bootMode == "raw", config.stage2Path == "m1n1/boot.bin",
+    // raw loads m1n1/boot.bin; macho (an execute-window chip) loads the confined
+    // Stage 2, m1n1/boot-ctxr.bin. Nothing else is accepted.
+    guard config.schema == 2, let mode = AuraBootMode(rawValue: config.bootMode),
+      config.stage2Path == mode.espStage2Path,
       !config.volumeName.isEmpty, config.volumeName.count <= 80,
       !config.volumeName.contains("/"),
       config.volumeName.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })

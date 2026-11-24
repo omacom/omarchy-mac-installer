@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Inspection fails an image whose boot components are missing or differ from the set."""
 import hashlib
+import json
 import os
 import re
 from pathlib import Path
+import json
 import shutil
 import sys
 import tempfile
@@ -15,9 +17,9 @@ import fixtures  # noqa: E402
 
 inspection = fixtures.load("inspection", "builder/inspection.py")
 inspection.OWNER_UID = os.geteuid()
-CHECKS = ("candidate-versions", "runtime-sources", "minimum-versions", "refused-packages", "apple-packages", "installed-boot-payloads",
+CHECKS = ("candidate-versions", "runtime-sources", "boot-loader", "minimum-versions", "refused-packages", "apple-packages", "installed-boot-payloads",
           "candidate-files", "package-mtrees",
-          "m1n1-stage2", "aurora-device-trees", "limine-uki", "embedded-initramfs", "boot-splash", "boot-maintenance",
+          "m1n1-stage2", "ctxr-uboot", "aurora-device-trees", "limine-uki", "embedded-initramfs", "display-gate-modules", "boot-splash", "boot-maintenance",
           "image-target", "first-boot", "snapshots", "pacman-config", "installed-system", "speaker-routing", "factory")
 # Fixture roots live on whatever filesystem the tests run on: these paths stand in for btrfs subvolumes.
 SUBVOLUMES: set[Path] = set()
@@ -132,6 +134,91 @@ class InspectionTest(unittest.TestCase):
         with self.assertRaisesRegex(inspection.InspectionError, "retired hardware profile"):
             inspection.Candidates(imported)
 
+    def uki_with_initramfs_modules(self, *modules):
+        """The image's UKI with an initramfs carrying MODULES as packaged .ko files."""
+        uki = self.root / "boot/efi/EFI/Linux/omarchy_linux-aurora.efi"
+        sections = dict(inspection.limine.pe_sections(uki))
+        extra = fixtures.initramfs({f"usr/lib/modules/{fixtures.RELEASE}/kernel/drivers/{m}.ko": b"ko" for m in modules})
+        sections[".initrd"] = sections[".initrd"] + extra
+        uki.write_bytes(fixtures.pe_image(sections))
+
+    def display_gate_dropin(self):
+        dropin = self.root / inspection.DISPLAY_GATE_DROPIN
+        dropin.parent.mkdir(parents=True, exist_ok=True)
+        dropin.write_text("MODULES+=(phy-apple-t6040-usb2 mux-apple-display-crossbar atc-t6050-dp phy-apple-atc phy-apple-dptx)\n")
+
+    def test_an_image_without_the_display_gate_dropin_holds_no_modules(self):
+        # Today's lanes: the kernel ships some gate modules, but omarchy-mac-boot has no drop-in yet.
+        candidates = inspection.Candidates(self.candidates)
+        candidates._listings[inspection.KERNEL] = candidates.listing(inspection.KERNEL) + [
+            f"usr/lib/modules/{fixtures.RELEASE}/kernel/drivers/phy/apple/phy-apple-dptx.ko.zst"]
+        self.assertIn("no display gate drop-in", inspection.check_display_gate_modules(self.root, candidates))
+
+    def test_a_kernel_without_display_gate_modules_needs_none(self):
+        self.display_gate_dropin()
+        self.assertIn("ships none", inspection.check_display_gate_modules(self.root, inspection.Candidates(self.candidates)))
+
+    def test_the_display_gate_modules_a_kernel_ships_must_be_in_the_initramfs(self):
+        # out6: the J616s DP PHY was on the root only, so the first boot's display gate gave up.
+        self.display_gate_dropin()
+        shipped = [f"usr/lib/modules/{fixtures.RELEASE}/kernel/drivers/phy/apple/{m}.ko.zst"
+                   for m in ("phy-apple-t6040-usb2", "mux-apple-display-crossbar", "atc_t6050_dp", "phy-apple-atc",
+                             "phy-apple-dptx")]
+        candidates = inspection.Candidates(self.candidates)
+        listing = candidates.listing(inspection.KERNEL)
+        candidates._listings[inspection.KERNEL] = listing + shipped
+        with self.assertRaisesRegex(inspection.InspectionError, "lacks the display gate's .*phy-apple-t6040-usb2"):
+            inspection.check_display_gate_modules(self.root, candidates)
+        self.uki_with_initramfs_modules("mux-apple-display-crossbar", "atc-t6050-dp", "phy-apple-atc", "phy-apple-dptx")
+        with self.assertRaisesRegex(inspection.InspectionError, r"lacks the display gate's phy-apple-t6040-usb2 \("):
+            inspection.check_display_gate_modules(self.root, candidates)
+        self.uki_with_initramfs_modules("phy_apple_t6040_usb2")
+        self.assertIn("phy-apple-t6040-usb2", inspection.check_display_gate_modules(self.root, candidates))
+
+    def test_an_image_without_the_confined_stage2_needs_no_ctxr_uboot(self):
+        report = self.inspect()
+        self.assertEqual(report["checks"]["ctxr-uboot"]["result"], "passed")
+        self.assertIn("no confined Stage 2", report["checks"]["ctxr-uboot"]["detail"])
+
+    def confined_candidates(self, uboot=b"u-boot"):
+        """The fixture set as an aura set: aura's boot object and the given U-Boot."""
+        candidates = inspection.Candidates(self.candidates)
+        candidates.loader = {"stage2": "aura", "stage1": "m1n1-aurora"}
+        member = candidates.member
+        staged = {"usr/share/aura/stage1/aura-boot.macho": b"aura boot object",
+                  "usr/lib/asahi-boot/u-boot-nodtb.bin": uboot}
+        candidates.member = lambda name, path: staged[path] if path in staged else member(name, path)
+        return candidates
+
+    def stage_confined(self, confined=None, macho=b"aura boot object"):
+        stage2 = (self.root / "boot/efi/m1n1/boot.bin").read_bytes()
+        (self.root / "boot/efi/m1n1/boot-ctxr.bin").write_bytes(stage2 if confined is None else confined)
+        path = self.root / "boot/efi/aurora/stage1.macho"
+        path.unlink(missing_ok=True)
+        if macho is not None:
+            path.write_bytes(macho)
+
+    def test_the_confined_stage2_needs_a_uboot_that_reads_the_ctxr_window(self):
+        # A J616s booted on one CPU with uboot-aurora d30213e, which predates u-boot#32.
+        self.stage_confined()
+        self.assertFails("ctxr-uboot", "not aura")
+        with self.assertRaisesRegex(inspection.InspectionError, "aurora-silicon/u-boot#32"):
+            inspection.check_ctxr_uboot(self.root, self.confined_candidates())
+        candidates = self.confined_candidates(b"u-boot " + inspection.CTXR_WINDOW_PROPERTY)
+        self.assertIn("u-boot#32", inspection.check_ctxr_uboot(self.root, candidates))
+
+    def test_the_staged_m4_boot_payloads_must_be_the_sets(self):
+        # What an execute-window Mac loads is the staged copies, so a stale one is caught.
+        stage2 = (self.root / "boot/efi/m1n1/boot.bin").read_bytes()
+        candidates = self.confined_candidates(b"u-boot " + inspection.CTXR_WINDOW_PROPERTY)
+        for confined, macho, message in ((stage2 + b"stale", b"aura boot object", "the inspected common bundle"),
+                                         (None, b"another boot object", "the authenticated aura package"),
+                                         (None, None, "the authenticated aura package")):
+            with self.subTest(message=message, macho=macho):
+                self.stage_confined(confined, macho)
+                with self.assertRaisesRegex(inspection.InspectionError, message):
+                    inspection.check_ctxr_uboot(self.root, candidates)
+
     def test_the_j700_boot_payloads_must_be_the_sets(self):
         for rel, data in (("boot/efi/aurora/stage1-j700.bin", b"another stage 1"),
                           ("boot/efi/m1n1/boot-j700.bin", b"another stage 2")):
@@ -238,6 +325,15 @@ class InspectionTest(unittest.TestCase):
         report = {}
         with self.assertRaisesRegex(inspection.InspectionError, "t8132-j604"):
             inspection.check_supported_models(self.root, inspection.Candidates(self.candidates), report, policy)
+
+    def test_an_edge_only_device_tree_is_required_on_edge_alone(self):
+        policy = dict(fixtures.POLICY, edge_device_trees=["t8142-j815"])
+        candidates = inspection.Candidates(self.candidates)
+        for channel in (None, "rc", "stable"):
+            with self.subTest(channel):
+                inspection.check_supported_models(self.root, candidates, {}, policy, channel)
+        with self.assertRaisesRegex(inspection.InspectionError, "t8142-j815"):
+            inspection.check_supported_models(self.root, candidates, {}, policy, "edge")
 
     def test_limine_loader_menu_and_uki(self):
         esp = type("Esp", (), {"__truediv__": lambda _, rel: self.root / "boot/efi" / rel})()
@@ -1107,6 +1203,48 @@ class ChannelImageInspectionTest(unittest.TestCase):
         fixtures.write(self.factory, "var/lib/omarchy/factory-sealed", "format=2\ncandidate_set=x\ncandidate_source_commit=y\n")
         self.assertFails("factory", "records another channel set")
 
+    def test_an_edge_image_boots_aura_behind_m1n1_auroras_neo_stage1(self):
+        report = self.inspect()
+        self.assertEqual(report["installed_versions"]["aura"], fixtures.AURA_VERSION)
+        self.assertIsNone(report["installed_versions"]["m1n1-aurora"], "the Stage 1 source is never installed")
+        self.assertIn("Stage 2 from aura, the MacBook Neo's raw Stage 1 from m1n1-aurora",
+                      report["checks"]["boot-loader"]["detail"])
+        self.assertIn("m1n1-aurora", report["checks"]["refused-packages"]["detail"])
+        self.assertNotIn("aura,", report["checks"]["refused-packages"]["detail"])
+        stage2 = fixtures.aura_contents()["usr/lib/asahi-boot/m1n1.bin"]
+        self.assertTrue((self.root / "boot/efi/m1n1/boot.bin").read_bytes().startswith(stage2))
+        self.assertEqual((self.root / "boot/efi/aurora/stage1-j700.bin").read_bytes(),
+                         fixtures.default_contents()["m1n1-aurora"]["usr/share/m1n1-aurora/stage1/m1n1-raw.bin"])
+
+    def test_an_edge_image_with_aura_s_own_stage1_fails(self):
+        # Edge new installs keep m1n1-aurora's Stage 1 until aura's is qualified on a Neo.
+        (self.root / "boot/efi/aurora/stage1-j700.bin").write_bytes(
+            fixtures.aura_contents()["usr/share/aura/stage1/aura-raw.bin"])
+        self.assertFails("installed-boot-payloads", "J700 Stage 1 does not match the authenticated m1n1-aurora package")
+
+    def test_an_edge_image_with_m1n1_aurora_installed_fails(self):
+        fixtures.local_package(self.root, "m1n1-aurora", fixtures.VERSIONS["m1n1-aurora"], [])
+        self.assertFails("refused-packages", "m1n1-aurora")
+        self.assertFails("candidate-versions", "m1n1-aurora is installed, but the set carries it only for its raw Stage 1")
+
+    def test_an_edge_image_with_m1n1_aurora_s_stage2_fails(self):
+        (self.root / "usr/lib/asahi-boot/m1n1.bin").write_bytes(
+            fixtures.default_contents()["m1n1-aurora"]["usr/lib/asahi-boot/m1n1.bin"])
+        self.assertFails("installed-boot-payloads", "m1n1.bin is not aura's")
+
+    def test_an_edge_set_must_carry_the_policys_boot_loader(self):
+        imported = Path(tempfile.mkdtemp(dir=self.base)) / "set"
+        shutil.copytree(self.set, imported)
+        imported.chmod(0o755)
+        summary = imported / "import.json"
+        summary.chmod(0o644)
+        value = json.loads(summary.read_text())
+        value["boot_loader"] = {"stage2": "aura", "stage1": "aura"}
+        summary.write_text(json.dumps(value))
+        report = inspection.inspect(self.root, imported, "edge", self.factory, trust=self.trust)
+        self.assertEqual(report["checks"]["boot-loader"]["result"], "failed")
+        self.assertRegex(report["checks"]["boot-loader"]["detail"], "is not the policy's")
+
 
 class StableChannelImageInspectionTest(unittest.TestCase):
     """A public image built from the stable channel set for v4.5.0: the clean runtime, the stable
@@ -1333,6 +1471,30 @@ class TestImagePinTest(unittest.TestCase):
     def test_template_needs_one_options_section(self):
         with self.assertRaisesRegex(ValueError, "options"):
             fixtures.test_image_pin.render(b"[core]\n", ["omarchy"])
+
+
+
+class DeviceTreeCoverageTest(unittest.TestCase):
+    """Device trees are per board: the trust policy names one for every Mac the
+    catalogs may offer (scripts/supported-models.json, untested ones included)
+    and none beyond them. A board joins both together, so the image can never
+    admit a Mac its kernel cannot describe, or carry a tree no catalog offers.
+    An edge-only tree belongs to an untested Mac, which rc and stable never offer."""
+
+    def test_every_supported_mac_has_exactly_one_policy_device_tree(self):
+        manifest = json.loads((fixtures.ROOT.parent / "scripts/supported-models.json").read_text())
+        boards = {identifier.removeprefix("apple,") for identifier in manifest["supported"]}
+        untested = {identifier.removeprefix("apple,") for identifier in manifest.get("untested", {})}
+        edge_only = {tree.split("-", 1)[1] for tree in fixtures.POLICY.get("edge_device_trees", [])}
+        self.assertEqual(sorted(edge_only - untested), [], "an edge-only device tree for a tested Mac")
+        trees = {}
+        for tree in fixtures.POLICY["device_trees"] + fixtures.POLICY.get("edge_device_trees", []):
+            found = re.fullmatch(r"t([0-9a-f]{4})-([jk][0-9]+[a-z]*)", tree)
+            self.assertIsNotNone(found, f"{tree} is not t<chip>-<board>")
+            self.assertNotIn(found[2], trees, f"{found[2]} has two device trees")
+            trees[found[2]] = tree
+        self.assertEqual(sorted(set(trees) - boards), [], "device trees for Macs no catalog offers")
+        self.assertEqual(sorted(boards - set(trees)), [], "supported Macs without a device tree")
 
 
 if __name__ == "__main__":

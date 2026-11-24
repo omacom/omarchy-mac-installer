@@ -11,7 +11,23 @@ import Foundation
       "bootMode": "raw", "stage2Path": "m1n1/boot.bin",
     ]
     let config = try InstallConfiguration.decode(JSONSerialization.data(withJSONObject: value))
-    precondition(config.volumeName == "Omarchy Test" && config.bootMode == "raw")
+    precondition(config.volumeName == "Omarchy Test" && config.mode == .raw)
+    var confined = value
+    confined["bootMode"] = "macho"
+    confined["stage2Path"] = "m1n1/boot-ctxr.bin"
+    let macho = try InstallConfiguration.decode(JSONSerialization.data(withJSONObject: confined))
+    precondition(macho.mode == .macho && macho.stage2Path == "m1n1/boot-ctxr.bin")
+    for (mode, path) in [
+      ("macho", "m1n1/boot.bin"), ("raw", "m1n1/boot-ctxr.bin"), ("padded", "m1n1/boot-ctxr.bin"),
+    ] {
+      var changed = value
+      changed["bootMode"] = mode
+      changed["stage2Path"] = path
+      do {
+        _ = try InstallConfiguration.decode(JSONSerialization.data(withJSONObject: changed))
+        preconditionFailure("accepted \(mode) loading \(path)")
+      } catch {}
+    }
     for (key, bad) in [
       ("schema", 1), ("schema", true), ("bootMode", "macho"),
       ("stage2Path", "../boot.bin"), ("systemUUID", "disk0s1"),
@@ -61,6 +77,6 @@ import Foundation
         preconditionFailure("accepted invalid bootstrap \(key)")
       } catch {}
     }
-    print("PASS strict per-install configuration, raw-only mode, IDs, paths and missing fields")
+    print("PASS strict per-install configuration, raw or Mach-O mode, IDs, paths, missing fields")
   }
 }

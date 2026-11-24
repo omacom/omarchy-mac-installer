@@ -1126,6 +1126,21 @@ if command -v pacman >/dev/null 2>&1; then
     'm1n1-neo|1.6.1.aurora16-1|%PROVIDES%\nm1n1=1.6.1.aurora16\n\n%CONFLICTS%\nm1n1\n\n'
   boot_check "asahi-alarm asahi-scripts" "an rc-like lane's boot transaction takes asahi-alarm's asahi-scripts"
   pass "pacman resolves the boot set to m1n1-aurora, uboot-aurora and the lane's scripts tool (aurora-scripts from [omarchy], else asahi-alarm's), never aura, m1n1-neo, m1n1 or uboot-asahi"
+  # Edge (omacom/omarchy-pkgs#3025): [omarchy-candidates] holds aura, never m1n1-aurora, the Stage 1 source.
+  rm -rf "$scratch/boot-dbpath" "$scratch"/boot-db-*
+  boot_db omarchy-candidates \
+    'aura|1.0.0b13.r20261118-1|%DEPENDS%\naurora-scripts>=20260127.1\nuboot-aurora\n\n%PROVIDES%\nm1n1=1.6.1.aurora23\nm1n1-aurora=1.6.1.aurora23\nm1n1-neo=1.6.1.aurora23\n\n%CONFLICTS%\nm1n1\nm1n1-aurora\nm1n1-neo\nlinux-aurora<7.3.0\n\n%REPLACES%\nm1n1-aurora\nm1n1-neo\n\n' \
+    'linux-aurora|7.3.0.aurora0testedgeC-1|' \
+    'uboot-aurora|2026.07.aurora6-1|%PROVIDES%\nuboot-asahi=2026.07.aurora6\n\n%CONFLICTS%\nuboot-asahi\nuboot-asahi-j700\n\n' \
+    'omarchy-mac-boot|20261023-1|%DEPENDS%\nasahi-scripts\nm1n1\nuboot-asahi\n\n'
+  boot_db omarchy \
+    'm1n1-aurora|1.6.1.aurora23-4|%PROVIDES%\nm1n1=1.6.1.aurora23\nm1n1-neo=1.6.1.aurora23\n\n%CONFLICTS%\nm1n1\naura\nm1n1-neo\n\n%REPLACES%\nm1n1-neo\n\n' \
+    'aurora-scripts|20260127.1-1|%PROVIDES%\nasahi-scripts=20260127.1\n\n'
+  boot_db asahi-alarm 'm1n1|1.6.1-1|' 'uboot-asahi|2026.07.asahi2-1|' 'asahi-scripts|20260127.1-1|'
+  expected=$'omarchy aurora-scripts\nomarchy-candidates aura\nomarchy-candidates linux-aurora\nomarchy-candidates omarchy-mac-boot\nomarchy-candidates uboot-aurora'
+  resolved=$(boot_resolved omarchy-candidates/aura omarchy-candidates/linux-aurora omarchy-candidates/uboot-aurora omarchy-candidates/omarchy-mac-boot)
+  [[ $resolved == "$expected" ]] || fail "the edge boot transaction resolves to aura with the 7.3 kernel, never m1n1-aurora: $resolved"
+  pass "pacman resolves the edge boot set to aura, the 7.3 kernel and uboot-aurora, never m1n1-aurora or m1n1"
 elif [[ ${IMAGE_BUILDER_REQUIRE_PACMAN:-} == 1 ]]; then
   fail "pacman resolution of the boot transaction needs pacman (IMAGE_BUILDER_REQUIRE_PACMAN=1)"
 else
@@ -1150,6 +1165,92 @@ fi
   fi
 ) || fail "the J700 boot payloads are missing or mismatched"
 pass "every image stages matched J700 board payloads from the canonical Stage 1 and rejects a missing one"
+
+# An edge set installs aura but stages the Neo's raw Stage 1 from m1n1-aurora's
+# frozen archive (omacom/omarchy-pkgs#3025), never aura's own Stage 1.
+(
+  candidates=$scratch/edge-board-inputs
+  target=$scratch/edge-board-target
+  work=$scratch/edge-board-work
+  mkdir -p "$candidates/archive/usr/share/m1n1-aurora/stage1" "$target/usr/share/aura/stage1" "$target/boot/efi/m1n1" "$work"
+  printf 'm1n1-aurora raw Stage 1' >"$candidates/archive/usr/share/m1n1-aurora/stage1/m1n1-raw.bin"
+  (cd "$candidates/archive" && bsdtar -cJf "$candidates/m1n1-aurora-1.6.1.aurora23-4-aarch64.pkg.tar.xz" usr)
+  printf '%s\n' '{"boot_loader": {"stage2": "aura", "stage1": "m1n1-aurora"}, "packages": [' \
+    '{"name": "aura", "version": "1.0.0b13.r20261118-1", "filename": "aura-1.0.0b13.r20261118-1-aarch64.pkg.tar.xz", "group": "boot"},' \
+    '{"name": "m1n1-aurora", "version": "1.6.1.aurora23-4", "filename": "m1n1-aurora-1.6.1.aurora23-4-aarch64.pkg.tar.xz", "group": "stage1"}]}' \
+    >"$candidates/import.json"
+  printf 'aura raw Stage 1' >"$target/usr/share/aura/stage1/aura-raw.bin"
+  printf 'aura Stage 2 bundle' >"$target/boot/efi/m1n1/boot.bin"
+  stage_board_boot_payloads
+  [[ $(<"$target/boot/efi/aurora/stage1-j700.bin") == "m1n1-aurora raw Stage 1" ]] || exit 1
+  cmp "$target/boot/efi/m1n1/boot.bin" "$target/boot/efi/m1n1/boot-j700.bin" || exit 1
+  [[ $(installed_set .name) == aura && $(candidate_names stage1) == m1n1-aurora ]] || exit 1
+  refused=$(refused_names | paste -sd' ' -)
+  [[ " $refused " == *" m1n1-aurora "* && " $refused " != *" aura "* ]] || exit 1
+  jq '.packages |= map(select(.group != "stage1"))' "$candidates/import.json" >"$work/import.json"
+  cp "$work/import.json" "$candidates/import.json"
+  if (fail() { builder_fail "$@"; }; stage_board_boot_payloads) >/dev/null 2>&1; then
+    exit 1
+  fi
+) || fail "an edge image stages the Neo's Stage 1 from m1n1-aurora's archive beside aura"
+pass "an edge image installs aura, refuses m1n1-aurora, and stages the Neo's raw Stage 1 from m1n1-aurora's archive"
+refused=$(refused_names | paste -sd' ' -)
+[[ " $refused " == *" aura "* && " $refused " != *" m1n1-aurora "* ]] ||
+  fail "a set without a boot loader record keeps m1n1-aurora and refuses aura: $refused"
+pass "a set without a boot loader record (rc, stable, candidate sets) keeps m1n1-aurora and refuses aura"
+
+# An image whose Stage 2 is aura stages its Mach-O Stage 1 and the confined Stage 2 for M4 and later.
+(
+  target=$scratch/confined-boot-target
+  mkdir -p "$target/usr/share/aura/stage1" "$target/boot/efi/m1n1"
+  kernel() { # kernel <version>: the installed linux-aurora
+    rm -rf "$target"/var/lib/pacman/local/linux-aurora-*
+    mkdir -p "$target/var/lib/pacman/local/linux-aurora-$1"
+    printf '%%NAME%%\nlinux-aurora\n\n%%VERSION%%\n%s\n' "$1" >"$target/var/lib/pacman/local/linux-aurora-$1/desc"
+  }
+  kernel 7.3.0.aurora0testedgeC-1
+  printf 'assembled Stage 2' >"$target/boot/efi/m1n1/boot.bin"
+  stage_confined_boot_payloads
+  [[ ! -e $target/boot/efi/aurora/stage1.macho && ! -e $target/boot/efi/m1n1/boot-ctxr.bin ]] || exit 1
+  printf 'aura linker Mach-O' >"$target/usr/share/aura/stage1/aura.macho"
+  printf 'aura Mach-O boot object' >"$target/usr/share/aura/stage1/aura-boot.macho"
+  stage_confined_boot_payloads
+  [[ ! -e $target/boot/efi/aurora/stage1.macho && ! -e $target/boot/efi/m1n1/boot-ctxr.bin ]] || exit 1
+  if command -v vercmp >/dev/null 2>&1; then
+    mkdir -p "$target/var/lib/pacman/local/aura-1.0.0b6-1"
+    printf '%%NAME%%\naura\n\n%%VERSION%%\n1.0.0b6-1\n' >"$target/var/lib/pacman/local/aura-1.0.0b6-1/desc"
+    stage_confined_boot_payloads
+    [[ ! -e $target/boot/efi/m1n1/boot-ctxr.bin ]] || exit 1
+    rm -r "$target/var/lib/pacman/local/aura-1.0.0b6-1"
+    mkdir -p "$target/var/lib/pacman/local/aura-1.0.0b13.r20261118.edgeB2-1"
+    printf '%%NAME%%\naura\n\n%%VERSION%%\n1.0.0b13.r20261118.edgeB2-1\n' \
+      >"$target/var/lib/pacman/local/aura-1.0.0b13.r20261118.edgeB2-1/desc"
+    stage_confined_boot_payloads
+    cmp "$target/boot/efi/m1n1/boot.bin" "$target/boot/efi/m1n1/boot-ctxr.bin" || exit 1
+    rm -r "$target/var/lib/pacman/local" "$target/boot/efi/m1n1/boot-ctxr.bin" "$target/boot/efi/aurora/stage1.macho"
+  fi
+  : >"$target/usr/share/aura/monitor-free"
+  # A monitor-free aura beside a kernel older than 7.3 would boot an M4 on one CPU.
+  for old in 7.2.11.aurora16-1 1:7.2.11-2; do
+    kernel "$old"
+    if (fail() { builder_fail "$@"; }; stage_confined_boot_payloads) >/dev/null 2>&1; then
+      exit 1
+    fi
+  done
+  rm -rf "$target"/var/lib/pacman/local/linux-aurora-*
+  if (fail() { builder_fail "$@"; }; stage_confined_boot_payloads) >/dev/null 2>&1; then
+    exit 1
+  fi
+  kernel 7.4.1.aurora2-1
+  stage_confined_boot_payloads
+  cmp "$target/usr/share/aura/stage1/aura-boot.macho" "$target/boot/efi/aurora/stage1.macho" || exit 1
+  cmp "$target/boot/efi/m1n1/boot.bin" "$target/boot/efi/m1n1/boot-ctxr.bin" || exit 1
+  truncate -s $(( (16 << 20) + 1 )) "$target/boot/efi/m1n1/boot.bin"
+  if (fail() { builder_fail "$@"; }; stage_confined_boot_payloads) >/dev/null 2>&1; then
+    exit 1
+  fi
+) || fail "the M4 boot payloads are missing, mismatched or oversized"
+pass "a monitor-free aura image (marker or version) on linux-aurora 7.3 or later stages aura-boot.macho, never the linker aura.macho, and the confined Stage 2; others stage neither; an older kernel or over 16 MiB is refused"
 
 # Base runtime requests must resolve to the same reviewed stack as Apple requests.
 (

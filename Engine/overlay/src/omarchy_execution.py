@@ -20,7 +20,6 @@ STORE_IDENTIFIER = re.compile(r"^disk[0-9]+$")
 PARTITION_IDENTIFIER = re.compile(r"^disk[0-9]+(?:s[0-9]+)?$")
 LOWER_HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 SHA256_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
-UNSUPPORTED_DEVICES = {"apple,j614s"}
 REQUIRED_HUMAN_STEPS = (
     "enterOneTrueRecovery",
     "authenticateMachineOwner",
@@ -120,8 +119,8 @@ def admit_execution(
     _validate_request_identity_binding(request, identity)
     inventory = _validate_inventory(live_inventory)
 
-    if request["device_identifier"] in UNSUPPORTED_DEVICES:
-        raise ExecutionAdmissionError("device is explicitly unsupported")
+    # Which Macs may install is the signed catalog's decision, bound above,
+    # and the engine's chip and board tables'; no board is refused by name here.
     if request["store_identifier"] != inventory["system_store_identifier"]:
         raise ExecutionAdmissionError("system store changed")
     if request["layout_digest"] != inventory["layout_digest"]:

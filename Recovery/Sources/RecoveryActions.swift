@@ -82,6 +82,39 @@ enum RecoveryActions {
   static func hash(_ bytes: Data) -> String {
     RecoveryDigest.sha256(bytes)
   }
+  /// Bytes this volume's APFS container can still give to a file, or to kmutil in Preboot.
+  static func freeBytes(_ path: URL) throws -> UInt64 {
+    var status = statfs()
+    guard statfs(path.path, &status) == 0 else {
+      throw RecoveryFailure(message: "Could not read this volume's free space.")
+    }
+    return UInt64(status.f_bavail) * UInt64(status.f_bsize)
+  }
+  /// Pads the Mach-O Stage 1 for the execute window and checks what kmutil
+  /// derives from the file it will enroll: kcbz 0, so iBoot doesn't start SPTM,
+  /// and the kcrz the window needs. From aurora-installer 7be5339 (MIT).
+  static func stageExpandedStage1(_ stage1: Data, window: UInt64, at path: URL) throws {
+    let usage = try run("/usr/bin/kmutil", ["configure-boot", "--help"])
+    try check(
+      String(decoding: usage, as: UTF8.self).contains("--compress"),
+      "This Recovery's kmutil cannot compress startup software, which this Mac needs.")
+    let expanded = try MachOBootObject.expandExecuteWindow(stage1, window: window)
+    try expanded.requireSpace(freeBytes: freeBytes(path.deletingLastPathComponent()))
+    try expanded.write(to: path)
+    let output: Data
+    do {
+      output = try run(
+        "/usr/bin/kmutil", ["inspect", "-z", "-B", path.path, "--show-mach-boot-properties"])
+    } catch {
+      throw RecoveryFailure(
+        message:
+          "This Recovery's kmutil could not check the startup software, so it was not enrolled. Choose Utilities → Show Details for its output."
+      )
+    }
+    let used = try MachOBootObject.checkInspection(
+      String(decoding: output, as: UTF8.self), readOnlySize: expanded.readOnlySize)
+    InstallerLog.shared.append("Startup software padded and checked by kmutil: \(used).")
+  }
   @discardableResult static func run(_ path: String, _ args: [String]) throws -> Data {
     let logged = path != "/usr/sbin/nvram"
     let log = logged ? CommandLog("$ " + ([path] + args).joined(separator: " ")) : nil
@@ -348,19 +381,32 @@ enum RecoveryActions {
       }
     }
     let config = try configuration.get()
+    // The engine chose the boot mode by chip and recorded it; the selection
+    // can only confirm it.
+    let mode = config.mode
     try check(
-      selection.mode == .raw && !selection.nestedVirtualization,
-      "This installation includes raw boot mode only.")
+      selection.mode == mode && !selection.nestedVirtualization,
+      "This installation's boot mode is \(mode.rawValue) only.")
     try RecoveryOwnerResolver.verify(owner, current: resolveOwner())
     progress(0.05, "Verifying the installation files")
     let m = try manifest()
-    let stage1 = try asset(selection.mode.stage1Path, manifest: m)
-    let stage2 = try asset(selection.mode.stage2Path, manifest: m)
+    let stage1 = try asset(mode.stage1Path, manifest: m)
+    let stage2 = try asset(mode.stage2Path, manifest: m)
+    if mode == .macho {
+      // Before anything changes: aura's boot object, its configuration
+      // naming this ESP and the confined Stage 2.
+      try MachOBootObject.check(stage1)
+      let filled = try Stage1Configuration.read(stage1)
+      try check(
+        filled.espUUID.uppercased() == config.espUUID.uppercased()
+          && filled.stage2Path == config.stage2Path,
+        "The startup software does not name this installation's startup partition.")
+    }
     // A successful setup must retain a usable per-device repair baseline.
     _ = try RecoveryBaseline.firmware(
       manifest: m, root: payloadRoot())
     let modes = m["modes"] as? [String: [String: Any]]
-    guard let entry = modes?[selection.mode.rawValue],
+    guard let entry = modes?[mode.rawValue],
       let destination = entry["espPath"] as? String, destination == config.stage2Path
     else {
       throw RecoveryFailure(
@@ -422,7 +468,11 @@ enum RecoveryActions {
     try record(journal.phase)
     InstallerLog.shared.persist(to: operation.appendingPathComponent("installer.log"))
     let stage1Path = operation.appendingPathComponent("stage1")
-    try RecoveryFileTransaction.write(stage1, to: stage1Path)
+    if let window = mode.executeWindowSize {
+      try stageExpandedStage1(stage1, window: window, at: stage1Path)
+    } else {
+      try RecoveryFileTransaction.write(stage1, to: stage1Path)
+    }
     do {
       try RecoveryInstallationCoordinator.run(
         phase: journal.phase, persist: record,
@@ -460,7 +510,7 @@ enum RecoveryActions {
           progress(0.55, "Installing the startup software")
           try authorized(
             "/usr/bin/kmutil",
-            selection.mode.enrollmentArguments(stage1: stage1Path.path, volume: volume.path),
+            mode.enrollmentArguments(stage1: stage1Path.path, volume: volume.path),
             owner: owner, password: password)
         },
         finalize: {
@@ -471,7 +521,7 @@ enum RecoveryActions {
           try RecoveryFileTransaction.write(
             try JSONSerialization.data(
               withJSONObject: [
-                "schema": 1, "mode": selection.mode.rawValue, "stage2Path": destination,
+                "schema": 1, "mode": mode.rawValue, "stage2Path": destination,
                 "stage1SHA256": hash(stage1), "stage2SHA256": hash(stage2),
                 "nestedVirtualization": selection.nestedVirtualization, "status": "installed",
                 "recoveryAccountRequired": true, "operation": operation.path,
@@ -757,7 +807,7 @@ extension RecoveryActions {
       let record = try installed()
       guard let name = record["mode"] as? String, let mode = AuraBootMode(rawValue: name),
         let path = record["stage2Path"] as? String,
-        path == RecoveryBaseline.stage2Path, path == (try configuration.get()).stage2Path
+        path == mode.espStage2Path, path == (try configuration.get()).stage2Path
       else {
         throw RecoveryFailure(message: "The installed boot mode is not recorded.")
       }
@@ -771,7 +821,9 @@ extension RecoveryActions {
       files[path] = bytes
       let destination = try esp()
       let backup = state.appendingPathComponent("recover-" + UUID().uuidString + ".before")
-      try RecoveryBaseline.restore(files: files, root: destination, backup: backup) {
+      try RecoveryBaseline.restore(
+        files: files, root: destination, backup: backup, stage2Path: path
+      ) {
         try atomic($0, to: $1)
       }
       print("Stage 2 and device firmware restored.")

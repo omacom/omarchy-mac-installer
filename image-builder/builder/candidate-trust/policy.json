@@ -45,7 +45,8 @@
   "minimum_versions": {
     "omarchy-mac-boot": "20260921-10",
     "limine-mkinitcpio-hook": "1.39.0-2",
-    "m1n1-aurora": "1.6.1.aurora20-3"
+    "m1n1-aurora": "1.6.1.aurora20-3",
+    "aura": "1.0.0b13.r20261118-1"
   },
   "channel": {
     "repository": "omarchy",
@@ -60,6 +61,10 @@
           "omarchy-settings": "omarchy-settings-dev",
           "omarchy-mac": "omarchy-mac",
           "omarchy-mac-boot": "omarchy-mac-boot"
+        },
+        "boot_loader": {
+          "stage2": "aura",
+          "stage1": "m1n1-aurora"
         }
       },
       "rc": {

@@ -38,6 +38,63 @@
         [F.convergedInstall.stub, F.convergedInstall.esp] + F.convergedInstall.linux)
     }
 
+    /// aura's Mach-O fileset boot object (build/aura-boot.macho) as the engine's
+    /// install_macho_stage1 fills it for an execute-window Mac: the Mach-O header,
+    /// aura's version marker and the same config block as the J700 Stage 1.
+    static func auraBootObject(
+      esp: String, filetype: UInt32 = 12, marker: String = "##aura_ver##1.0.0b13-g703a0a92"
+    ) -> Data {
+      func le(_ value: UInt32) -> [UInt8] {
+        (0..<4).map { UInt8(truncatingIfNeeded: value >> (8 * $0)) }
+      }
+      var image = Data(le(0xFEED_FACF) + le(0x0100_000C) + le(0xC000_0002) + le(filetype))
+      image.append(Data(count: 16))
+      image.append(Data(" aura \(marker)\0 ".utf8))
+      let neo = auroraStage1(esp: esp)
+      let start = neo.range(of: Data("AURORA-S1-CFG01\0".utf8))!.lowerBound
+      image.append(neo[start...])
+      return image
+    }
+
+    func testAnExecuteWindowStubBootingAurasMachOBootObjectIsRecognised() throws {
+      // An M4 (J616s) install enrolls aura-boot.macho, not m1n1.
+      let disk = FakeRemovalDisk(F.neoMacos26(), install: F.convergedInstall)
+      disk.files!.stubBootObject = Self.auraBootObject(esp: F.convergedInstall.esp.lowercased())
+      let plan = try OmarchyRemovalPlan(disks: disk)
+      XCTAssertEqual(plan.kind, .installation)
+      XCTAssertEqual(
+        plan.members.map(\.uuid),
+        [F.convergedInstall.stub, F.convergedInstall.esp] + F.convergedInstall.linux)
+    }
+
+    func testAnAuraBootObjectMustNameThisESP() {
+      assertRejectedAuroraStage1(Self.auraBootObject(esp: F.id(77).lowercased()))
+    }
+
+    func testAForeignObjectIsStillRefused() {
+      let esp = F.convergedInstall.esp.lowercased()
+      for (name, object) in [
+        // A Mach-O that is not a fileset, or carries no aura marker.
+        ("a Mach-O executable", Self.auraBootObject(esp: esp, filetype: 2)),
+        (
+          "a fileset without aura's marker",
+          Self.auraBootObject(esp: esp, marker: "##other_ver##1")
+        ),
+        // aura's marker and config block, but not a Mach-O.
+        ("a raw image with aura's marker", Self.auraBootObject(esp: esp).dropFirst(32)),
+      ] {
+        let disk = FakeRemovalDisk(F.neoMacos26(), install: F.convergedInstall)
+        disk.files!.stubBootObject = Data(object)
+        XCTAssertThrowsError(try OmarchyRemovalPlan(disks: disk), name) { error in
+          XCTAssertTrue(
+            (error as? RemovalFailure)?.message.contains(
+              "the boot object in its startup container isn’t m1n1 or aura’s Mach-O boot object"
+            ) ?? false,
+            "\(name): \(error)")
+        }
+      }
+    }
+
     func testAnAuroraStage1MustNameThisESP() {
       assertRejectedAuroraStage1(Self.auroraStage1(esp: F.id(77).lowercased()))
     }
@@ -312,6 +369,88 @@
       assertRefusalPrefix(FakeRemovalDisk(grown, install: nil), "Found another system:")
     }
 
+    func testAStubWithAnUpdateVolumeMacOSAddedIsRecognised() throws {
+      var snapshot = F.alarm()
+      let index = snapshot.containers.firstIndex { $0.storeUUID == F.alarmInstall.stub }!
+      let stub = snapshot.containers[index]
+      let update = RemovalVolume(uuid: F.id(997), name: "Update", roles: ["Update"])
+      snapshot.containers[index] = RemovalContainer(
+        uuid: stub.uuid, storeUUID: stub.storeUUID, volumes: stub.volumes + [update])
+      let plan = try OmarchyRemovalPlan(disks: FakeRemovalDisk(snapshot, install: F.alarmInstall))
+      XCTAssertEqual(plan.kind, .installation)
+      XCTAssertEqual(plan.members.first?.uuid, F.alarmInstall.stub)
+
+      let second = RemovalVolume(uuid: F.id(996), name: "Update 2", roles: ["Update"])
+      snapshot.containers[index] = RemovalContainer(
+        uuid: stub.uuid, storeUUID: stub.storeUUID, volumes: stub.volumes + [update, second])
+      assertRefusalPrefix(
+        FakeRemovalDisk(snapshot, install: F.alarmInstall), "Found disk0s3 (APFS container, 2.5 GB")
+
+      let grouped = RemovalVolume(
+        uuid: F.id(997), name: "Update", roles: ["Update"], group: stub.volumes[0].group)
+      snapshot.containers[index] = RemovalContainer(
+        uuid: stub.uuid, storeUUID: stub.storeUUID, volumes: stub.volumes + [grouped])
+      assertRefusalPrefix(
+        FakeRemovalDisk(snapshot, install: F.alarmInstall), "Found disk0s3 (APFS container, 2.5 GB")
+    }
+
+    func testAStubWithAnUpdateVolumeIsRemovedStubFirst() throws {
+      var snapshot = F.alarm()
+      let index = snapshot.containers.firstIndex { $0.storeUUID == F.alarmInstall.stub }!
+      let stub = snapshot.containers[index]
+      snapshot.containers[index] = RemovalContainer(
+        uuid: stub.uuid, storeUUID: stub.storeUUID,
+        volumes: stub.volumes + [RemovalVolume(uuid: F.id(997), name: "Update", roles: ["Update"])])
+      let disk = FakeRemovalDisk(snapshot, install: F.alarmInstall)
+      let plan = try OmarchyRemovalPlan(disks: disk)
+      var phases = [String]()
+      try OmarchyRemovalExecutor(disks: disk).execute(plan) { phases.append($0) }
+      XCTAssertEqual(disk.operations.first, "container:\(F.alarmInstall.stub)")
+      XCTAssertEqual(disk.operations.last, "grow:\(F.mac)")
+      XCTAssertEqual(phases.last, "complete")
+      XCTAssertFalse(disk.state.partitions.contains { plan.members.contains($0) })
+      XCTAssertFalse(disk.state.containers.contains { $0.storeUUID == F.alarmInstall.stub })
+    }
+
+    func testAnAuraMachOStubWithAnUpdateVolumeIsRecognisedAndRemovedStubFirst() throws {
+      // An M4 (J616s) install that Software Update gave one ungrouped Update volume.
+      var snapshot = F.neoMacos26()
+      let index = snapshot.containers.firstIndex { $0.storeUUID == F.convergedInstall.stub }!
+      let stub = snapshot.containers[index]
+      snapshot.containers[index] = RemovalContainer(
+        uuid: stub.uuid, storeUUID: stub.storeUUID,
+        volumes: stub.volumes + [RemovalVolume(uuid: F.id(997), name: "Update", roles: ["Update"])])
+      let disk = FakeRemovalDisk(snapshot, install: F.convergedInstall)
+      disk.files!.stubBootObject = Self.auraBootObject(esp: F.convergedInstall.esp.lowercased())
+      let plan = try OmarchyRemovalPlan(disks: disk)
+      XCTAssertEqual(plan.kind, .installation)
+      XCTAssertEqual(
+        plan.members.map(\.uuid),
+        [F.convergedInstall.stub, F.convergedInstall.esp] + F.convergedInstall.linux)
+      var phases = [String]()
+      try OmarchyRemovalExecutor(disks: disk).execute(plan) { phases.append($0) }
+      XCTAssertEqual(disk.operations.first, "container:\(F.convergedInstall.stub)")
+      XCTAssertEqual(phases.last, "complete")
+      XCTAssertFalse(disk.state.partitions.contains { plan.members.contains($0) })
+      XCTAssertFalse(disk.state.containers.contains { $0.storeUUID == F.convergedInstall.stub })
+    }
+
+    func testAStubWithAVolumeRemovalDoesNotKnowIsRefusedByThatVolume() {
+      var snapshot = F.alarm()
+      let index = snapshot.containers.firstIndex { $0.storeUUID == F.alarmInstall.stub }!
+      let stub = snapshot.containers[index]
+      snapshot.containers[index] = RemovalContainer(
+        uuid: stub.uuid, storeUUID: stub.storeUUID,
+        volumes: stub.volumes + [
+          RemovalVolume(uuid: F.id(997), name: "Update", roles: ["Update"]),
+          RemovalVolume(uuid: F.id(998), name: "VM", roles: ["VM"]),
+        ])
+      assertRefusal(
+        FakeRemovalDisk(snapshot, install: F.alarmInstall),
+        "Found disk0s3 (APFS container, 2.5 GB, volumes “Asahi Alarm Minimal”, “Asahi Alarm Minimal - Data”, “Preboot”, “Recovery”, “Update”, “VM”). It looks like an installation’s startup container, but removal doesn’t recognise “VM”, so it stopped. Nothing was changed."
+      )
+    }
+
     func testStubVolumesMustBeExactlyOneInstallationsVolumeGroup() {
       var snapshot = F.alarm()
       let index = snapshot.containers.firstIndex { $0.storeUUID == F.alarmInstall.stub }!
@@ -331,7 +470,7 @@
         uuid: stub.uuid, storeUUID: stub.storeUUID,
         volumes: stub.volumes + [RemovalVolume(uuid: F.id(998), name: "VM", roles: ["VM"])])
       assertRefusalPrefix(
-        FakeRemovalDisk(snapshot, install: F.alarmInstall), "Found another system:")
+        FakeRemovalDisk(snapshot, install: F.alarmInstall), "Found disk0s3 (APFS container, 2.5 GB")
     }
 
     func testFrameMustBeISCThenBootedMacOSThenRecovery() {
@@ -416,7 +555,7 @@
           { $0.stubBootObject = nil }
         ),
         (
-          "the boot object in its startup container isn’t m1n1",
+          "the boot object in its startup container isn’t m1n1 or aura’s Mach-O boot object",
           {
             $0.stubBootObject = Data(
               "kernel STACKBOT chosen.asahi,efi-system-partition=\(esp)\n\0".utf8)
@@ -625,17 +764,37 @@
       }
       XCTAssertTrue(disk.operations.isEmpty)
 
-      let deleting = FakeRemovalDisk(F.alarm(), install: F.alarmInstall, failAt: 1)
-      deleting.startupState = .other("Asahi Alarm Minimal")
-      let next = try OmarchyRemovalPlan(disks: deleting)
-      deleting.startupAfterSet = [.success(.macOS)]
+      let refused = FakeRemovalDisk(F.alarm(), install: F.alarmInstall, failAt: 1)
+      refused.startupState = .other("Asahi Alarm Minimal")
+      let untouched = try OmarchyRemovalPlan(disks: refused)
+      refused.startupAfterSet = [.success(.macOS)]
       XCTAssertThrowsError(
-        try OmarchyRemovalExecutor(disks: deleting).execute(next, authorization: authorization()) {
-          _ in
-        }
+        try OmarchyRemovalExecutor(disks: refused).execute(
+          untouched, authorization: authorization()
+        ) { _ in }
       ) { error in
-        XCTAssertEqual((error as? RemovalFailure)?.message, "injected command failure")
-        XCTAssertEqual((error as? RemovalFailure)?.complete, false)
+        let failure = error as? RemovalFailure
+        XCTAssertEqual(
+          failure?.message,
+          "injected command failure Your Mac now starts up from macOS “Macintosh HD”. Nothing was deleted."
+        )
+        XCTAssertEqual(failure?.nothingDeleted, true)
+      }
+
+      for (failAt, halfway) in [(1, true), (2, false)] {
+        let deleting = FakeRemovalDisk(F.alarm(), install: F.alarmInstall, failAt: failAt)
+        deleting.deleteChangesBeforeFailing = halfway
+        deleting.startupState = .other("Asahi Alarm Minimal")
+        let next = try OmarchyRemovalPlan(disks: deleting)
+        deleting.startupAfterSet = [.success(.macOS)]
+        XCTAssertThrowsError(
+          try OmarchyRemovalExecutor(disks: deleting).execute(next, authorization: authorization())
+          { _ in }
+        ) { error in
+          XCTAssertEqual((error as? RemovalFailure)?.message, "injected command failure")
+          XCTAssertEqual((error as? RemovalFailure)?.complete, false)
+          XCTAssertEqual((error as? RemovalFailure)?.nothingDeleted, false)
+        }
       }
     }
 
@@ -1388,6 +1547,63 @@
       XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
       let next = try await service.removal(ticketID: nil, confirmation: "", authorization: nil)
       XCTAssertNotNil(next.ticket, "a refused startup change doesn't block the next review")
+    }
+
+    func testARefusedStubDeleteThatChangedNothingKeepsNoRecord() async throws {
+      let root = try temporaryDirectory()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let disk = FakeRemovalDisk(failAt: 1)
+      let service = server(root: root, disk: disk)
+      let inspection = try await service.removal(
+        ticketID: nil, confirmation: "", authorization: nil)
+      let result = try await service.removal(
+        ticketID: XCTUnwrap(inspection.ticket).id, confirmation: OmarchyRemovalTicket.confirmation,
+        authorization: authorization())
+      XCTAssertFalse(result.completed)
+      XCTAssertFalse(result.requiresReview)
+      XCTAssertEqual(result.message, "injected command failure No disk changes were made.")
+      XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
+      let next = try await service.removal(ticketID: nil, confirmation: "", authorization: nil)
+      XCTAssertNotNil(next.ticket, "an untouched disk doesn't block the next review")
+    }
+
+    func testARefusedStubDeleteAfterTheStartupSwitchSaysSo() async throws {
+      let root = try temporaryDirectory()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let disk = FakeRemovalDisk(failAt: 1)
+      disk.startupState = .other("Omarchy")
+      disk.startupAfterSet = [.success(.macOS)]
+      let service = server(root: root, disk: disk)
+      let inspection = try await service.removal(
+        ticketID: nil, confirmation: "", authorization: nil)
+      let ticket = try XCTUnwrap(inspection.ticket)
+      let result = try await service.removal(
+        ticketID: ticket.id, confirmation: ticket.confirmation, authorization: authorization())
+      XCTAssertFalse(result.requiresReview)
+      XCTAssertEqual(
+        result.message,
+        "injected command failure Your Mac now starts up from macOS “Macintosh HD”. Nothing was deleted."
+      )
+      XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
+    }
+
+    func testAStubDeleteThatFailedHalfwayKeepsTheRecord() async throws {
+      let root = try temporaryDirectory()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let disk = FakeRemovalDisk(failAt: 1)
+      disk.deleteChangesBeforeFailing = true
+      let service = server(root: root, disk: disk)
+      let inspection = try await service.removal(
+        ticketID: nil, confirmation: "", authorization: nil)
+      let result = try await service.removal(
+        ticketID: XCTUnwrap(inspection.ticket).id, confirmation: OmarchyRemovalTicket.confirmation,
+        authorization: authorization())
+      XCTAssertTrue(result.requiresReview)
+      XCTAssertTrue(result.message.hasPrefix("Removal stopped, and some data in"))
+      XCTAssertEqual(
+        try FileManager.default.contentsOfDirectory(atPath: root.path).filter {
+          $0.hasPrefix("removal-")
+        }.count, 1)
     }
 
     func testInterruptedJournalBlocksNewRequestsAfterHelperRestart() async throws {

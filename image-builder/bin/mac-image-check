@@ -137,6 +137,12 @@ def _module(name: str):
     return module
 
 
+def _engine_macho():
+    """The engine's own Mach-O Stage 1 test: builder/omarchy_macho.py, a byte-identical copy
+    of Engine/overlay/src/omarchy_macho.py, since the build container mounts only image-builder/."""
+    return _module("omarchy_macho")
+
+
 class CheckError(RuntimeError):
     pass
 
@@ -176,7 +182,7 @@ def expected_metadata(package: str, native_recovery: bool = False) -> dict:
                     {"image": "boot.img", "name": "Boot", "size": f"{BOOT_SIZE}B", "type": "Linux"},
                     {"expand": True, "image": "root.img", "name": "Root", "size": f"{ROOT_SIZE}B", "type": "Linux"},
                 ],
-                "supported_fw": ["13.5", "14.8.3", "26.6.2"],
+                "supported_fw": ["13.5", "14.8.3", "26.5.1", "26.6.2"],
             }
         ]
     }
@@ -227,6 +233,47 @@ def check_root_superblock(header: bytes, where: str) -> None:
 def check_plaintext_root(header: bytes, where: str) -> None:
     require(not header.startswith(b"LUKS\xba\xbe"), f"{where} carries a LUKS header")
     check_root_superblock(header, where)
+
+
+MACHO_STAGE1 = "esp/aurora/stage1.macho"
+CONFINED_STAGE2 = re.compile(r"esp/m1n1/boot-ctxr(?:-[jk][0-9]+[a-z]*)?\.bin")
+CONFINED_STAGE2_MAX_BYTES = 16 << 20
+
+
+def check_confined_boot_payloads(archive: zipfile.ZipFile, members: dict) -> None:
+    """The engine's execute-window contract (confined_stage1): aura's Mach-O Stage 1
+    and the confined Stage 2 it loads come together or not at all; the Stage 1 is a
+    fileset boot object with one configuration block, and each Stage 2 fits the
+    16 MiB slot aura keeps for it. Ported from aurora-installer 7be5339
+    (assemble-distribution-payload.py check_confined_stage2), MIT."""
+    confined = sorted(name for name in members if CONFINED_STAGE2.fullmatch(name))
+    if not confined and MACHO_STAGE1 not in members:
+        return
+    require(MACHO_STAGE1 in members, "boot-ctxr files need esp/aurora/stage1.macho, the Stage 1 that loads them")
+    require(confined, "esp/aurora/stage1.macho needs esp/m1n1/boot-ctxr.bin, the Stage 2 it loads")
+    # The engine prefers a board's own boot-ctxr-<board>.bin, but inspection holds only the
+    # shared copy to the inspected bundle, and the builder makes no per-board copy.
+    boards = [name for name in confined if name != "esp/m1n1/boot-ctxr.bin"]
+    require(not boards, ", ".join(boards) + " is a per-board confined Stage 2, which this builder does not make "
+            "and inspection does not check")
+    stage1 = archive.read(MACHO_STAGE1)
+    # The engine's own test (omarchy_macho.check_execute_window), so an image never carries
+    # a Stage 1 the installer or the native Recovery refuses: a 64-bit Arm fileset with
+    # kmutil's segments, each file-backed at its virtual offset, no sized __TEXT_BOOT_EXEC,
+    # entered at aura's entry point, and an __TEXT_EXEC Recovery can pad. The CPU
+    # subtype is not held: aura's macho_boot_object.py writes CPU_SUBTYPE_ARM64E with the
+    # kernel capability bits (0xC0000002).
+    macho = _engine_macho()
+    try:
+        macho.check_execute_window(stage1)
+    except macho.MachOError as error:
+        raise CheckError(f"the Mach-O Stage 1 is not a boot object the engine accepts: {error}"
+                         " (aura's build/aura-boot.macho, not its linker build/aura.macho)") from None
+    require(stage1.count(b"AURORA-S1-CFG01\0") == 1, "the Mach-O Stage 1 is missing its configuration block")
+    for member in confined:
+        size = members[member].file_size
+        require(0 < size <= CONFINED_STAGE2_MAX_BYTES,
+                f"{member} is {size} bytes, not 1 byte to the 16 MiB slot aura keeps for it")
 
 
 def check_payload(lane: str, package: Path, installer_data: Path, profile: str = "release",
@@ -308,6 +355,7 @@ def check_payload(lane: str, package: Path, installer_data: Path, profile: str =
                 "the J700 Stage 1 has an invalid configuration block")
         require(archive.read("esp/m1n1/boot-j700.bin") == archive.read("esp/m1n1/boot.bin"),
                 "the J700 Stage 2 differs from the common bundle")
+        check_confined_boot_payloads(archive, members)
 
         keep = {
             "boot.img": 0x488,
@@ -498,6 +546,12 @@ def runtime_providers(candidates: Path | None) -> dict[str, str]:
     summary = json.loads((Path(candidates) / "import.json").read_text())
     providers = {p["role"]: p["name"] for p in summary["packages"] if p.get("role", p["name"]) != p["name"]}
     providers.update({"uboot-asahi": "uboot-aurora"})
+    # A lane whose boot loader is aura installs it in m1n1-aurora's place (it provides m1n1-aurora).
+    stage2 = summary.get("boot_loader", {}).get("stage2", "m1n1-aurora")
+    if stage2 != "m1n1-aurora":
+        require(any(p["name"] == stage2 and p["group"] == "boot" for p in summary["packages"]),
+                f"the set's boot loader {stage2} is not among its boot packages")
+        providers["m1n1-aurora"] = stage2
     for name in ("aurora-audio", "alsa-ucm-conf-aurora", "speakerguardd", "omarchy-aurora-firmware"):
         require(any(p["name"] == name and p["group"] == "support" for p in summary["packages"]),
                 "Aurora support package is missing: " + name)
@@ -772,6 +826,13 @@ def check_provenance(lane: str, directory: Path) -> None:
         require(record is not None and record[2] == version and record[3] == "omarchy-candidates"
                 and record[4] == filename and record[5] == sha256,
                 f"PROVENANCE does not install the set's {name} from the candidate set")
+    # A Stage 1 source (an edge set's m1n1-aurora beside aura) is carried for its raw Stage 1 alone.
+    sources_ = [value.split("|") for value in fields.get("stage1_source", [])]
+    require(len(sources_) <= 1 and all(len(parts) == 4 and re.fullmatch(r"[0-9a-f]{64}", parts[3]) for parts in sources_),
+            "PROVENANCE has a malformed Stage 1 source")
+    for name, *_ in sources_:
+        require(name not in installed and name not in candidates,
+                f"PROVENANCE installs {name}, which the set carries only for its raw Stage 1")
     name, size, sha256 = fields["payload"][0].split("|")
     payload = directory / name
     require(payload.is_file() and PAYLOAD_NAME.fullmatch(name) is not None, f"{name} is not beside PROVENANCE")

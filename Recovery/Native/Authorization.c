@@ -22,6 +22,9 @@
 #ifndef AUTHORIZATION_TIMEOUT_SECONDS
 #define AUTHORIZATION_TIMEOUT_SECONDS 300
 #endif
+#ifndef AUTHORIZATION_COMPRESS_TIMEOUT_SECONDS
+#define AUTHORIZATION_COMPRESS_TIMEOUT_SECONDS 1800
+#endif
 enum { INVALID=-1, PTY_FAILED=-2, TERMINAL_FAILED=-3, FORK_FAILED=-4,
        TIMED_OUT=-5, UNEXPECTED_CONFIRMATION=-6, REPEATED_CONFIRMATION=-7,
        REPEATED_PASSWORD=-8, REPEATED_USERNAME=-9, INPUT_FAILED=-10,
@@ -117,6 +120,18 @@ static void output_snapshot(const char *raw, size_t length, const char *secret,
     free(clean);
 }
 
+/* kmutil configure-boot --compress works through the whole padded object with
+ * nothing to answer, which takes minutes on some Recovery versions. Every other
+ * command keeps the short limit. From aurora-installer 7be5339 (MIT). */
+static int authorization_timeout(const char *executable, char *const arguments[])
+{
+    if(!strcmp(executable,"/usr/bin/kmutil") && arguments[1] &&
+       !strcmp(arguments[1],"configure-boot"))
+        for(size_t i=2;arguments[i];i++)
+            if(!strcmp(arguments[i],"--compress"))return AUTHORIZATION_COMPRESS_TIMEOUT_SECONDS;
+    return AUTHORIZATION_TIMEOUT_SECONDS;
+}
+
 static int authorization_run_logged(const char *executable, char *const arguments[],
                                     const char *username, const char *password,
                                     bool confirm_boot_object, aurora_log_callback output,
@@ -154,7 +169,7 @@ static int authorization_run_logged(const char *executable, char *const argument
     unsigned user_sent=0,password_sent=0,confirmation_sent=0;
     char pending[4096]={0}, line[4096]={0}, raw[LOG_LIMIT];
     size_t used=0,raw_used=0;
-    time_t deadline=time(NULL)+AUTHORIZATION_TIMEOUT_SECONDS;
+    time_t deadline=time(NULL)+authorization_timeout(executable,arguments);
     for(;;) {
         if(!exited) {
             pid_t done=waitpid(child,&status,WNOHANG);

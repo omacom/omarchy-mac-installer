@@ -5,8 +5,10 @@ For each package in ROOT's local database, finds the repositories (in pacman's
 order) whose database lists that name and version, and the archive in the
 build's cache (or the candidate repository) whose sha256 is the one such a
 database records. Candidates must come from the candidate repository with the
-set's own bytes. Prints name|version|repository|filename|sha256 lines and fails
-on any package it cannot trace.
+set's own bytes. A Stage 1 source (group "stage1": an edge set's m1n1-aurora
+beside aura) is carried for its raw Stage 1 alone and must not be installed.
+Prints name|version|repository|filename|sha256 lines and fails on any package it
+cannot trace.
 """
 import argparse
 import hashlib
@@ -61,7 +63,9 @@ def main():
 
     order = args.order.split(',')
     databases = {name: sync_entries(args.repositories / name / f'{name}.db') for name in order}
-    candidates = {p['name']: p for p in json.loads(args.candidates.read_text())['packages']}
+    packages = json.loads(args.candidates.read_text())['packages']
+    candidates = {p['name']: p for p in packages if p.get('group') != 'stage1'}
+    stage1_sources = {p['name'] for p in packages if p.get('group') == 'stage1'}
     digests = {}
 
     def digest_of(path):
@@ -84,6 +88,8 @@ def main():
             if any(digest_of(place) == expected for place in places):
                 found = (repository, filename, expected)
                 break
+        if name in stage1_sources:
+            fail(f'{name} is installed, but the set carries it only for its raw Stage 1')
         if found is None:
             fail(f'{name} {version} does not trace to a pinned database and archive')
         if name in candidates:

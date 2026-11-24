@@ -98,7 +98,10 @@ def load_policy(trust=TRUST, lane=DEFAULT_LANE):
     require(isinstance(lanes, dict) and lanes, 'the trust policy names no channel lane')
     for name, entry in lanes.items():
         require(name in LANES, f'the trust policy names an unknown lane {name}')
-        require(isinstance(entry, dict) and set(entry) == {'runtime_packages'}, f'invalid {name} lane')
+        require(isinstance(entry, dict) and 'runtime_packages' in entry
+                and set(entry) <= {'runtime_packages', 'boot_loader'}, f'invalid {name} lane')
+        require('boot_loader' not in entry or candidate_set.valid_boot_loader(entry['boot_loader']),
+                f'invalid {name} lane boot loader')
         roles = entry['runtime_packages']
         require(isinstance(roles, dict) and set(roles) == set(policy['runtime_packages'])
                 and all(isinstance(n, str) and NAME.fullmatch(n) for n in roles.values())
@@ -106,7 +109,8 @@ def load_policy(trust=TRUST, lane=DEFAULT_LANE):
     require(lane in LANES, f'unknown lane {lane}: a lane is edge, rc or stable')
     require(lane in lanes, f'lane {lane} is not enabled')
     root = {key: value for key, value in channel.items() if key != 'lanes'}
-    return policy, dict(root, lane=lane, runtime_packages=lanes[lane]['runtime_packages'])
+    return policy, dict(root, lane=lane, runtime_packages=lanes[lane]['runtime_packages'],
+                        boot_loader=candidate_set.boot_loader(policy, lane))
 
 
 def release_version(lane, tag):
@@ -189,19 +193,27 @@ def provided(entry):
 
 
 def resolve(entries, policy, channel):
-    """The set's packages in the database ENTRIES: (role or name, group, entry)."""
+    """The set's packages in the database ENTRIES: (role or name, group, entry). The lane's boot
+    loader installs Stage 2; a Stage 1 source it names apart (group "stage1") is carried for its
+    raw Stage 1 alone and never installed."""
     chosen = []
+    loader = channel.get('boot_loader', candidate_set.DEFAULT_BOOT_LOADER)
     for role, name in channel['runtime_packages'].items():
         entry = entries.get(name)
         require(entry is not None, f'the channel database does not list {name}')
         require(role == name or role in provided(entry), f'{name} does not provide {role}')
         chosen.append((role, 'runtime', entry))
-    for name in policy['boot_packages'] + policy.get('support_packages', []):
+    for name in candidate_set.boot_packages(policy, loader) + policy.get('support_packages', []):
         entry = entries.get(name)
         require(entry is not None, f'the channel database does not list {name}')
         chosen.append((name, 'support' if name in policy.get('support_packages', []) else 'boot', entry))
-    names = [entry['NAME'][0] for _, _, entry in chosen]
-    require(not set(names) & set(policy['refused_packages']), 'refused package in the set')
+    source = candidate_set.stage1_only(loader)
+    if source is not None:
+        entry = entries.get(source)
+        require(entry is not None, f'the channel database does not list {source}, the Stage 1 source')
+        chosen.append((source, 'stage1', entry))
+    names = [entry['NAME'][0] for _, group, entry in chosen if group != 'stage1']
+    require(not set(names) & set(candidate_set.refused_packages(policy, loader)), 'refused package in the set')
     for _, group, entry in chosen:
         require(entry['ARCH'][0] in (('aarch64', 'any') if group == 'support' else ('aarch64',)), f"{entry['NAME'][0]} is not an aarch64 package")
     return chosen
@@ -241,7 +253,7 @@ def refuse_untested_boot_pair(chosen, lane):
     require(series is not None and series < kernel_series(AURA_KERNEL),
             f'edge pairs linux-aurora {kernel} with m1n1-aurora; m1n1-aurora is not qualified for edge '
             f'images with linux-aurora {AURA_KERNEL} or newer (that kernel boots through aura, '
-            'omacom/omarchy-pkgs#3025), and this builder does not install aura yet')
+            'omacom/omarchy-pkgs#3025)')
 
 
 def manifest(chosen, lane, database_sha256, channel):
@@ -329,7 +341,7 @@ def snapshot(database, database_sha256, lane, packages, destination, trust=TRUST
                     require(candidate_set.HEX40.fullmatch(revision) is not None,
                             f'{entry["NAME"][0]} carries a malformed source revision')
                     commits[role] = revision
-    candidate_set.verify_payloads(payloads, policy)
+    candidate_set.verify_payloads(payloads, policy, channel['boot_loader'])
     names = {role: entry['NAME'][0] for role, _, entry in chosen}
     versions = {role: entry['VERSION'][0] for role, _, entry in chosen}
     require(versions['omarchy'] == versions['omarchy-settings'], 'mixed desktop versions')
@@ -357,6 +369,7 @@ def snapshot(database, database_sha256, lane, packages, destination, trust=TRUST
         'database_sha256': database_sha256,
         'manifest_sha256': hashlib.sha256(text.encode()).hexdigest(),
         'set_sha256': candidate_set.set_digest(record),
+        'boot_loader': channel['boot_loader'],
         'packages': packages_record,
     }
     (destination / 'import.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')

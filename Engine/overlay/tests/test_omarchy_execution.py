@@ -179,12 +179,16 @@ class ExecutionAdmissionTests(unittest.TestCase):
 
         self._assert_rejected("approved extent changed")
 
-    def test_m4_is_rejected_even_with_otherwise_valid_binding(self):
+    def test_no_board_is_refused_by_name_once_the_signed_catalog_binds_it(self):
+        # apple,j614s stays out through scripts/supported-models.json's refused
+        # list, which no signed catalog may carry; the engine has no list of its own.
+        import omarchy_execution
+        self.assertFalse(hasattr(omarchy_execution, "UNSUPPORTED_DEVICES"))
         self.request = self._request(device_identifier="apple,j614s")
         self.identity = self._identity()
         self._write_inputs()
 
-        self._assert_rejected("device is explicitly unsupported")
+        self.assertEqual(self._admit().device_identifier, "apple,j614s")
 
     def test_changed_extent_is_rejected_by_plan_digest(self):
         self.request["length_bytes"] -= 1024**2

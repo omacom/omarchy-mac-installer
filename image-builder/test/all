@@ -35,6 +35,7 @@ python3 test/test_release_guard.py
 python3 test/test_engine_contract.py
 python3 test/test_edge_dispatch_filter.py
 python3 test/test_verify_installed_system.py
+python3 test/test_package_record.py
 for test_file in test/*-test.sh; do
   "$BASH" "$test_file"
 done

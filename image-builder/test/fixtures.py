@@ -78,9 +78,22 @@ def dtb(model: str) -> bytes:
     return b"\xd0\x0d\xfe\xed" + struct.pack(">I", 8 + len(body)) + body
 
 
-def raw_stage1() -> bytes:
+def raw_stage1(prefix: bytes = b"stage1") -> bytes:
     body = struct.pack("<II40s192s", 1, 0, b"", b";m1n1/boot.bin")
-    return b"stage1" + b"AURORA-S1-CFG01\0" + body + struct.pack("<I", zlib.crc32(body)) + b"STACKBOT"
+    return prefix + b"AURORA-S1-CFG01\0" + body + struct.pack("<I", zlib.crc32(body)) + b"STACKBOT"
+
+
+# Like omacom/omarchy-pkgs#3025's aura: Stage 2 at m1n1-aurora's path and its own raw Stage 1,
+# providing m1n1-aurora. Every channel database serves it beside m1n1-aurora; edge installs it.
+AURA_VERSION = "1.0.0b13.r20261118-1"
+AURA_PROVIDES = ("m1n1=1.6.1.aurora23", "m1n1-aurora=1.6.1.aurora23", "m1n1-neo=1.6.1.aurora23")
+
+
+def aura_contents() -> dict[str, bytes]:
+    return {"usr/lib/asahi-boot/m1n1.bin": b"aura stage 2 payload",
+            "usr/share/aura/stage1/aura-raw.bin": raw_stage1(b"aura-stage1"),
+            "usr/share/aura/stage1/aura.macho": b"aura macho",
+            "usr/share/aura/stage1/aura-boot.macho": b"aura boot object"}
 
 
 SPEAKERGUARDD_RULES = (
@@ -296,6 +309,7 @@ def channel_contents() -> dict[str, dict[str, bytes]]:
     contents = default_contents("e1b0e5e9b")
     for role in CHANNEL_NAMES:
         contents[role] = {path: data for path, data in contents[role].items() if "source-revision" not in path}
+    contents["aura"] = aura_contents()
     return contents
 
 
@@ -313,7 +327,7 @@ def make_channel(directory: Path, signer: Signer, *, versions=None, contents=Non
     entries. ENTRY_EDIT(name, desc) may rewrite an entry. Edge serves the -dev runtime, rc the clean
     one of RC_RELEASE. Returns the database and its sha256."""
     names = CHANNEL_NAMES if lane == "edge" else {}
-    base_versions = dict(VERSIONS)
+    base_versions = dict(VERSIONS, aura=AURA_VERSION)
     base_versions.update({role: version for role, version in
                           {"edge": CHANNEL_VERSIONS, "rc": RC_VERSIONS, "stable": STABLE_VERSIONS}[lane].items()
                           if role in base_versions})
@@ -332,10 +346,11 @@ def make_channel(directory: Path, signer: Signer, *, versions=None, contents=Non
         settings_dep = settings if lane == "edge" else f"{settings}={versions['omarchy-settings'].rsplit('-', 1)[0]}"
         deps = [settings_dep] if role == "omarchy" else ["omarchy"] if role == "omarchy-mac-boot" else []
         write_archive(packages / filename, name, version, contents.get(role, {}), deps)
-        if name not in unsigned:
+        # A None SIGNER leaves every package without its own signer unsigned.
+        if name not in unsigned and signers.get(name, signer) is not None:
             signers.get(name, signer).sign(packages / filename)
-        text = desc(name, version, filename, packages / filename, "aarch64",
-                    provides=[role] if name != role else [], deps=deps)
+        provides = [role] if name != role else list(AURA_PROVIDES) if name == "aura" else []
+        text = desc(name, version, filename, packages / filename, "aarch64", provides=provides, deps=deps)
         (entries / f"{name}-{version}").mkdir()
         (entries / f"{name}-{version}" / "desc").write_text(entry_edit(name, text) if entry_edit else text)
     for name, version in extra:
@@ -388,7 +403,8 @@ def payload_pe(extra: bytes) -> bytes:
 
 
 def write_payload(zip_path: Path, boot_uuid: str, root_uuid: str, omit: tuple[str, ...] = (),
-                  empty: tuple[str, ...] = (), grow: dict[str, int] | None = None, recovery_app: Path | None = None) -> None:
+                  empty: tuple[str, ...] = (), grow: dict[str, int] | None = None, recovery_app: Path | None = None,
+                  extra: dict[str, bytes] | None = None) -> None:
     """The payload zip build-mac-image packages, with small stand-ins for its images. OMIT drops members,
     EMPTY truncates them and GROW appends that many zero bytes to each member it names."""
     with tempfile.TemporaryDirectory() as temporary:
@@ -416,6 +432,9 @@ def write_payload(zip_path: Path, boot_uuid: str, root_uuid: str, omit: tuple[st
         shutil.copy(payload / "esp/m1n1/boot.bin", payload / "esp/m1n1/boot-j700.bin")
         if recovery_app is not None:
             shutil.copytree(recovery_app, payload / "esp/aurora/recovery")
+        for member, data in (extra or {}).items():
+            (payload / member).parent.mkdir(parents=True, exist_ok=True)
+            (payload / member).write_bytes(data)
         for member in omit:
             (payload / member).unlink()
         for member in empty:
@@ -555,10 +574,16 @@ def make_root(root: Path, candidates: Path, layout: str | None = None, lane: str
     and, on a release lane, its install receipt."""
     summary = json.loads((candidates / "import.json").read_text())
 
+    every = summary["packages"]
+
     def member(name: str, path: str) -> bytes:
-        archive = candidates / next(p["filename"] for p in summary["packages"] if p["name"] == name)
+        archive = candidates / next(p["filename"] for p in every if p["name"] == name)
         return subprocess.check_output(["bsdtar", "-xOf", str(archive), path])
 
+    loader = summary.get("boot_loader", candidate_set.DEFAULT_BOOT_LOADER)
+    owners_ = candidate_set.required_owners(loader)
+    # A Stage 1 source the set carries for its raw Stage 1 alone is never installed.
+    summary = dict(summary, packages=[p for p in summary["packages"] if p.get("group") != "stage1"])
     # Every set package's files, as pacman installed them.
     root.mkdir(parents=True, exist_ok=True)
     for package in summary["packages"]:
@@ -574,8 +599,8 @@ def make_root(root: Path, candidates: Path, layout: str | None = None, lane: str
     for path in (f"usr/lib/modules/{RELEASE}/vmlinuz", f"usr/lib/modules/{RELEASE}/pkgbase",
                  *[f"usr/lib/modules/{RELEASE}/dtbs/{m}.dtb" for m in (*MODELS, "s8000-n66")]):
         write(root, path, member("linux-aurora", path))
-    m1n1 = member(candidate_set.REQUIRED_OWNERS["usr/lib/asahi-boot/m1n1.bin"], "usr/lib/asahi-boot/m1n1.bin")
-    uboot = member(candidate_set.REQUIRED_OWNERS["usr/lib/asahi-boot/u-boot-nodtb.bin"], "usr/lib/asahi-boot/u-boot-nodtb.bin")
+    m1n1 = member(owners_["usr/lib/asahi-boot/m1n1.bin"], "usr/lib/asahi-boot/m1n1.bin")
+    uboot = member(owners_["usr/lib/asahi-boot/u-boot-nodtb.bin"], "usr/lib/asahi-boot/u-boot-nodtb.bin")
     write(root, "usr/lib/asahi-boot/m1n1.bin", m1n1)
     write(root, "usr/lib/asahi-boot/u-boot-nodtb.bin", uboot)
     models = (*MODELS, "s8000-n66")
@@ -585,7 +610,7 @@ def make_root(root: Path, candidates: Path, layout: str | None = None, lane: str
     stage2 += compressor.compress(uboot) + compressor.flush() + b"chosen.asahi,efi-system-partition=EFI\n"
     write(root, "boot/efi/m1n1/boot.bin", stage2)
     write(root, "boot/efi/m1n1/boot-j700.bin", stage2)
-    write(root, "boot/efi/aurora/stage1-j700.bin", member("m1n1-aurora", "usr/share/m1n1-aurora/stage1/m1n1-raw.bin"))
+    write(root, "boot/efi/aurora/stage1-j700.bin", member(loader["stage1"], candidate_set.STAGE1_PATHS[loader["stage1"]]))
     write(root, "etc/m1n1.conf", "# m1n1 options\nchosen.asahi,efi-system-partition=EFI\nunknown=ignored\n")
     loader = pe_image({".text": b"Limine loader"})
     write(root, "usr/share/limine/BOOTAA64.EFI", loader)
@@ -613,7 +638,7 @@ def make_root(root: Path, candidates: Path, layout: str | None = None, lane: str
                                          "alsa-ucm-conf-asahi", "asahi-audio", "vulkan-asahi", "asahi-bless", "iwd",
                                          "networkmanager", "bluez", "wireplumber")}
     provides = {p["name"]: (p["role"],) for p in summary["packages"] if p.get("role", p["name"]) != p["name"]}
-    replacements = {"uboot-aurora": "uboot-asahi", "mesa-aurora": "mesa",
+    replacements = {"aura": "m1n1-aurora", "uboot-aurora": "uboot-asahi", "mesa-aurora": "mesa",
                     "vulkan-aurora": "vulkan-asahi", "aurora-bless": "asahi-bless",
                     "aurora-audio": "asahi-audio", "alsa-ucm-conf-aurora": "alsa-ucm-conf-asahi"}
     for name, role in replacements.items():

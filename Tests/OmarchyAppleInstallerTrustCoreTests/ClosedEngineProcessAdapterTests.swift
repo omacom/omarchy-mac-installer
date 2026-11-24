@@ -138,31 +138,24 @@ final class ClosedEngineProcessAdapterTests: XCTestCase {
     XCTAssertEqual(executions, 1)
   }
 
-  func testM4RemainsRejectedEvenWhenSignedCatalogEnablesIt() async throws {
-    let fixture = try makeFixture()
-    let m4Request = try makeRequest(deviceIdentifier: "apple,j614s")
-    let m4Transcript = makeTranscript(deviceIdentifier: "apple,j614s")
+  /// No board is refused by name: an M4 the engine supports and the signed
+  /// catalog enables runs like any other Mac. apple,j614s stays out through
+  /// scripts/supported-models.json's refused list, which no signed catalog may carry.
+  func testAnM4TheEngineAndSignedCatalogAdmitIsNotRefusedByName() async throws {
+    let fixture = try makeFixture(deviceIdentifier: "apple,j614s")
     let authorization = ControlledAuthorization(decision: .granted)
-    let process = ControlledProcess(transcript: m4Transcript.data)
+    let process = ControlledProcess(transcript: fixture.transcript)
 
-    await assertThrowsErrorAsync(
-      try await adapter.execute(
-        m4Request,
-        approval: fixture.approval,
-        authorization: authorization,
-        process: process
-      )
-    ) {
-      XCTAssertEqual(
-        $0 as? ClosedEngineProcessError,
-        .unsupportedDevice("apple,j614s")
-      )
-    }
+    let result = try await adapter.execute(
+      fixture.request,
+      approval: fixture.approval,
+      authorization: authorization,
+      process: process
+    )
 
-    let authorizationAttempts = await authorization.attemptCount
+    XCTAssertEqual(result.deviceIdentifier, "apple,j614s")
     let executions = await process.executionCount
-    XCTAssertEqual(authorizationAttempts, 0)
-    XCTAssertEqual(executions, 0)
+    XCTAssertEqual(executions, 1)
   }
 
   func testValidatedRequestReturnsExactProcessTranscript() async throws {
