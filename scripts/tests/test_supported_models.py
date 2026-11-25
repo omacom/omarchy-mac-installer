@@ -3,7 +3,10 @@
 manifest refuses to say."""
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -146,12 +149,16 @@ class CoverageTests(unittest.TestCase):
     def test_a_private_catalog_owes_the_fully_qualified_macs_and_may_add_any_other(self) -> None:
         required = supported_models.boards_for("stable", self.path)
         self.assertEqual(supported_models.private_coverage_errors(required, self.path), [])
-        # Anything the manifest names may be added, including a developer board.
+        # Anything a channel offers may be added; a developer board may not.
         self.assertEqual(
             supported_models.private_coverage_errors(
-                required + ["apple,j700", "apple,j616s", "apple,j815"], self.path
+                required + ["apple,j700", "apple,j616s"], self.path
             ),
             [],
+        )
+        self.assertEqual(
+            supported_models.private_coverage_errors(required + ["apple,j815"], self.path),
+            ["apple,j815 is a developer board: only a developer build's sealed catalog offers it"],
         )
         # It is tied to the narrowest channel on purpose: a board reaching edge
         # must not break every private catalog.
@@ -279,9 +286,12 @@ class NoteTests(unittest.TestCase):
         return supported_models.catalog_errors(catalog, path=self.path)
 
     def test_edge_needs_the_warning_whatever_its_wording(self) -> None:
-        for notes in ({}, {"apple,j616s": ""}, {"apple,j616s": 1}):
-            self.assertIn("apple,j616s has only qualified for edge but carries no preview note",
-                          self.errors("edge", notes))
+        self.assertEqual(self.errors("edge", {}),
+                         ["apple,j616s has only qualified for edge but carries no preview note"])
+        for identifier in ("apple,j616s", "apple,j274"):
+            for text in ("", 1):
+                self.assertIn(f"{identifier} carries a preview note without text",
+                              self.errors("edge", {"apple,j616s": "edge only", identifier: text}))
         self.assertEqual(self.errors("edge", {"apple,j616s": "an older wording"}), [])
 
     def test_edge_may_still_warn_about_a_board_that_has_moved_on(self) -> None:
@@ -292,6 +302,49 @@ class NoteTests(unittest.TestCase):
         for channel in ("rc", "stable"):
             self.assertEqual(self.errors(channel, {"apple,j274": "careful"}),
                              [f"apple,j274 carries a preview note, which {channel} never shows"])
+
+
+class MalformedCatalogTests(unittest.TestCase):
+    """A malformed catalog is refused, never a crash, by both checks."""
+
+    def setUp(self) -> None:
+        self.path = write(LadderTests.MIXED)
+
+    def test_malformed_rows_and_documents_are_refused(self) -> None:
+        good = {"deviceIdentifier": "apple,j274", "status": "enabled"}
+        for models, expected in (
+            (None, "no models list"),
+            ({"apple,j274": good}, "no models list"),
+            (["apple,j274"], "without an apple,<board> identifier"),
+            ([dict(good, deviceIdentifier=["apple,j274"])], "without an apple,<board> identifier"),
+            ([good, good], "apple,j274 is listed twice"),
+            ([dict(good, status="paused")], "apple,j274 is listed but paused"),
+        ):
+            for errors in (
+                supported_models.catalog_errors({"channel": "stable", "models": models}, path=self.path),
+                supported_models.destination_errors({"models": models}, "stable", self.path),
+            ):
+                self.assertTrue(any(expected in error for error in errors), (models, errors))
+        for document in ([], "catalog", None):
+            self.assertTrue(supported_models.catalog_errors(document, "stable", self.path))
+            self.assertTrue(supported_models.destination_errors(document, "stable", self.path))
+
+    def test_an_app_minimum_that_is_not_text_is_refused(self) -> None:
+        path = write({"apple,j274": {"qualified": "stable", "app_minimum": "2.4.0"}})
+        self.assertTrue(supported_models.app_minimum_errors(2317, ["apple,j274"], path))
+
+    def test_a_repeated_key_is_refused(self) -> None:
+        path = Path(tempfile.mkdtemp()) / "repeated.json"
+        self.addCleanup(shutil.rmtree, path.parent)
+        path.write_text('{"models": [], "models": []}')
+        for arguments in (["check-catalog", str(path)], ["check-destination", str(path), "stable"]):
+            with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(supported_models.main(arguments), 1)
+            self.assertIn("repeats a key", stderr.getvalue())
+        path.write_text('{"schema_version": 2, "macs": {"apple,j274": {"qualified": "edge", "note": "x"}, '
+                        '"apple,j274": {"qualified": "stable"}}}')
+        with self.assertRaisesRegex(SystemExit, "repeats a key"):
+            supported_models.load(path)
 
 
 class DestinationTests(unittest.TestCase):
@@ -314,10 +367,6 @@ class DestinationTests(unittest.TestCase):
     def test_a_mac_the_channel_does_not_offer_is_refused_in_an_unnamed_catalog_too(self) -> None:
         for identifier in ("apple,j700", "apple,j616s", "apple,j815", "apple,j575d", "apple,j999"):
             self.assertIn(f"stable does not offer {identifier}", self.errors("stable", "apple,j274", identifier))
-        # A model that is listed but disabled counts too: the app may still read it.
-        models = [{"deviceIdentifier": "apple,j616s", "status": "disabled"}]
-        self.assertIn("stable does not offer apple,j616s",
-                      supported_models.destination_errors({"models": models}, "stable", self.path))
 
     def test_an_older_catalog_offering_fewer_macs_may_still_be_served(self) -> None:
         self.assertEqual(self.errors("edge", "apple,j274"), [])

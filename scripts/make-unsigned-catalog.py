@@ -9,9 +9,9 @@ repository.
 Every per-release value comes from an inputs file (`--inputs`), so cutting a
 release never edits this script. `scripts/release-inputs.template.json` holds
 the current values. The engine is always the one `Engine/source-lock.json`
-pins. The inputs must list exactly the Macs in
-`scripts/supported-models.json`: every M1, M2 and M3 Mac and the MacBook Neo,
-none refused.
+pins. The inputs must list every Mac `scripts/supported-models.json` qualifies
+for stable (every M1, M2 and M3 Mac and the MacBook Neo), and may add a Mac
+qualified for edge or rc. Each Mac qualified for edge alone carries its note.
 
 The catalog pins whole-file digests. When the payload was split for release
 delivery, the sibling `<payload>.partNN` files are emitted as an additional
@@ -23,10 +23,10 @@ higher-sequence one replaces it. The monotonic `sequence` is the only
 machine-enforced guard.
 
 `--developer` is for a developer build's sealed catalog only. Its inputs may
-add `developer_models`: groups of boards from the manifest's `developer`
-section, or supported Macs moved out of the main group, each group with its
-own metadata and its own or a shared payload. The main group and the moved
-Macs together still cover exactly every supported Mac. Channel publishing
+add `developer_models`: groups of boards qualified for `developer`, or
+supported Macs moved out of the main group, each group with its own metadata
+and its own or a shared payload. The main group and the moved Macs together
+still cover every Mac qualified for stable. Channel publishing
 rejects a catalog with a developer board.
 
 Usage:
@@ -213,6 +213,8 @@ def load_developer_models(document: dict) -> list[str]:
         if not isinstance(identifiers, list) or not identifiers:
             raise SystemExit("inputs developer_models device_identifiers must be a non-empty list")
         for identifier in identifiers:
+            if not isinstance(identifier, str):
+                raise SystemExit(f"invalid device identifier: {identifier}")
             if identifier in boards:
                 raise SystemExit(f"inputs developer_models lists {identifier} twice")
             if identifier not in allowed:
@@ -288,17 +290,20 @@ def load_inputs(path: Path, developer: bool = False) -> dict:
     identifiers = document["device_identifiers"]
     if not isinstance(identifiers, list) or not identifiers:
         raise SystemExit("inputs device_identifiers must be a non-empty list")
-    if len(set(identifiers)) != len(identifiers):
-        raise SystemExit("inputs device_identifiers contains duplicates")
     for identifier in identifiers:
         if not isinstance(identifier, str) or not DEVICE_IDENTIFIER_PATTERN.match(
             identifier
         ):
             raise SystemExit(f"invalid device identifier: {identifier}")
+    if len(set(identifiers)) != len(identifiers):
+        raise SystemExit("inputs device_identifiers contains duplicates")
     # Every catalog enables every supported Mac (scripts/supported-models.json):
     # in the main group, or in a developer group that gives some of them their own metadata.
     taken = load_developer_models(document) if "developer_models" in document else []
-    coverage = supported_models.private_coverage_errors(identifiers + taken)
+    developer_boards = supported_models.developer_boards()
+    coverage = supported_models.private_coverage_errors(
+        identifiers + [identifier for identifier in taken if identifier not in developer_boards]
+    )
     if coverage:
         raise SystemExit("inputs device_identifiers: " + "; ".join(coverage))
 

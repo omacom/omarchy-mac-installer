@@ -391,8 +391,11 @@ class CatalogReleaseTests(ReleaseTestCase):
         with self.assertRaisesRegex(release.Refusal, "not built for the stable lane"):
             release.check_image_name(FINAL_ON_RC_IMAGE, "stable")
         with self.assertRaisesRegex(release.Refusal, "never promoted"):
-            release.check_promotion_source({"models": [{"evidenceRevision": FINAL_ON_RC_IMAGE}]})
-        release.check_promotion_source({"models": [{"evidenceRevision": RC_IMAGE}, {"evidenceRevision": STABLE_IMAGE}]})
+            release.check_promotion_source({"models": [
+                {"deviceIdentifier": "apple,j274", "status": "enabled", "evidenceRevision": FINAL_ON_RC_IMAGE}]})
+        release.check_promotion_source({"models": [
+            {"deviceIdentifier": "apple,j274", "status": "enabled", "evidenceRevision": RC_IMAGE},
+            {"deviceIdentifier": "apple,j293", "status": "enabled", "evidenceRevision": STABLE_IMAGE}]})
         payload, metadata, evidence = self.stable_inputs(recorded=FINAL_ON_RC_IMAGE, zip_name=RC_ZIP)
         with self.assertRaisesRegex(release.Refusal, "not built for the stable lane"):
             self.build_stable(payload, metadata, evidence, image=FINAL_ON_RC_IMAGE)
@@ -587,12 +590,13 @@ class CatalogReleaseTests(ReleaseTestCase):
         for name, changed, expected in (
             ("renamed", document, "says it is for 'edge'"),
             ("unnamed", unnamed, "says it is for None"),
-            ("relabelled", dict(document, channel="stable"), "does not enable exactly the Macs"),
+            ("relabelled", dict(document, channel="stable"), "apple,j604 has only qualified for edge"),
         ):
             catalog = self.directory / name / "catalog-stable.json"
             catalog.parent.mkdir()
             catalog.write_text(json.dumps(changed))
             self.assert_refused(self.sign(catalog, out=f"{name}-signed"), expected)
+            self.assertFalse((self.directory / f"{name}-signed").exists(), "no signature is left behind")
         # An envelope signed elsewhere with an allowed label still names Macs stable does not offer.
         relabelled = self.directory / "by-hand.json"
         relabelled.write_text(json.dumps(dict(document, channel="stable")))
@@ -604,6 +608,19 @@ class CatalogReleaseTests(ReleaseTestCase):
         })
         self.assert_refused(publish("stable", envelope), "stable does not offer apple,j604")
         self.assertFalse(scratch.exists() and any(scratch.iterdir()))
+
+    def test_a_catalog_that_repeats_a_key_is_refused_before_it_is_signed(self) -> None:
+        text = self.built_catalog().read_text().rstrip()
+        catalog = self.directory / "repeated" / "catalog-edge.json"
+        catalog.parent.mkdir()
+        catalog.write_text(text[:-1] + ', "models": []}')
+        self.assert_refused(self.sign(catalog, out="repeated-signed"), "repeats a key")
+
+    def test_a_promotion_source_that_lists_a_mac_twice_is_refused(self) -> None:
+        source = json.loads(self.built_catalog().read_text())
+        source["models"].append(source["models"][0])
+        with self.assertRaisesRegex(release.Refusal, "is listed twice"):
+            release.promote_catalog(source, datetime.datetime(2026, 10, 15, tzinfo=datetime.timezone.utc), "rc")
 
     def test_publish_refuses_a_sequence_that_does_not_move_forward(self) -> None:
         scratch = self.directory / "scratch-host"

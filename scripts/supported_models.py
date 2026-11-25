@@ -51,10 +51,26 @@ def _refuse(path: Path, message: str) -> None:
     raise SystemExit(f"{path}: {message}")
 
 
+def _unique(pairs: list[tuple[str, object]]) -> dict:
+    document = dict(pairs)
+    if len(document) != len(pairs):
+        raise ValueError("a JSON object repeats a key")
+    return document
+
+
+def read_json(text: str | bytes) -> object:
+    """TEXT as JSON, refusing a repeated key: Python keeps the last and the app
+    the first, so a catalog could show each of them different Macs."""
+    return json.loads(text, object_pairs_hook=_unique)
+
+
 def load(path: Path = MANIFEST) -> dict[str, dict]:
     """Every board's record, validated, in the manifest's own order."""
-    document = json.loads(path.read_text())
-    if document.get("schema_version") != SCHEMA_VERSION:
+    try:
+        document = read_json(path.read_text())
+    except ValueError as error:
+        _refuse(path, f"not valid JSON: {error}")
+    if not isinstance(document, dict) or document.get("schema_version") != SCHEMA_VERSION:
         _refuse(path, "unsupported schema")
     macs = document.get("macs")
     if not isinstance(macs, dict) or not macs:
@@ -177,8 +193,9 @@ def coverage_errors(identifiers: list[str], channel: str, path: Path = MANIFEST)
 def private_coverage_errors(identifiers: list[str], path: Path = MANIFEST) -> list[str]:
     """Why IDENTIFIERS is not a valid private or developer catalog. Such a
     catalog is not published to a channel, so it owes the fully qualified Macs
-    and may add any other the manifest names, developer boards included, but
-    nothing refused and nothing unknown. It is deliberately tied to the
+    and may add any other a channel offers, but nothing refused, nothing
+    unknown and no developer board, which a developer build adds in a group of
+    its own (make-unsigned-catalog.py). It is deliberately tied to the
     narrowest channel: a board reaching edge must not break every private
     catalog."""
     macs = load(path)
@@ -200,6 +217,8 @@ def private_coverage_errors(identifiers: list[str], path: Path = MANIFEST) -> li
             )
         elif "refused" in record:
             errors.append(f"{identifier} is refused: {record['refused']}")
+        elif record["qualified"] == "developer":
+            errors.append(f"{identifier} is a developer board: only a developer build's sealed catalog offers it")
     return errors
 
 
@@ -219,7 +238,7 @@ def app_minimum_errors(channel_minimum: str | None, identifiers: list[str],
             f"{identifier} needs app {version} or newer, but the catalog names no minimum version"
             for identifier, version in sorted(needed.items())
         ]
-    if not INSTALLER_VERSION.fullmatch(channel_minimum):
+    if not isinstance(channel_minimum, str) or not INSTALLER_VERSION.fullmatch(channel_minimum):
         return [f"the catalog's minimum version {channel_minimum} is not an X.Y.Z version"]
 
     def parts(version: str) -> tuple[int, ...]:
@@ -230,6 +249,26 @@ def app_minimum_errors(channel_minimum: str | None, identifiers: list[str],
         for identifier, version in sorted(needed.items())
         if parts(channel_minimum) < parts(version)
     ]
+
+
+def model_errors(models: object) -> list[str]:
+    """Why MODELS is not a list of distinct enabled Macs, in the only form the
+    app reads: one malformed or repeated row refuses its whole catalog."""
+    if not isinstance(models, list):
+        return ["the catalog has no models list"]
+    errors = []
+    seen = set()
+    for model in models:
+        identifier = model.get("deviceIdentifier") if isinstance(model, dict) else None
+        if not isinstance(identifier, str) or not DEVICE_IDENTIFIER.fullmatch(identifier):
+            errors.append("the catalog lists a Mac without an apple,<board> identifier")
+            continue
+        if identifier in seen:
+            errors.append(f"{identifier} is listed twice")
+        seen.add(identifier)
+        if model.get("status") != "enabled":
+            errors.append(f"{identifier} is listed but {model.get('status')}")
+    return errors
 
 
 def note_errors(models: list[dict], channel: str, path: Path = MANIFEST) -> list[str]:
@@ -243,12 +282,15 @@ def note_errors(models: list[dict], channel: str, path: Path = MANIFEST) -> list
             if "previewNote" in model
         ]
     noted = notes(path)
-    return [
-        f"{model.get('deviceIdentifier')} has only qualified for edge but carries no preview note"
-        for model in models
-        if model.get("deviceIdentifier") in noted
-        and not (isinstance(model.get("previewNote"), str) and model["previewNote"])
-    ]
+    errors = []
+    for model in models:
+        identifier = model["deviceIdentifier"]
+        if "previewNote" not in model:
+            if identifier in noted:
+                errors.append(f"{identifier} has only qualified for edge but carries no preview note")
+        elif not isinstance(model["previewNote"], str) or not model["previewNote"]:
+            errors.append(f"{identifier} carries a preview note without text")
+    return errors
 
 
 def destination_errors(catalog: dict, channel: str, path: Path = MANIFEST) -> list[str]:
@@ -256,13 +298,14 @@ def destination_errors(catalog: dict, channel: str, path: Path = MANIFEST) -> li
     catalog may offer fewer Macs than CHANNEL does, so a rollback to an older
     one stays possible, but none CHANNEL does not offer."""
     check_channel(channel)
-    errors = []
+    if not isinstance(catalog, dict):
+        return ["the catalog is not a JSON object"]
     declared = catalog.get("channel")
-    if declared is not None and declared != channel:
-        errors.append(f"the catalog is signed for {declared}, not {channel}")
+    errors = [] if declared in (None, channel) else [f"the catalog is signed for {declared}, not {channel}"]
     models = catalog.get("models")
-    if not isinstance(models, list):
-        return errors + ["the catalog has no models list"]
+    malformed = model_errors(models)
+    if malformed:
+        return errors + malformed
     offered = boards_for(channel, path)
     identifiers = [model.get("deviceIdentifier") for model in models]
     errors += [
@@ -278,25 +321,19 @@ def catalog_errors(catalog: dict, channel: str | None = None,
     """Why CATALOG does not cover exactly its channel's set. CHANNEL names the
     channel to judge it against; without one the catalog's own `channel` is
     used, which a catalog published before that field existed does not have."""
+    if not isinstance(catalog, dict):
+        return ["the catalog is not a JSON object"]
     if channel is None:
         channel = catalog.get("channel")
     if channel is not None and channel not in CHANNELS:
         return [f"{channel} is not one of {', '.join(CHANNELS)}"]
     models = catalog.get("models")
-    if not isinstance(models, list):
-        return ["the catalog has no models list"]
+    malformed = model_errors(models)
+    if malformed:
+        return malformed
     if not models:
         return []
-    enabled = [
-        model.get("deviceIdentifier")
-        for model in models
-        if model.get("status") == "enabled"
-    ]
-    errors = [
-        f"{model.get('deviceIdentifier')} is listed but {model.get('status')}"
-        for model in models
-        if model.get("status") != "enabled"
-    ]
+    enabled = [model["deviceIdentifier"] for model in models]
     installer = catalog.get("installer")
     minimum = installer.get("minimumVersion") if isinstance(installer, dict) else None
     # A catalog that names no channel is a private or developer one, not
@@ -307,7 +344,7 @@ def catalog_errors(catalog: dict, channel: str | None = None,
         else private_coverage_errors(enabled, path)
     )
     shown = note_errors(models, channel, path) if channel is not None else []
-    return errors + coverage + shown + app_minimum_errors(minimum, enabled, path)
+    return coverage + shown + app_minimum_errors(minimum, enabled, path)
 
 
 def main(arguments: list[str]) -> int:
@@ -318,7 +355,11 @@ def main(arguments: list[str]) -> int:
     if command == "check-destination" and arguments[2] not in CHANNELS:
         print(f"channel must be one of {', '.join(CHANNELS)}, not {arguments[2]}", file=sys.stderr)
         return 64
-    catalog = json.loads(Path(arguments[1]).read_text())
+    try:
+        catalog = read_json(Path(arguments[1]).read_text())
+    except ValueError as error:
+        print(f"{command}: {arguments[1]} is not valid JSON: {error}", file=sys.stderr)
+        return 1
     errors = (
         catalog_errors(catalog) if command == "check-catalog" else destination_errors(catalog, arguments[2])
     )

@@ -452,8 +452,8 @@ def load_json(path: Path | None, field: str) -> object:
     if not path.is_file() or path.is_symlink():
         raise Refusal(f"{field}: missing or unsafe file {path}")
     try:
-        return json.loads(path.read_text())
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        return supported_models.read_json(path.read_text())
+    except ValueError as error:
         raise Refusal(f"{field} is not valid JSON: {error}") from error
 
 
@@ -653,6 +653,9 @@ def from_catalog(field: str, artifact: object, digest: object, allow_parts: bool
 
 def check_promotion_source(source: dict) -> None:
     """An image of a final tag built on the rc lane stays on rc: stable builds its own."""
+    malformed = supported_models.model_errors(source.get("models"))
+    if malformed:
+        raise Refusal("the source catalog: " + "; ".join(malformed))
     for model in source.get("models", []):
         image = model.get("evidenceRevision")
         if isinstance(image, str) and FINAL_TAG_ON_RC.fullmatch(image):
@@ -731,6 +734,9 @@ def check_promoted_models(source: dict, promoted: dict, channel: str) -> None:
     """A promotion carries exactly CHANNEL's Macs, without preview notes. It
     may drop a Mac the target has not qualified for; it may never add one or
     change what one pins."""
+    malformed = supported_models.model_errors(promoted.get("models"))
+    if malformed:
+        raise Refusal("the promoted catalog: " + "; ".join(malformed))
     before = {model.get("deviceIdentifier"): model for model in source.get("models", [])}
     after = {model.get("deviceIdentifier"): model for model in promoted.get("models", [])}
     if len(after) != len(promoted.get("models", [])):
@@ -1005,9 +1011,9 @@ def verify_envelope(data: bytes, trust_root: bytes, openssl: str | None = None) 
     if not openssl_verify(openssl or find_openssl(), trust_root, catalog, signature):
         raise Refusal(f"the catalog signature does not verify against the trust root {fingerprint(trust_root)}")
     try:
-        document = json.loads(catalog)
-    except json.JSONDecodeError:
-        raise Refusal("the signed catalog is not JSON") from None
+        document = supported_models.read_json(catalog)
+    except ValueError as error:
+        raise Refusal(f"the signed catalog is not JSON: {error}") from None
     if not isinstance(document, dict) or document.get("schemaVersion") != SCHEMA_VERSION:
         raise Refusal("the signed catalog is not a schema 4 catalog")
     if not isinstance(document.get("sequence"), int) or document["sequence"] <= 0:
@@ -1313,8 +1319,12 @@ def command_sign(arguments) -> None:
         raise Refusal("the catalog is too large for the app")
     channel = check_signed_channel(catalog_path.name.removeprefix("catalog-").removesuffix(".json"))
     document = load_json(catalog_path, "catalog")
-    if document.get("channel") != channel:
-        raise Refusal(f"{catalog_path.name} says it is for {document.get('channel')!r}")
+    if not isinstance(document, dict) or document.get("channel") != channel:
+        declared = document.get("channel") if isinstance(document, dict) else None
+        raise Refusal(f"{catalog_path.name} says it is for {declared!r}")
+    errors = supported_models.catalog_errors(document, channel)
+    if errors:
+        raise Refusal(f"{catalog_path.name} is not what {channel} offers: " + "; ".join(errors))
     signature = openssl_sign(openssl, seed, catalog_path)
     del seed
     if not openssl_verify(openssl, trust_root, catalog, signature):
