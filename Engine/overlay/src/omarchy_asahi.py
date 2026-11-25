@@ -766,6 +766,21 @@ def _neo_peripheral_collectors(installer):
 
 
 @contextlib.contextmanager
+def _m4_camera_collectors(installer):
+    """Collect the M4 family's camera tuning from appleh16camerad as well,
+    and keep that daemon in the fallback archive (omarchy_isp)."""
+    chip = getattr(getattr(installer, "sysinfo", None), "chip_id", None)
+    if chip not in omarchy_isp.M4_CHIPS:
+        yield
+        return
+    try:
+        with omarchy_isp.m4_collectors(stub, asahi_firmware.isp, chip):
+            yield
+    except omarchy_isp.IspError as error:
+        raise AsahiAdapterError(f"M4 camera firmware collection failed: {error}") from error
+
+
+@contextlib.contextmanager
 def _installed_macos_wifi(installer):
     """Collect BCM4388 rev C2 Wi-Fi, from the installed macOS when Recovery
     lacks this Mac's board (omarchy_wifi)."""
@@ -798,7 +813,7 @@ def stub_installer(sysinfo, dutil, osinfo):
 
     def collect_firmware_from_an_encrypted_recovery(pkg):
         with _newer_trackpad_keys(), _neo_peripheral_collectors(installer), \
-                _installed_macos_wifi(installer) as radios:
+                _m4_camera_collectors(installer), _installed_macos_wifi(installer) as radios:
             result = _collect_firmware(pkg)
             if radios is not None:
                 try:

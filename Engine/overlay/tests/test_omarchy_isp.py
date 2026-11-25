@@ -34,6 +34,13 @@ class IspTests(unittest.TestCase):
         self.assertEqual(output, {"apple/isp_1925_03XX.dat": data})
         self.assertEqual(len(next(iter(output.values()))), 52160)
 
+    def test_extracts_2224_full_kernel_size_only_when_asked(self):
+        data = blob(isp.IMX958_2224, 0xCD)
+        self.assertEqual(isp.extract(bytes(4096) + data, [LEGACY]), {})
+        output = isp.extract(bytes(4096) + data, [LEGACY, isp.IMX958_2224])
+        self.assertEqual(output, {"apple/isp_2224_01XX.dat": data})
+        self.assertEqual(len(data), 28672)
+
     def test_both_daemons_and_legacy_only_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
@@ -95,6 +102,91 @@ class IspTests(unittest.TestCase):
             self.assertIsInstance(firmware, FWFile)
             self.assertEqual(name, firmware.name)
             self.assertEqual(firmware.data, blob(isp.IMX558_1925))
+
+
+class M4CollectorTests(unittest.TestCase):
+    M1_TO_M3 = (0x8103, 0x6000, 0x6001, 0x6002, 0x8112, 0x6020, 0x6021, 0x6022,
+                0x8122, 0x6030, 0x6031, 0x6034)
+
+    def setUp(self):
+        class FWFile:
+            def __init__(self, name, data):
+                self.name, self.data = name, data
+
+        class Original:
+            def __init__(self, source):
+                self.fwfiles = []
+                self.load(source)
+
+            def load(self, source):
+                self.fwfiles.append(("upstream", source))
+
+            def files(self):
+                return self.fwfiles
+
+        self.upstream = SimpleNamespace(ISP_SETFILES=[LEGACY], FWFile=FWFile, ISPFWCollection=Original)
+        self.commands = []
+        self.process = SimpleNamespace(run=lambda command, *args, **kwargs: self.commands.append(command),
+                                       PIPE=-1)
+        self.stub = SimpleNamespace(ISPFWCollection=Original, subprocess=self.process)
+        work = tempfile.TemporaryDirectory()
+        self.addCleanup(work.cleanup)
+        self.sbin = Path(work.name, "recovery/usr/sbin")
+        self.sbin.mkdir(parents=True)
+        (self.sbin / "appleh13camerad").write_bytes(blob(LEGACY))
+        # Setfiles start on 4 KiB boundaries in the daemon.
+        h16 = bytearray(0xD000 + 0x7000)
+        h16[:0xCBC0] = blob(isp.IMX558_1925)
+        h16[0xD000:] = blob(isp.IMX958_2224)
+        (self.sbin / "appleh16camerad").write_bytes(h16)
+
+    def test_other_macs_keep_stubs_collection_and_archive(self):
+        for chip in (*self.M1_TO_M3, 0x8140, None):
+            with self.subTest(chip=chip), isp.m4_collectors(self.stub, self.upstream, chip, self.sbin):
+                self.assertIs(self.stub.ISPFWCollection, self.upstream.ISPFWCollection)
+                self.assertIs(self.stub.subprocess, self.process)
+
+    def test_m4_collects_both_daemons_and_archives_appleh16camerad(self):
+        for chip in sorted(isp.M4_CHIPS):
+            with self.subTest(chip=hex(chip)):
+                self.commands.clear()
+                with isp.m4_collectors(self.stub, self.upstream, chip, self.sbin):
+                    names = [name for name, _ in self.stub.ISPFWCollection(str(self.sbin)).files()]
+                    self.assertEqual(names, ["apple/isp_1820_01XX.dat", "apple/isp_1925_03XX.dat",
+                                             "apple/isp_2224_01XX.dat"])
+                    self.stub.subprocess.run(["tar", "czf", "all_firmware.tar.gz", "fud_firmware",
+                                              "-C", "../../usr/sbin", "appleh13camerad"], check=True)
+                    self.stub.subprocess.run(["hdiutil", "detach", "-quiet", "recovery"])
+                    self.assertEqual(self.stub.subprocess.PIPE, -1)
+                self.assertEqual(self.commands, [
+                    ["tar", "czf", "all_firmware.tar.gz", "fud_firmware", "-C", "../../usr/sbin",
+                     "appleh13camerad", "-C", str(self.sbin.resolve()), "appleh16camerad"],
+                    ["hdiutil", "detach", "-quiet", "recovery"],
+                ])
+                self.assertIs(self.stub.ISPFWCollection, self.upstream.ISPFWCollection)
+                self.assertIs(self.stub.subprocess, self.process)
+
+    def test_m4_without_appleh16camerad_archives_as_before(self):
+        (self.sbin / "appleh16camerad").unlink()
+        command = ["tar", "czf", "all_firmware.tar.gz", "-C", "../../usr/sbin", "appleh13camerad"]
+        with isp.m4_collectors(self.stub, self.upstream, 0x8132, self.sbin):
+            self.stub.subprocess.run(command)
+            names = [name for name, _ in self.stub.ISPFWCollection(str(self.sbin)).files()]
+        self.assertEqual(self.commands, [command])
+        self.assertEqual(names, ["apple/isp_1820_01XX.dat"])
+
+    def test_m4_hooks_restored_after_an_error(self):
+        with self.assertRaises(isp.IspError):
+            with isp.m4_collectors(self.stub, self.upstream, 0x8132, self.sbin):
+                raise isp.IspError("stop")
+        self.assertIs(self.stub.ISPFWCollection, self.upstream.ISPFWCollection)
+        self.assertIs(self.stub.subprocess, self.process)
+
+    def test_extra_setfiles_leave_the_default_registry_alone(self):
+        self.assertNotIn(isp.IMX958_2224, isp.extended_setfiles([LEGACY]))
+        (self.sbin / "appleh13camerad").unlink()
+        names = [name for name, _ in isp.collection_class(self.upstream)(str(self.sbin)).files()]
+        self.assertEqual(names, ["apple/isp_1925_03XX.dat"])
 
 
 if __name__ == "__main__":

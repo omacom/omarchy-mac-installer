@@ -2857,5 +2857,71 @@ class InstalledMacosWiFiTests(unittest.TestCase):
         self.assertEqual(self.collect("j314sap", SimpleNamespace()), [("collect", "pkg")])
 
 
+class M4CameraCollectionTests(unittest.TestCase):
+    """collect_firmware takes the M4 family's camera tuning through omarchy_isp."""
+
+    def collect(self, chip_id, firmware, error=None):
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        image = Path(root.name, "VG", "usr/standalone/firmware/arm64eBaseSystem.dmg")
+        image.parent.mkdir(parents=True)
+        image.write_bytes(b"plain recovery image")
+        calls = []
+
+        class Stub:
+            def __init__(self, *args):
+                self.osi = SimpleNamespace(vgid="VG", recovery=root.name)
+                self.sysinfo = SimpleNamespace(device_class="j713ap", chip_id=chip_id)
+
+            def load_identity(self):
+                pass
+
+            def install_files(self, cur_os):
+                pass
+
+            def collect_firmware(self, pkg):
+                calls.append(("collect", pkg))
+                if error is not None:
+                    raise error
+
+        @contextmanager
+        def camera(stub, upstream, chip):
+            calls.append(("camera", stub is fake_stub, upstream, chip))
+            yield
+
+        @contextmanager
+        def wifi(stub, upstream, machine):
+            calls.append(("wifi", machine))
+            yield SimpleNamespace(require=lambda: calls.append(("require",)))
+
+        fake_stub = SimpleNamespace(StubInstaller=Stub, WiFiFWCollection=object, BluetoothFWCollection=object,
+                                    subprocess=subprocess)
+        with patch("omarchy_asahi.stub", fake_stub), patch("omarchy_asahi.asahi_firmware", firmware), \
+                patch("omarchy_asahi.omarchy_isp.m4_collectors", camera), \
+                patch("omarchy_asahi.omarchy_wifi.collectors", wifi):
+            stub_installer("sysinfo", "dutil", "osinfo").collect_firmware("pkg")
+        return calls
+
+    def test_m4_collection_runs_inside_the_camera_collectors(self):
+        firmware = SimpleNamespace(wifi="upstream wifi", isp="upstream isp")
+        for chip in (0x8132, 0x6040, 0x6041):
+            with self.subTest(chip=hex(chip)):
+                self.assertEqual(self.collect(chip, firmware), [
+                    ("camera", True, "upstream isp", chip), ("wifi", "j713"), ("collect", "pkg"), ("require",)])
+
+    def test_other_macs_never_read_the_camera_collectors(self):
+        firmware = SimpleNamespace(wifi="upstream wifi")
+        for chip in (0x8103, 0x6000, 0x8112, 0x6020, 0x8122, 0x6030, 0x6034, 0x8140, None):
+            with self.subTest(chip=chip):
+                self.assertEqual(self.collect(chip, firmware), [("wifi", "j713"), ("collect", "pkg"), ("require",)])
+
+    def test_a_broken_camera_setfile_stops_the_install(self):
+        import omarchy_isp
+
+        firmware = SimpleNamespace(wifi="upstream wifi", isp="upstream isp")
+        with self.assertRaisesRegex(AsahiAdapterError, "M4 camera firmware collection failed: truncated"):
+            self.collect(0x8132, firmware, omarchy_isp.IspError("truncated ISP setfile 2224_01XX"))
+
+
 if __name__ == "__main__":
     unittest.main()
