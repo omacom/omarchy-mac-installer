@@ -105,7 +105,7 @@ The `sign` job waits for the owner's approval in the run page, in a dry run too:
 
 ## Rolling edge back
 
-A signed catalog enables exactly the Macs its channel offers today. To re-sign edge on an image that cannot boot some of them, such as one without the M4 boot files, first merge a pull request that qualifies those Macs for `developer` in `scripts/supported-models.json` and updates the sets `scripts/tests/test_supported_models.py` expects. Otherwise the catalog offers them. The engine then refuses an image without the M4 boot files before it changes the disk, but it does not check the image for a Mac's device tree.
+A signed catalog enables exactly the Macs its channel offers today. To re-sign edge on an image that cannot boot some of them, such as one without the M4 boot files, first merge a pull request that qualifies those Macs for `developer` in `scripts/supported-models.json` and updates what follows the rungs: the device-tree policy (`image-builder/builder/candidate-trust/policy.json`) and the tests that name those Macs. `test/all` and `image-builder/test/all` fail until they agree. Otherwise the catalog offers them. The engine then refuses an image without the M4 boot files before it changes the disk, but it does not check the image for a Mac's device tree.
 
 ## Release checklist
 
