@@ -66,7 +66,7 @@ class TodaysManifestTests(unittest.TestCase):
                 self.assertNotIn(identifier, offered, f"{identifier} in {channel}")
         self.assertEqual(set(supported_models.refused()), {"apple,j575d"})
 
-    def test_only_the_boards_short_of_stable_carry_a_note(self) -> None:
+    def test_only_the_edge_boards_carry_a_note(self) -> None:
         self.assertEqual(set(supported_models.notes()), M4_BOARDS)
 
     def test_the_manifest_on_disk_loads(self) -> None:
@@ -78,7 +78,7 @@ class LadderTests(unittest.TestCase):
 
     MIXED = {
         "apple,j274": {"qualified": "stable"},
-        "apple,j700": {"qualified": "rc", "note": "rc and edge only"},
+        "apple,j700": {"qualified": "rc"},
         "apple,j616s": {"qualified": "edge", "note": "edge only"},
         "apple,j815": {"qualified": "developer", "note": "bring-up"},
         "apple,j575d": {"refused": "no engine entry"},
@@ -110,11 +110,8 @@ class LadderTests(unittest.TestCase):
             supported_models.developer_boards(self.path), {"apple,j815": "bring-up"}
         )
 
-    def test_a_note_travels_for_a_board_short_of_stable_but_not_a_developer_one(self) -> None:
-        self.assertEqual(
-            supported_models.notes(self.path),
-            {"apple,j700": "rc and edge only", "apple,j616s": "edge only"},
-        )
+    def test_a_note_travels_for_a_board_qualified_for_edge_alone(self) -> None:
+        self.assertEqual(supported_models.notes(self.path), {"apple,j616s": "edge only"})
 
 
 class CoverageTests(unittest.TestCase):
@@ -226,8 +223,10 @@ class CatalogErrorsTests(unittest.TestCase):
         self.path = write(LadderTests.MIXED)
 
     def models(self, channel: str) -> list[dict]:
+        noted = supported_models.notes(self.path) if channel == "edge" else {}
         return [
             {"deviceIdentifier": identifier, "status": "enabled"}
+            | ({"previewNote": noted[identifier]} if identifier in noted else {})
             for identifier in supported_models.boards_for(channel, self.path)
         ]
 
@@ -262,6 +261,82 @@ class CatalogErrorsTests(unittest.TestCase):
         )
 
 
+class NoteTests(unittest.TestCase):
+    """Edge warns on every board it alone offers; no other channel carries a note."""
+
+    def setUp(self) -> None:
+        self.path = write(LadderTests.MIXED)
+
+    def models(self, channel: str, notes: dict[str, str]) -> list[dict]:
+        return [
+            {"deviceIdentifier": identifier, "status": "enabled"}
+            | ({"previewNote": notes[identifier]} if identifier in notes else {})
+            for identifier in supported_models.boards_for(channel, self.path)
+        ]
+
+    def errors(self, channel: str, notes: dict) -> list[str]:
+        catalog = {"channel": channel, "models": self.models(channel, notes)}
+        return supported_models.catalog_errors(catalog, path=self.path)
+
+    def test_edge_needs_the_warning_whatever_its_wording(self) -> None:
+        for notes in ({}, {"apple,j616s": ""}, {"apple,j616s": 1}):
+            self.assertIn("apple,j616s has only qualified for edge but carries no preview note",
+                          self.errors("edge", notes))
+        self.assertEqual(self.errors("edge", {"apple,j616s": "an older wording"}), [])
+
+    def test_edge_may_still_warn_about_a_board_that_has_moved_on(self) -> None:
+        notes = {"apple,j616s": "edge only", "apple,j700": "signed before it reached rc"}
+        self.assertEqual(self.errors("edge", notes), [])
+
+    def test_rc_and_stable_refuse_any_note(self) -> None:
+        for channel in ("rc", "stable"):
+            self.assertEqual(self.errors(channel, {"apple,j274": "careful"}),
+                             [f"apple,j274 carries a preview note, which {channel} never shows"])
+
+
+class DestinationTests(unittest.TestCase):
+    """What a channel may serve, whatever the catalog was staged for."""
+
+    def setUp(self) -> None:
+        self.path = write(LadderTests.MIXED | {
+            "apple,j773g": {"qualified": "rc", "app_minimum": "2.4.0"},
+        })
+
+    def errors(self, destination: str, *identifiers: str, **fields) -> list[str]:
+        models = [{"deviceIdentifier": identifier, "status": "enabled"} for identifier in identifiers]
+        return supported_models.destination_errors({"models": models} | fields, destination, self.path)
+
+    def test_a_catalog_signed_for_another_channel_is_refused(self) -> None:
+        self.assertEqual(self.errors("stable", "apple,j274", channel="edge"),
+                         ["the catalog is signed for edge, not stable"])
+        self.assertEqual(self.errors("stable", "apple,j274", channel="stable"), [])
+
+    def test_a_mac_the_channel_does_not_offer_is_refused_in_an_unnamed_catalog_too(self) -> None:
+        for identifier in ("apple,j700", "apple,j616s", "apple,j815", "apple,j575d", "apple,j999"):
+            self.assertIn(f"stable does not offer {identifier}", self.errors("stable", "apple,j274", identifier))
+        # A model that is listed but disabled counts too: the app may still read it.
+        models = [{"deviceIdentifier": "apple,j616s", "status": "disabled"}]
+        self.assertIn("stable does not offer apple,j616s",
+                      supported_models.destination_errors({"models": models}, "stable", self.path))
+
+    def test_an_older_catalog_offering_fewer_macs_may_still_be_served(self) -> None:
+        self.assertEqual(self.errors("edge", "apple,j274"), [])
+        self.assertEqual(self.errors("stable"), [])
+
+    def test_the_app_floor_follows_the_mac_on_every_channel(self) -> None:
+        self.assertTrue(self.errors("rc", "apple,j773g", installer={"minimumVersion": "2.3.9"}))
+        self.assertEqual(self.errors("rc", "apple,j773g", installer={"minimumVersion": "2.4.0"}), [])
+
+    def test_a_note_is_refused_off_edge(self) -> None:
+        models = [{"deviceIdentifier": "apple,j274", "status": "enabled", "previewNote": "careful"}]
+        self.assertTrue(supported_models.destination_errors({"models": models}, "rc", self.path))
+
+    def test_an_unknown_destination_is_not_treated_as_edge(self) -> None:
+        with self.assertRaises(SystemExit):
+            self.errors("beta", "apple,j274")
+        self.assertEqual(supported_models.main(["check-destination", "unread.json", "beta"]), 64)
+
+
 class ManifestValidationTests(unittest.TestCase):
     def assertRefused(self, macs: dict, fragment: str, schema: int | None = None) -> None:
         path = write(macs, supported_models.SCHEMA_VERSION if schema is None else schema)
@@ -282,11 +357,17 @@ class ManifestValidationTests(unittest.TestCase):
     def test_an_unknown_qualification_is_refused(self) -> None:
         self.assertRefused({"apple,j274": {"qualified": "beta"}}, "must be qualified for one of")
 
-    def test_a_board_that_reached_stable_may_not_carry_a_note(self) -> None:
-        self.assertRefused(
-            {"apple,j274": {"qualified": "stable", "note": "careful"}},
-            "has reached stable, so its note has nothing to warn about",
-        )
+    def test_a_board_past_edge_may_not_carry_a_note(self) -> None:
+        for channel in ("rc", "stable"):
+            self.assertRefused(
+                {"apple,j274": {"qualified": channel, "note": "careful"}},
+                f"has reached {channel}, so its note has nothing to warn about",
+            )
+
+    def test_a_board_short_of_rc_needs_a_note(self) -> None:
+        for channel in ("developer", "edge"):
+            for record in ({}, {"note": ""}, {"note": 1}):
+                self.assertRefused({"apple,j274": {"qualified": channel} | record}, "so it needs a note")
 
     def test_a_refused_board_carries_a_reason_and_nothing_else(self) -> None:
         self.assertRefused({"apple,j274": {"refused": ""}}, "needs a reason")

@@ -187,7 +187,7 @@
       return availability
     }
 
-    /// The 35 Macs every catalog enables (scripts/supported-models.json): every
+    /// The 35 Macs every channel enables (scripts/supported-models.json): every
     /// M1, M2 and M3 Mac and the MacBook Neo.
     public static let simulatedCatalogDevices = [
       "apple,j274", "apple,j293", "apple,j313", "apple,j456", "apple,j457", "apple,j314s",

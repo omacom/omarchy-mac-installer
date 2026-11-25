@@ -174,7 +174,9 @@ jobs:
           } | tee "$inputs/toolchain.txt"
 
       - name: Run the catalog checks
-        run: python3 -m unittest discover -s scripts/tests -p 'test_catalog_release.py'
+        run: |
+          python3 -m unittest discover -s scripts/tests -p 'test_catalog_release.py'
+          python3 -m unittest discover -s scripts/tests -p 'test_supported_models.py'
 
       - name: Build the catalog
         id: build

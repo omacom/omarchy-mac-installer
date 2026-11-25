@@ -329,6 +329,10 @@ os_promote() {
     die "releases/$tag/catalog.signed.json is not published"
   decode_envelope "$work/candidate.json" "$work/catalog" "$work/signature"
   verify_catalog "$work/catalog" "$work/signature"
+  # Which Macs the destination may offer, whatever channel the envelope was
+  # staged for. An older catalog offering fewer still promotes, for a rollback.
+  python3 "$script_directory/supported_models.py" check-destination "$work/catalog" "$channel" ||
+    die "$channel may not serve releases/$tag"
 
   local sequence
   sequence=$(catalog_field "$work/catalog" sequence)

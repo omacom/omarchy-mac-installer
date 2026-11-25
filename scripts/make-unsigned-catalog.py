@@ -425,8 +425,10 @@ def model_group(inputs: dict, group: dict, assets: Path, base_url: str) -> tuple
         "metadataArtifact": artifact(metadata, base_url),
         "payloadArtifact": payload_artifact,
     }
+    notes = supported_models.notes()
     models = [
         {"deviceIdentifier": device_identifier, **shared}
+        | ({"previewNote": notes[device_identifier]} if device_identifier in notes else {})
         for device_identifier in group["device_identifiers"]
     ]
     return models, len(parts)

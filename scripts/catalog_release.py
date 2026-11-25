@@ -510,7 +510,7 @@ def build_catalog(
             "payloadArtifact": payload_artifact,
         }
         if identifier in notes:
-            # The app ignores keys it does not know; ticket 12 shows this.
+            # An app that does not show notes ignores the key.
             model["previewNote"] = notes[identifier]
         models.append(model)
     catalog = {
@@ -663,17 +663,19 @@ def promote_catalog(source: dict, now: datetime.datetime, channel: str,
                     source_channel: str | None = None) -> dict:
     """SOURCE with its sequence, issue time and channel replaced and any Mac
     the target has not qualified for dropped: every surviving model, pin,
-    digest and the installer block keep exactly the source's values. CHANNEL is
-    the destination; SOURCE_CHANNEL judges the source's own coverage, for a
-    catalog published before catalogs named their channel."""
+    digest and the installer block keep exactly the source's values, less the
+    preview note edge shows and no other channel does. CHANNEL is the
+    destination; SOURCE_CHANNEL is the channel SOURCE was read from. SOURCE is
+    not held to today's set for its own channel, so a Mac that joined edge
+    since it was signed does not stop it being promoted; the result is held to
+    exactly CHANNEL's."""
     check_channel(channel)
     if source.get("schemaVersion") != SCHEMA_VERSION:
         raise Refusal("the source catalog is not a schema 4 catalog")
     check_promotion_source(source)
     promotion_artifacts(source)
-    errors = supported_models.catalog_errors(source, channel=source_channel)
-    if errors:
-        raise Refusal("the source catalog does not cover its own channel: " + "; ".join(errors))
+    if source_channel is not None and source.get("channel") not in (None, source_channel):
+        raise Refusal(f"the {source_channel} catalog is signed for {source['channel']!r}")
     sequence = int(now.timestamp())
     if sequence <= source["sequence"]:
         raise Refusal(f"sequence {sequence} does not follow the source catalog's {source['sequence']}")
@@ -683,10 +685,14 @@ def promote_catalog(source: dict, now: datetime.datetime, channel: str,
     promoted["channel"] = channel
     offered = set(supported_models.boards_for(channel))
     promoted["models"] = [
-        model for model in promoted["models"] if model.get("deviceIdentifier") in offered
+        without_note(model) for model in promoted["models"] if model.get("deviceIdentifier") in offered
     ]
     check_same_pins(source, promoted, channel)
     return promoted
+
+
+def without_note(model: dict) -> dict:
+    return {key: value for key, value in model.items() if key != "previewNote"}
 
 
 def check_same_pins(source: dict, promoted: dict, channel: str) -> None:
@@ -722,8 +728,9 @@ def check_same_pins(source: dict, promoted: dict, channel: str) -> None:
 
 
 def check_promoted_models(source: dict, promoted: dict, channel: str) -> None:
-    """A promotion carries exactly CHANNEL's Macs. It may drop one the target
-    has not qualified for; it may never add a Mac or change what one pins."""
+    """A promotion carries exactly CHANNEL's Macs, without preview notes. It
+    may drop a Mac the target has not qualified for; it may never add one or
+    change what one pins."""
     before = {model.get("deviceIdentifier"): model for model in source.get("models", [])}
     after = {model.get("deviceIdentifier"): model for model in promoted.get("models", [])}
     if len(after) != len(promoted.get("models", [])):
@@ -732,7 +739,8 @@ def check_promoted_models(source: dict, promoted: dict, channel: str) -> None:
     if added:
         raise Refusal(f"a promotion cannot add a Mac the source does not carry: {', '.join(added)}")
     changed = sorted(
-        identifier for identifier, model in after.items() if before[identifier] != model
+        identifier for identifier, model in after.items()
+        if without_note(before[identifier]) != without_note(model)
     )
     if changed:
         raise Refusal(f"the promoted catalog changes what a Mac pins: {', '.join(changed)}")
@@ -750,6 +758,9 @@ def check_promoted_models(source: dict, promoted: dict, channel: str) -> None:
         # a channel that has one is a mistake, not a withdrawal.
         raise Refusal(f"{channel} would offer no Mac at all: close the channel rather than "
                       "withdraw its last Mac")
+    errors = supported_models.catalog_errors(promoted, channel)
+    if errors:
+        raise Refusal(f"the promoted catalog is not what {channel} offers: " + "; ".join(errors))
     dropped = sorted(set(before) - set(after))
     if dropped:
         print(f"promotion_dropped={','.join(dropped)}", file=sys.stderr)
@@ -1300,12 +1311,14 @@ def command_sign(arguments) -> None:
     catalog = catalog_path.read_bytes()
     if len(catalog) > MAXIMUM_CATALOG_BYTES:
         raise Refusal("the catalog is too large for the app")
+    channel = check_signed_channel(catalog_path.name.removeprefix("catalog-").removesuffix(".json"))
+    document = load_json(catalog_path, "catalog")
+    if document.get("channel") != channel:
+        raise Refusal(f"{catalog_path.name} says it is for {document.get('channel')!r}")
     signature = openssl_sign(openssl, seed, catalog_path)
     del seed
     if not openssl_verify(openssl, trust_root, catalog, signature):
         raise Refusal("the new signature does not verify against the trust root")
-    channel = catalog_path.name.removeprefix("catalog-").removesuffix(".json")
-    check_signed_channel(channel)
     arguments.out.mkdir(parents=True, exist_ok=True)
     signature_path = arguments.out / f"catalog-{channel}.json.sig"
     signature_path.write_bytes(signature)
@@ -1419,6 +1432,8 @@ def command_check_promotion(arguments) -> None:
         if source_sha256 != arguments.source_sha256:
             raise Refusal(f"the source catalog is sha256 {source_sha256}, not the pinned {arguments.source_sha256}")
     check_promotion_source(source)
+    if source.get("channel") not in (None, source_channel):
+        raise Refusal(f"the {source_channel} catalog is signed for {source['channel']!r}")
     promoted = load_json(arguments.catalog, "catalog")
     check_same_pins(source, promoted, channel)
     promotion_artifacts(promoted)
@@ -1459,6 +1474,11 @@ def command_publish(arguments) -> None:
     trust_root = read_trust_root(arguments.trust_root)
     data = arguments.envelope.read_bytes()
     document = verify_envelope(data, trust_root, openssl)
+    if document.get("channel") != channel:
+        raise Refusal(f"the catalog is signed for {document.get('channel')!r}, not the {channel} it would be published to")
+    errors = supported_models.destination_errors(document, channel)
+    if errors:
+        raise Refusal(f"{channel} may not serve this catalog: " + "; ".join(errors))
     # Every host is checked before any is written, so a refusal on the
     # second never leaves the first ahead.
     pending = []

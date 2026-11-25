@@ -17,13 +17,14 @@ can only shrink a set. `developer` is qualification for no channel at all; only
 a developer build's sealed catalog may add such a board.
 
 A catalog must enable exactly its channel's set, so a release can neither drop
-a Mac it promised nor add one that has not qualified. `note` is the text a
-catalog shows for a board short of stable, and a board that has reached stable
-may not carry one. `app_minimum` is the oldest installer version that can
-admit the board at all.
+a Mac it promised nor add one that has not qualified. `note` is the warning a
+catalog shows for a board that has not reached rc: a developer or edge board
+must carry one, and a board past edge may not. `app_minimum` is the oldest
+installer version that can admit the board at all.
 
 Usage:
-  supported_models.py check-catalog FILE   exit 1 unless FILE covers its channel
+  supported_models.py check-catalog FILE                exit 1 unless FILE covers its channel
+  supported_models.py check-destination FILE CHANNEL    exit 1 unless CHANNEL may serve FILE
 """
 from __future__ import annotations
 
@@ -39,6 +40,8 @@ SCHEMA_VERSION = 2
 QUALIFICATION_ORDER = ("developer", "edge", "rc", "stable")
 # The channels a signed catalog is published for; `developer` is not one.
 CHANNELS = ("edge", "rc", "stable")
+# The qualifications a catalog shows with a warning. Only edge publishes one.
+NOTED = ("developer", "edge")
 DEVICE_IDENTIFIER = re.compile(r"^apple,[0-9a-z]+$")
 INSTALLER_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 RECORD_KEYS = {"qualified", "refused", "note", "app_minimum"}
@@ -75,11 +78,11 @@ def load(path: Path = MANIFEST) -> dict[str, dict]:
             continue
         if record["qualified"] not in QUALIFICATION_ORDER:
             _refuse(path, f"{identifier} must be qualified for one of {', '.join(QUALIFICATION_ORDER)}")
-        if "note" in record:
-            if not isinstance(record["note"], str) or not record["note"]:
-                _refuse(path, f"{identifier} needs text for its note")
-            if record["qualified"] == "stable":
-                _refuse(path, f"{identifier} has reached stable, so its note has nothing to warn about")
+        if record["qualified"] in NOTED:
+            if not isinstance(record.get("note"), str) or not record["note"]:
+                _refuse(path, f"{identifier} has only qualified for {record['qualified']}, so it needs a note")
+        elif "note" in record:
+            _refuse(path, f"{identifier} has reached {record['qualified']}, so its note has nothing to warn about")
         if "app_minimum" in record and not (
             isinstance(record["app_minimum"], str)
             and INSTALLER_VERSION.fullmatch(record["app_minimum"])
@@ -125,7 +128,7 @@ def developer_boards(path: Path = MANIFEST) -> dict[str, str]:
 
 
 def notes(path: Path = MANIFEST) -> dict[str, str]:
-    """The text a catalog shows for each board that has not reached stable."""
+    """The warning a catalog shows for each board qualified for edge alone."""
     return {
         identifier: record["note"]
         for identifier, record in load(path).items()
@@ -229,6 +232,47 @@ def app_minimum_errors(channel_minimum: str | None, identifiers: list[str],
     ]
 
 
+def note_errors(models: list[dict], channel: str, path: Path = MANIFEST) -> list[str]:
+    """Why MODELS' preview notes are wrong for CHANNEL. Edge shows every board
+    qualified for edge alone its warning. The text is not compared, so a catalog
+    signed before the manifest reworded a note stays valid."""
+    if channel != "edge":
+        return [
+            f"{model.get('deviceIdentifier')} carries a preview note, which {channel} never shows"
+            for model in models
+            if "previewNote" in model
+        ]
+    noted = notes(path)
+    return [
+        f"{model.get('deviceIdentifier')} has only qualified for edge but carries no preview note"
+        for model in models
+        if model.get("deviceIdentifier") in noted
+        and not (isinstance(model.get("previewNote"), str) and model["previewNote"])
+    ]
+
+
+def destination_errors(catalog: dict, channel: str, path: Path = MANIFEST) -> list[str]:
+    """Why CHANNEL may not serve CATALOG. Narrower than catalog_errors: the
+    catalog may offer fewer Macs than CHANNEL does, so a rollback to an older
+    one stays possible, but none CHANNEL does not offer."""
+    check_channel(channel)
+    errors = []
+    declared = catalog.get("channel")
+    if declared is not None and declared != channel:
+        errors.append(f"the catalog is signed for {declared}, not {channel}")
+    models = catalog.get("models")
+    if not isinstance(models, list):
+        return errors + ["the catalog has no models list"]
+    offered = boards_for(channel, path)
+    identifiers = [model.get("deviceIdentifier") for model in models]
+    errors += [
+        f"{channel} does not offer {identifier}" for identifier in identifiers if identifier not in offered
+    ]
+    installer = catalog.get("installer")
+    minimum = installer.get("minimumVersion") if isinstance(installer, dict) else None
+    return errors + note_errors(models, channel, path) + app_minimum_errors(minimum, identifiers, path)
+
+
 def catalog_errors(catalog: dict, channel: str | None = None,
                    path: Path = MANIFEST) -> list[str]:
     """Why CATALOG does not cover exactly its channel's set. CHANNEL names the
@@ -262,16 +306,24 @@ def catalog_errors(catalog: dict, channel: str | None = None,
         if channel is not None
         else private_coverage_errors(enabled, path)
     )
-    return errors + coverage + app_minimum_errors(minimum, enabled, path)
+    shown = note_errors(models, channel, path) if channel is not None else []
+    return errors + coverage + shown + app_minimum_errors(minimum, enabled, path)
 
 
 def main(arguments: list[str]) -> int:
-    if len(arguments) != 2 or arguments[0] != "check-catalog":
-        print(__doc__.strip().splitlines()[-1].strip(), file=sys.stderr)
+    command = arguments[0] if arguments else None
+    if (command, len(arguments)) not in (("check-catalog", 2), ("check-destination", 3)):
+        print(__doc__[__doc__.index("Usage:"):].strip(), file=sys.stderr)
         return 64
-    errors = catalog_errors(json.loads(Path(arguments[1]).read_text()))
+    if command == "check-destination" and arguments[2] not in CHANNELS:
+        print(f"channel must be one of {', '.join(CHANNELS)}, not {arguments[2]}", file=sys.stderr)
+        return 64
+    catalog = json.loads(Path(arguments[1]).read_text())
+    errors = (
+        catalog_errors(catalog) if command == "check-catalog" else destination_errors(catalog, arguments[2])
+    )
     for error in errors:
-        print(f"catalog model coverage: {error}", file=sys.stderr)
+        print(f"{command}: {error}", file=sys.stderr)
     return 1 if errors else 0
 
 

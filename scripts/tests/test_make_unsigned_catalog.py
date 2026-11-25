@@ -133,6 +133,12 @@ class CatalogGeneratorTests(unittest.TestCase):
         self.inputs["installer"]["minimum_version"] = "2.3.17"
         result = self.generate(self.inputs)
         self.assertEqual(result.returncode, 0, result.stderr)
+        noted = {
+            model["deviceIdentifier"]: model["previewNote"]
+            for model in json.loads((self.directory / "catalog.json").read_text())["models"]
+            if "previewNote" in model
+        }
+        self.assertEqual(noted, {"apple,j614s": json.loads(MANIFEST.read_text())["macs"]["apple,j614s"]["note"]})
 
     def test_carries_the_installer_compatibility_block(self) -> None:
         self.inputs["installer"]["minimum_version"] = "2.3.0"

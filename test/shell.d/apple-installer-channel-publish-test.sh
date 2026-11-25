@@ -312,6 +312,48 @@ refused_envelope "an-m3-ultra" "models.append(dict(models[0], deviceIdentifier='
 refused_envelope "an-m6-mac" "models.append(dict(models[0], deviceIdentifier='apple,j804'))" "apple,j804 is not in scripts/supported-models.json"
 pass "envelope refuses a catalog missing, disabling or overreaching any supported Mac"
 
+# --- a catalog is refused a channel it was not made for ----------------------
+refused_promotion() {
+  local name=$1 to=$2 edit=$3 expected=$4 tag="os-v4.0.2-mac.1.20260902-$1"
+  stage_payload "$tag" 128
+  write_catalog "$WORK/$name.catalog" 900 "$BASE/releases/$tag/payload.zip" 128
+  python3 -c "
+import json, sys
+path, manifest = sys.argv[1:3]
+catalog = json.load(open(path))
+macs = json.load(open(manifest))['macs']
+models = catalog['models']
+$edit
+json.dump(catalog, open(path, 'w'))
+" "$WORK/$name.catalog" "$ROOT/scripts/supported-models.json" || fail "$name catalog is written"
+  sign_catalog "$WORK/$name.catalog" "$WORK/$name.sig"
+  "$PUBLISHER" envelope --catalog "$WORK/$name.catalog" --signature "$WORK/$name.sig" \
+    --output "$STREAM_DIR/releases/$tag/catalog.signed.json" >"$WORK/$name.log" 2>&1 ||
+    fail "the $name catalog wraps into an envelope" "$(cat "$WORK/$name.log")"
+  : >"$CALLS"
+  if OMARCHY_PUBLISH_ASSUME_YES=$tag "$PUBLISHER" os-promote --tag "$tag" --to "$to" >"$WORK/$name.log" 2>&1; then
+    fail "os-promote refuses $name on $to"
+  fi
+  grep -q -- "$expected" "$WORK/$name.log" || fail "the $name refusal says $expected" "$(cat "$WORK/$name.log")"
+  grep -q "^aws s3 cp" "$CALLS" && fail "a refused promotion uploads nothing"
+  return 0
+}
+edge_catalog="
+catalog['channel'] = 'edge'
+catalog['installer'] = {'minimumVersion': '2.3.17'}
+for mac, record in macs.items():
+    if record.get('qualified') == 'edge':
+        models.append(dict(models[0], deviceIdentifier=mac, previewNote=record['note']))
+"
+refused_promotion edge rc "$edge_catalog" "signed for edge, not rc"
+refused_promotion unnamed stable "$edge_catalog
+del catalog['channel']" "stable does not offer apple,j616s"
+refused_promotion developer edge "
+catalog['installer'] = {'minimumVersion': '2.3.17'}
+models.append(dict(models[0], deviceIdentifier='apple,j815'))" "edge does not offer apple,j815"
+refused_promotion noted stable "models[0]['previewNote'] = 'careful'" "carries a preview note"
+pass "os-promote refuses another channel's catalog and a Mac its channel does not offer"
+
 # --- promotion writes both channel objects and verifies them back -----------
 OMARCHY_PUBLISH_ASSUME_YES=os-v4.0.2-mac.1.20260902 "$PUBLISHER" os-promote --tag os-v4.0.2-mac.1.20260902 --to stable \
   >"$WORK/promote.log" 2>&1 || fail "first promotion succeeds" "$(cat "$WORK/promote.log")"

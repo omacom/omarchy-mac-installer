@@ -509,10 +509,10 @@ class CatalogReleaseTests(ReleaseTestCase):
         with self.assertRaisesRegex(release.Refusal, "names image id"):
             build(IMAGE, other)
 
-    def test_only_a_mac_short_of_stable_carries_a_preview_note(self) -> None:
+    def test_only_a_noted_mac_carries_a_preview_note(self) -> None:
         note = "Untested: qualified on edge next"
         notes = release.supported_models.notes
-        release.supported_models.notes = lambda: {"apple,j700": note}
+        release.supported_models.notes = lambda *_: {"apple,j700": note}
         self.addCleanup(setattr, release.supported_models, "notes", notes)
         catalog = release.build_catalog(
             "edge", IMAGE, payload_document(), engine_document(),
@@ -570,6 +570,40 @@ class CatalogReleaseTests(ReleaseTestCase):
         self.assertEqual(published.returncode, 0, published.stderr)
         self.assertEqual((scratch / "catalog-edge.signed.json").read_bytes(), envelope.read_bytes())
         self.assertEqual(self.calls.read_text(), "", "a dry run must not call any host tool")
+
+    def test_publish_refuses_a_catalog_signed_for_another_channel(self) -> None:
+        scratch = self.directory / "scratch-host"
+
+        def publish(channel: str, envelope: Path) -> subprocess.CompletedProcess:
+            return self.run_tool("publish", "--channel", channel, "--envelope", str(envelope),
+                                 "--host", f"scratch:{scratch}", "--trust-root", str(self.trust_root))
+
+        edge = self.signed_at(NOW, "edge")
+        for channel in ("rc", "stable"):
+            self.assert_refused(publish(channel, edge), f"signed for 'edge', not the {channel}")
+        document = json.loads((self.directory / "edge" / "catalog-edge.json").read_text())
+        # Renaming edge's catalog, dropping its channel or relabelling it does not get it signed for stable.
+        unnamed = {key: value for key, value in document.items() if key != "channel"}
+        for name, changed, expected in (
+            ("renamed", document, "says it is for 'edge'"),
+            ("unnamed", unnamed, "says it is for None"),
+            ("relabelled", dict(document, channel="stable"), "does not enable exactly the Macs"),
+        ):
+            catalog = self.directory / name / "catalog-stable.json"
+            catalog.parent.mkdir()
+            catalog.write_text(json.dumps(changed))
+            self.assert_refused(self.sign(catalog, out=f"{name}-signed"), expected)
+        # An envelope signed elsewhere with an allowed label still names Macs stable does not offer.
+        relabelled = self.directory / "by-hand.json"
+        relabelled.write_text(json.dumps(dict(document, channel="stable")))
+        signature = release.openssl_sign(OPENSSL, release.decode_private_key(self.key.encode(), "key", raw_allowed=False), relabelled)
+        envelope = self.write("by-hand.signed.json", {
+            "schema_version": 1,
+            "catalog": base64.b64encode(relabelled.read_bytes()).decode(),
+            "signature": base64.b64encode(signature).decode(),
+        })
+        self.assert_refused(publish("stable", envelope), "stable does not offer apple,j604")
+        self.assertFalse(scratch.exists() and any(scratch.iterdir()))
 
     def test_publish_refuses_a_sequence_that_does_not_move_forward(self) -> None:
         scratch = self.directory / "scratch-host"
@@ -1012,6 +1046,12 @@ class EngineGateTests(ReleaseTestCase):
         for model in document["models"]:
             model["engineDigest"] = digest
             model["evidenceRevision"] = image
+        offered = release.supported_models.boards_for(channel)
+        document["channel"] = channel
+        document["models"] = [
+            model if channel == "edge" else release.without_note(model)
+            for model in document["models"] if model["deviceIdentifier"] in offered
+        ]
         return self.write(f"catalog-{channel}.json", document)
 
     def check(self, catalog: Path, allowed: str | None = None) -> subprocess.CompletedProcess:
@@ -1186,10 +1226,33 @@ class WithdrawalTests(unittest.TestCase):
         promoted = self.promote()
         before = {model["deviceIdentifier"]: model for model in self.source["models"]}
         for model in promoted["models"]:
-            self.assertEqual(model, before[model["deviceIdentifier"]], model["deviceIdentifier"])
+            self.assertNotIn("previewNote", model)
+            pins = release.without_note(before[model["deviceIdentifier"]])
+            self.assertEqual(model, pins, model["deviceIdentifier"])
         for key, value in self.source.items():
             if key not in ("sequence", "issuedAt", "channel", "models"):
                 self.assertEqual(promoted[key], value, key)
+
+    def test_a_mac_that_moved_on_since_edge_was_signed_loses_its_note(self) -> None:
+        self.source["models"][0]["previewNote"] = "signed while it was edge only"
+        promoted = self.promote()
+        self.assertNotIn("previewNote", promoted["models"][0])
+        promoted["models"][0]["previewNote"] = "kept"
+        with self.assertRaisesRegex(release.Refusal, "rc never shows"):
+            release.check_same_pins(self.source, promoted, "rc")
+
+    def test_an_edge_catalog_signed_before_edge_gained_a_mac_still_promotes(self) -> None:
+        self.source["models"] = [
+            model for model in self.source["models"] if model["deviceIdentifier"] != self.WITHDRAWN
+        ]
+        self.assertEqual(self.identifiers(self.promote()), self.kept)
+
+    def test_a_source_signed_for_another_channel_is_refused(self) -> None:
+        self.source["channel"] = "rc"
+        with self.assertRaisesRegex(release.Refusal, "the edge catalog is signed for 'rc'"):
+            release.promote_catalog(
+                self.source, datetime.datetime(2026, 10, 15, tzinfo=datetime.timezone.utc), "stable",
+                source_channel="edge")
 
     def test_promoting_on_to_stable_keeps_the_withdrawal(self) -> None:
         self.assertEqual(self.identifiers(self.promote("stable")), self.kept)
@@ -1288,7 +1351,7 @@ class PromotionTests(ReleaseTestCase):
             self.assertEqual(set(edge_models) - set(promoted_models),
                              set(release.supported_models.boards_for("edge")) - set(release.supported_models.boards_for(channel)))
             for identifier, model in promoted_models.items():
-                self.assertEqual(model, edge_models[identifier], identifier)
+                self.assertEqual(model, release.without_note(edge_models[identifier]), identifier)
             for model in catalog["models"]:
                 self.assertEqual(model["payloadDigest"], f"sha256:{sha(PAYLOAD)}")
                 self.assertEqual(model["engineDigest"], f"sha256:{sha(ENGINE)}")
