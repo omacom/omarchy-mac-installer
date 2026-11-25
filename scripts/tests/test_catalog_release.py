@@ -1200,7 +1200,6 @@ LATER = "2026-10-20T00:00:00Z"
 LATEST = "2026-10-21T00:00:00Z"
 
 
-@unittest.skipIf(OPENSSL is None, "OpenSSL 3 is required")
 class WithdrawalTests(unittest.TestCase):
     """Raising a board's qualification floor withdraws it from a channel. The
     next promotion drops it; nothing else about the catalog may move."""
@@ -1306,6 +1305,7 @@ class WithdrawalTests(unittest.TestCase):
         self.assertIn(f"promotion_dropped={self.WITHDRAWN}", stderr.getvalue())
 
 
+@unittest.skipIf(OPENSSL is None, "OpenSSL 3 is required")
 class PromotionTests(ReleaseTestCase):
     """Promotion re-signs a published catalog's pins for rc or stable."""
 
