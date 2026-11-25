@@ -85,18 +85,24 @@ public struct AppleInstallerTrustCore: Sendable {
     )
   }
 
+  /// `expectedChannel` names the channel whose URL the payload was fetched
+  /// from, so a catalog signed for one channel cannot be served at another's
+  /// URL. Pass nil only where there is genuinely no destination to check
+  /// against, such as inspecting a catalog file directly.
   public func validateSupportCatalog(
     payload: Data,
     signature: Data,
     trustRoot: AppOwnedTrustRoot,
     now: Date,
+    expectedChannel: String?,
     previouslyAccepted: AcceptedCatalogIdentity? = nil
   ) throws -> ValidatedSupportCatalog {
     let catalog = try SignedSupportCatalogVerifier().verify(
       payload: payload,
       signature: signature,
       publicKey: trustRoot.rawRepresentation,
-      now: now
+      now: now,
+      expectedChannel: expectedChannel
     )
     let payloadDigest = SHA256Digest(hashing: payload).rawValue
     let candidate = try AcceptedCatalogIdentity(
@@ -233,6 +239,12 @@ public struct ValidatedSupportCatalog: Sendable {
 
   public var installerCompatibility: InstallerCompatibility? {
     catalog.installerCompatibility
+  }
+
+  /// The channel the catalog was signed for, or nil for one published before
+  /// the field existed.
+  public var channel: String? {
+    catalog.channel
   }
 
   /// Every model identifier the signed catalog admits, sorted.

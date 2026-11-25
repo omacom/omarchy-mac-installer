@@ -286,14 +286,23 @@
       XCTAssertEqual(identifiers, Set(everyM1M2M3Mac + ["apple,j700"]))
       let manifest = try JSONSerialization.jsonObject(
         with: Data(contentsOf: scripts.appendingPathComponent("supported-models.json")))
-      let supported = try XCTUnwrap((manifest as? [String: Any])?["supported"] as? [String])
+      let macs = try XCTUnwrap((manifest as? [String: Any])?["macs"] as? [String: Any])
+      let supported = macs.compactMap { identifier, record -> String? in
+        (record as? [String: Any])?["qualified"] as? String == "stable" ? identifier : nil
+      }
       XCTAssertEqual(Set(supported), Set(everyM1M2M3Mac + ["apple,j700"]))
       #if DEBUG
         XCTAssertEqual(
           InstallerSimulationEnvironment.simulatedCatalogDevices.sorted(),
           (everyM1M2M3Mac + ["apple,j700"]).sorted())
       #endif
-      for identifier in identifiers {
+      // Every Mac a channel offers has a name, the edge-only ones too.
+      let offered = macs.compactMap { identifier, record -> String? in
+        let qualified = (record as? [String: Any])?["qualified"] as? String
+        return qualified == nil || qualified == "developer" ? nil : identifier
+      }
+      XCTAssertTrue(offered.contains("apple,j616s"))
+      for identifier in identifiers.union(offered) {
         XCTAssertNotNil(MacModelNames.name(for: identifier), identifier)
       }
     }

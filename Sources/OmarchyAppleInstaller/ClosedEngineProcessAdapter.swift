@@ -6,6 +6,9 @@ public struct ClosedEngineCandidateRequest: Sendable {
   public let catalogSignature: Data
   public let trustRoot: AppOwnedTrustRoot
   public let validationTime: Date
+  /// The channel whose URL the catalog came from; nil only where there is no
+  /// destination to check against.
+  public let expectedChannel: String?
   public let previouslyAcceptedCatalog: AcceptedCatalogIdentity?
 
   public init(
@@ -14,6 +17,7 @@ public struct ClosedEngineCandidateRequest: Sendable {
     catalogSignature: Data,
     trustRoot: AppOwnedTrustRoot,
     validationTime: Date,
+    expectedChannel: String?,
     previouslyAcceptedCatalog: AcceptedCatalogIdentity? = nil
   ) {
     self.planningTranscript = planningTranscript
@@ -21,6 +25,7 @@ public struct ClosedEngineCandidateRequest: Sendable {
     self.catalogSignature = catalogSignature
     self.trustRoot = trustRoot
     self.validationTime = validationTime
+    self.expectedChannel = expectedChannel
     self.previouslyAcceptedCatalog = previouslyAcceptedCatalog
   }
 }
@@ -119,6 +124,7 @@ public struct ClosedEngineProcessAdapter: Sendable {
       signature: request.catalogSignature,
       trustRoot: request.trustRoot,
       now: request.validationTime,
+      expectedChannel: request.expectedChannel,
       previouslyAccepted: request.previouslyAcceptedCatalog
     )
     let transcript = try trustCore.validateEngineTranscript(

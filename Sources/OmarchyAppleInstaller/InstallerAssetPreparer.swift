@@ -7,6 +7,9 @@
     public let catalogSignature: Data
     public let trustRoot: AppOwnedTrustRoot
     public let validationTime: Date
+    /// The channel whose URL the catalog came from; nil only where there is no
+    /// destination to check against.
+    public let expectedChannel: String?
     public let previouslyAcceptedCatalog: AcceptedCatalogIdentity?
     public let installerVersion: InstallerVersion?
     public let stagingDirectory: URL
@@ -17,6 +20,7 @@
       catalogSignature: Data,
       trustRoot: AppOwnedTrustRoot,
       validationTime: Date,
+      expectedChannel: String?,
       previouslyAcceptedCatalog: AcceptedCatalogIdentity? = nil,
       installerVersion: InstallerVersion? = nil,
       stagingDirectory: URL
@@ -26,6 +30,7 @@
       self.catalogSignature = catalogSignature
       self.trustRoot = trustRoot
       self.validationTime = validationTime
+      self.expectedChannel = expectedChannel
       self.previouslyAcceptedCatalog = previouslyAcceptedCatalog
       self.installerVersion = installerVersion
       self.stagingDirectory = stagingDirectory
@@ -137,6 +142,7 @@
         signature: request.catalogSignature,
         trustRoot: request.trustRoot,
         now: request.validationTime,
+        expectedChannel: request.expectedChannel,
         previouslyAccepted: request.previouslyAcceptedCatalog
       )
       if let compatibility = catalog.installerCompatibility,

@@ -52,7 +52,7 @@ helper registration, privileged execution, disk or boot-policy mutation,
 signing or notarization with production credentials, publication, deployment,
 or physical-device work. Public builds keep unqualified boards fail-closed until official support and
 physical qualification both exist: the signed catalog (from
-`scripts/supported-models.json`, with `apple,j614s` in `refused`) and the
+`scripts/supported-models.json`) and the
 engine's chip and board tables decide, never a board name in code. Developer builds (`OmarchyDeveloperBuild`,
 sealed developer catalog only) may admit unqualified boards their engine supports.
 

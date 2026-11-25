@@ -126,6 +126,20 @@ class CatalogGeneratorTests(unittest.TestCase):
         self.inputs["installer"]["minimum_version"] = "2.3.0"
         self.assertEqual(self.generate(self.inputs).returncode, 0)
 
+    def test_an_m4_mac_rejects_apps_before_its_own_floor(self) -> None:
+        self.inputs["device_identifiers"].append("apple,j614s")
+        self.inputs["installer"].update(minimum_version="2.3.16", latest_version="2.3.17")
+        self.assertRejected(self.inputs, "apple,j614s needs app 2.3.17 or newer, but the catalog admits 2.3.16")
+        self.inputs["installer"]["minimum_version"] = "2.3.17"
+        result = self.generate(self.inputs)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        noted = {
+            model["deviceIdentifier"]: model["previewNote"]
+            for model in json.loads((self.directory / "catalog.json").read_text())["models"]
+            if "previewNote" in model
+        }
+        self.assertEqual(noted, {"apple,j614s": json.loads(MANIFEST.read_text())["macs"]["apple,j614s"]["note"]})
+
     def test_carries_the_installer_compatibility_block(self) -> None:
         self.inputs["installer"]["minimum_version"] = "2.3.0"
         self.inputs["installer"]["latest_version"] = "2.4.0"
@@ -250,33 +264,49 @@ class CatalogGeneratorTests(unittest.TestCase):
             for identifier in document["device_identifiers"]
             if identifier not in M3_MACS
         ]
-        self.assertRejected(document, "every supported Mac must be enabled")
+        self.assertRejected(document, "every Mac qualified for stable must be enabled")
 
     def test_refused_and_unknown_macs_are_rejected_with_a_reason(self) -> None:
         for identifier, fragment in (
             ("apple,j575d", "no j575dap device or T6032 chip"),
-            ("apple,j614s", "has been tried on a J614s"),
-            ("apple,j604", "not in scripts/supported-models.json"),
+            ("apple,j804", "not in scripts/supported-models.json"),
         ):
             document = json.loads(json.dumps(self.inputs))
             document["device_identifiers"].append(identifier)
             self.assertRejected(document, fragment)
 
     def test_the_manifest_is_every_m1_m2_and_m3_mac_and_the_neo(self) -> None:
-        manifest = json.loads(MANIFEST.read_text())
-        self.assertEqual(len(manifest["supported"]), 35)
-        self.assertTrue(set(M3_MACS) <= set(manifest["supported"]))
-        self.assertIn("apple,j700", manifest["supported"])
-        self.assertFalse(set(M3_MACS + ["apple,j700"]) & set(manifest["untested"]),
-                         "the M3 Macs and the MacBook Neo are tested")
-        self.assertEqual(set(manifest["refused"]), {"apple,j575d", "apple,j614s"})
-        # The M4 Pro and M5 Air bring-up boards, developer catalogs only.
-        self.assertEqual(set(manifest["developer"]), {"apple,j616s", "apple,j815"})
+        macs = json.loads(MANIFEST.read_text())["macs"]
+        stable = {
+            identifier
+            for identifier, record in macs.items()
+            if record.get("qualified") == "stable"
+        }
+        self.assertEqual(len(stable), 35)
+        self.assertTrue(set(M3_MACS) <= stable)
+        self.assertIn("apple,j700", stable)
+        # A board that has reached stable carries no note: there is nothing to
+        # warn about, and the manifest refuses one.
+        self.assertFalse(
+            [identifier for identifier in M3_MACS + ["apple,j700"] if "note" in macs[identifier]],
+            "the M3 Macs and the MacBook Neo are tested",
+        )
+        refused = {identifier for identifier, record in macs.items() if "refused" in record}
+        self.assertEqual(refused, {"apple,j575d"})
+        # The M5 Air bring-up board, developer catalogs only. The M4 boards are
+        # on edge.
+        developer = {
+            identifier
+            for identifier, record in macs.items()
+            if record.get("qualified") == "developer"
+        }
+        self.assertEqual(developer, {"apple,j815"})
+        edge = {identifier for identifier, record in macs.items() if record.get("qualified") == "edge"}
+        self.assertEqual(len(edge), 12)
+        self.assertIn("apple,j616s", edge)
         for template in sorted(MANIFEST.parent.glob("release-inputs*.template.json")):
             identifiers = json.loads(template.read_text())["device_identifiers"]
-            self.assertEqual(
-                sorted(identifiers), sorted(manifest["supported"]), template.name
-            )
+            self.assertEqual(sorted(identifiers), sorted(stable), template.name)
 
     def test_the_generated_catalog_enables_every_supported_mac(self) -> None:
         result = self.generate()
@@ -345,12 +375,33 @@ class CatalogGeneratorTests(unittest.TestCase):
     def test_a_developer_group_takes_only_developer_boards(self) -> None:
         for identifier, fragment in (
             ("apple,j293", "lists apple,j293 twice"),
-            ("apple,j614s", "not a developer board"),
-            ("apple,j604", "not a developer board"),
+            ("apple,j575d", "not a developer board"),
+            ("apple,j804", "not a developer board"),
         ):
             document = self.with_neo()
             document["developer_models"][0]["device_identifiers"] = [identifier]
             self.assertRejected(document, fragment, developer=True)
+
+    def test_a_developer_group_cannot_duck_its_macs_app_floor(self) -> None:
+        # A board short of stable used to be left out of the list the floor was
+        # checked against, so a developer group was a way around its own Mac's
+        # app minimum.
+        document = self.with_neo()
+        (self.assets / "installer_data-m4.json").write_bytes(b"m4-metadata" * 8)
+        document["developer_models"].append({
+            "payload_name": self.inputs["payload_name"],
+            "metadata_name": "installer_data-m4.json",
+            "device_identifiers": ["apple,j614s"],
+        })
+        document["installer"].update(minimum_version="2.3.16", latest_version="2.3.17")
+        self.assertRejected(
+            document,
+            "apple,j614s needs app 2.3.17 or newer, but the catalog admits 2.3.16",
+            developer=True,
+        )
+        document["installer"]["minimum_version"] = "2.3.17"
+        result = self.generate(document, developer=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_a_developer_group_can_give_supported_macs_their_own_metadata(self) -> None:
         document = self.with_neo()

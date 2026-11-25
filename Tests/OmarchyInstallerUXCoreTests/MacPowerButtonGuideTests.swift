@@ -21,6 +21,25 @@
       }
     }
 
+    /// The 2024 minis are named Mac minis, so the family would otherwise send
+    /// them to the rear button their enclosure does not have.
+    func testThe2024MacMinisKeepTheUndersideButtonOnceTheyAreNamed() {
+      for (id, model) in [("apple,j773g", "Mac16,10"), ("apple,j773s", "Mac16,11")] {
+        XCTAssertEqual(MacModelNames.entry(for: id)?.family, "Mac mini", id)
+        let guide = MacPowerButtonGuide(deviceIdentifier: id, modelIdentifier: model)
+        XCTAssertEqual(guide, .desktopUnderside, id)
+        XCTAssertNil(guide.assetName, id)
+      }
+    }
+
+    /// Every other Mac mini keeps the rear button.
+    func testOlderMacMinisStillUseTheRearButton() {
+      for (id, model) in [("apple,j274", "Macmini9,1"), ("apple,j473", "Mac14,3")] {
+        XCTAssertEqual(
+          MacPowerButtonGuide(deviceIdentifier: id, modelIdentifier: model), .desktopRear, id)
+      }
+    }
+
     func testUnknownAndOtherEnclosuresUseGenericGuidance() {
       for id in ["unknown", "apple,j456", "apple,j180d"] {
         let guide = MacPowerButtonGuide(deviceIdentifier: id, modelIdentifier: "unknown")

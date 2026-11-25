@@ -87,8 +87,13 @@ SIGNED_CHANNELS = ("edge", "rc", "stable")
 # A catalog is promoted only forward along this order: edge to rc or
 # stable, rc to stable.
 CHANNEL_ORDER = ("edge", "rc", "stable")
-# The only catalog keys a promotion changes.
-PROMOTION_FIELDS = ("sequence", "issuedAt")
+# The only catalog keys a promotion changes outright. `channel` is among them
+# because a promoted catalog is served at the target channel's URL and must say
+# so; its new value is checked against the target, not left free. `models` is
+# compared on its own: a promotion may drop a Mac the target has not qualified
+# for, but never change what a surviving one pins.
+PROMOTION_FIELDS = ("sequence", "issuedAt", "channel")
+PROMOTION_COMPARED_SEPARATELY = ("models",)
 # The harness's fresh-install scenarios (omarchy-mac-pkgs
 # tools/acceptance/mac-image): every one must pass for the image's sha256.
 REQUIRED_SCENARIOS = ("first-boot", "conversion", "second-boot")
@@ -320,6 +325,16 @@ def check_installer(document: object, engine: dict | None = None) -> dict:
     return document
 
 
+def check_app_floor(installer: dict, channel: str) -> None:
+    """Refuse, before anything is uploaded, an app floor below what a Mac
+    CHANNEL offers needs (supported_models.catalog_errors refuses the catalog
+    itself later)."""
+    errors = supported_models.app_minimum_errors(
+        installer["minimumVersion"], supported_models.boards_for(channel))
+    if errors:
+        raise Refusal("; ".join(errors))
+
+
 def check_image_name(name: object, channel: str, payload_sha256: str | None = None) -> str:
     """NAME, an image built for CHANNEL. A name with an image id must name
     PAYLOAD_SHA256 when given; an older name without one is accepted as is.
@@ -437,8 +452,8 @@ def load_json(path: Path | None, field: str) -> object:
     if not path.is_file() or path.is_symlink():
         raise Refusal(f"{field}: missing or unsafe file {path}")
     try:
-        return json.loads(path.read_text())
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        return supported_models.read_json(path.read_text())
+    except ValueError as error:
         raise Refusal(f"{field} is not valid JSON: {error}") from error
 
 
@@ -474,10 +489,10 @@ def build_catalog(
         payload_artifact["parts"] = [
             dict(plain(part), sha256=f"sha256:{part['sha256']}") for part in payload["parts"]
         ]
-    supported, _ = supported_models.load()
-    untested = supported_models.untested()
+    offered = supported_models.boards_for(channel)
+    notes = supported_models.notes()
     models = []
-    for identifier in supported:
+    for identifier in offered:
         model = {
             "deviceIdentifier": identifier,
             "status": "enabled",
@@ -494,12 +509,16 @@ def build_catalog(
             "metadataArtifact": plain(metadata),
             "payloadArtifact": payload_artifact,
         }
-        if identifier in untested:
-            # The app ignores keys it does not know; ticket 12 shows this.
-            model["previewNote"] = untested[identifier]
+        if identifier in notes:
+            # An app that does not show notes ignores the key.
+            model["previewNote"] = notes[identifier]
         models.append(model)
     catalog = {
         "schemaVersion": SCHEMA_VERSION,
+        # The channel this catalog is signed for. The app checks it against the
+        # channel URL it fetched from, so an envelope published to the wrong
+        # channel is refused rather than installed.
+        "channel": channel,
         "sequence": int(now.timestamp()),
         "issuedAt": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
@@ -634,46 +653,123 @@ def from_catalog(field: str, artifact: object, digest: object, allow_parts: bool
 
 def check_promotion_source(source: dict) -> None:
     """An image of a final tag built on the rc lane stays on rc: stable builds its own."""
+    malformed = supported_models.model_errors(source.get("models"))
+    if malformed:
+        raise Refusal("the source catalog: " + "; ".join(malformed))
     for model in source.get("models", []):
         image = model.get("evidenceRevision")
         if isinstance(image, str) and FINAL_TAG_ON_RC.fullmatch(image):
             raise Refusal(f"{image} is a final tag built on the rc lane: it is never promoted")
 
 
-def promote_catalog(source: dict, now: datetime.datetime) -> dict:
-    """SOURCE with only its sequence and issue time replaced: every model,
-    pin, digest and the installer block keep exactly the source's values."""
+def promote_catalog(source: dict, now: datetime.datetime, channel: str,
+                    source_channel: str | None = None) -> dict:
+    """SOURCE with its sequence, issue time and channel replaced and any Mac
+    the target has not qualified for dropped: every surviving model, pin,
+    digest and the installer block keep exactly the source's values, less the
+    preview note edge shows and no other channel does. CHANNEL is the
+    destination; SOURCE_CHANNEL is the channel SOURCE was read from. SOURCE is
+    not held to today's set for its own channel, so a Mac that joined edge
+    since it was signed does not stop it being promoted; the result is held to
+    exactly CHANNEL's."""
+    check_channel(channel)
     if source.get("schemaVersion") != SCHEMA_VERSION:
         raise Refusal("the source catalog is not a schema 4 catalog")
     check_promotion_source(source)
     promotion_artifacts(source)
-    errors = supported_models.catalog_errors(source)
-    if errors:
-        raise Refusal("the source catalog does not cover every supported Mac: " + "; ".join(errors))
+    if source_channel is not None and source.get("channel") not in (None, source_channel):
+        raise Refusal(f"the {source_channel} catalog is signed for {source['channel']!r}")
     sequence = int(now.timestamp())
     if sequence <= source["sequence"]:
         raise Refusal(f"sequence {sequence} does not follow the source catalog's {source['sequence']}")
     promoted = json.loads(json.dumps(source))
     promoted["sequence"] = sequence
     promoted["issuedAt"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    check_same_pins(source, promoted)
+    promoted["channel"] = channel
+    offered = set(supported_models.boards_for(channel))
+    promoted["models"] = [
+        without_note(model) for model in promoted["models"] if model.get("deviceIdentifier") in offered
+    ]
+    check_same_pins(source, promoted, channel)
     return promoted
 
 
-def check_same_pins(source: dict, promoted: dict) -> None:
-    """Refuse unless PROMOTED differs from SOURCE only in its sequence and
-    issue time."""
+def without_note(model: dict) -> dict:
+    return {key: value for key, value in model.items() if key != "previewNote"}
+
+
+def check_same_pins(source: dict, promoted: dict, channel: str) -> None:
+    """Refuse unless PROMOTED differs from SOURCE only in its sequence, issue
+    time and channel, carries exactly CHANNEL's Macs with every surviving model
+    unchanged, and names a CHANNEL reached forward along CHANNEL_ORDER from the
+    source's."""
+    skipped = PROMOTION_FIELDS + PROMOTION_COMPARED_SEPARATELY
+
     def rest(document: dict) -> dict:
-        return {key: value for key, value in document.items() if key not in PROMOTION_FIELDS}
+        return {key: value for key, value in document.items() if key not in skipped}
 
     if not isinstance(promoted, dict):
         raise Refusal("the promoted catalog is not a JSON object")
     before, after = rest(source), rest(promoted)
     if before != after:
         changed = sorted(key for key in before.keys() | after.keys() if before.get(key) != after.get(key))
-        raise Refusal(f"the promoted catalog changes more than {' and '.join(PROMOTION_FIELDS)}: {', '.join(changed)}")
+        allowed = f"{', '.join(PROMOTION_FIELDS[:-1])} and {PROMOTION_FIELDS[-1]}"
+        raise Refusal(f"the promoted catalog changes more than {allowed}: {', '.join(changed)}")
     if not isinstance(promoted.get("sequence"), int) or promoted["sequence"] <= source["sequence"]:
         raise Refusal("the promoted catalog's sequence does not follow its source's")
+    check_promoted_models(source, promoted, channel)
+    if promoted.get("channel") != channel:
+        raise Refusal(f"the promoted catalog is for {promoted.get('channel')!r}, not the {channel} it is published to")
+
+    declared = source.get("channel")
+    if declared is not None:
+        if declared not in CHANNEL_ORDER:
+            raise Refusal(f"the source catalog names an unknown channel {declared!r}")
+        if CHANNEL_ORDER.index(declared) >= CHANNEL_ORDER.index(channel):
+            raise Refusal(f"{declared} is not promoted to {channel}: promotion only moves forward along "
+                          f"{' to '.join(CHANNEL_ORDER)}")
+
+
+def check_promoted_models(source: dict, promoted: dict, channel: str) -> None:
+    """A promotion carries exactly CHANNEL's Macs, without preview notes. It
+    may drop a Mac the target has not qualified for; it may never add one or
+    change what one pins."""
+    malformed = supported_models.model_errors(promoted.get("models"))
+    if malformed:
+        raise Refusal("the promoted catalog: " + "; ".join(malformed))
+    before = {model.get("deviceIdentifier"): model for model in source.get("models", [])}
+    after = {model.get("deviceIdentifier"): model for model in promoted.get("models", [])}
+    if len(after) != len(promoted.get("models", [])):
+        raise Refusal("the promoted catalog lists a Mac twice")
+    added = sorted(identifier for identifier in after if identifier not in before)
+    if added:
+        raise Refusal(f"a promotion cannot add a Mac the source does not carry: {', '.join(added)}")
+    changed = sorted(
+        identifier for identifier, model in after.items()
+        if without_note(before[identifier]) != without_note(model)
+    )
+    if changed:
+        raise Refusal(f"the promoted catalog changes what a Mac pins: {', '.join(changed)}")
+    offered = set(supported_models.boards_for(channel))
+    missing = sorted(offered - set(after))
+    if missing:
+        raise Refusal(f"the promoted {channel} catalog is missing Macs it must offer: {', '.join(missing)}")
+    stray = sorted(set(after) - offered)
+    if stray:
+        raise Refusal(f"the promoted {channel} catalog offers Macs {channel} has not qualified: "
+                      f"{', '.join(stray)}")
+    if not after:
+        # The coverage check accepts an empty catalog (it means "no release on
+        # this channel yet"), but reaching that by withdrawing the last Mac from
+        # a channel that has one is a mistake, not a withdrawal.
+        raise Refusal(f"{channel} would offer no Mac at all: close the channel rather than "
+                      "withdraw its last Mac")
+    errors = supported_models.catalog_errors(promoted, channel)
+    if errors:
+        raise Refusal(f"the promoted catalog is not what {channel} offers: " + "; ".join(errors))
+    dropped = sorted(set(before) - set(after))
+    if dropped:
+        print(f"promotion_dropped={','.join(dropped)}", file=sys.stderr)
 
 
 def check_promotion_mode(channel: str, real: bool, confirm: str | None, source_sha256: str | None) -> None:
@@ -893,9 +989,9 @@ def make_envelope(catalog: Path, signature: Path, output: Path, trust_root: Path
 
 def decode_envelope(data: bytes) -> tuple[bytes, bytes]:
     try:
-        document = json.loads(data)
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        raise Refusal("the envelope is not JSON") from None
+        document = supported_models.read_json(data)
+    except ValueError as error:
+        raise Refusal(f"the envelope is not JSON: {error}") from None
     if not isinstance(document, dict) or set(document) != {"schema_version", "catalog", "signature"}:
         raise Refusal("the envelope must have exactly schema_version, catalog and signature")
     if document["schema_version"] != 1:
@@ -915,9 +1011,9 @@ def verify_envelope(data: bytes, trust_root: bytes, openssl: str | None = None) 
     if not openssl_verify(openssl or find_openssl(), trust_root, catalog, signature):
         raise Refusal(f"the catalog signature does not verify against the trust root {fingerprint(trust_root)}")
     try:
-        document = json.loads(catalog)
-    except json.JSONDecodeError:
-        raise Refusal("the signed catalog is not JSON") from None
+        document = supported_models.read_json(catalog)
+    except ValueError as error:
+        raise Refusal(f"the signed catalog is not JSON: {error}") from None
     if not isinstance(document, dict) or document.get("schemaVersion") != SCHEMA_VERSION:
         raise Refusal("the signed catalog is not a schema 4 catalog")
     if not isinstance(document.get("sequence"), int) or document["sequence"] <= 0:
@@ -1221,12 +1317,18 @@ def command_sign(arguments) -> None:
     catalog = catalog_path.read_bytes()
     if len(catalog) > MAXIMUM_CATALOG_BYTES:
         raise Refusal("the catalog is too large for the app")
+    channel = check_signed_channel(catalog_path.name.removeprefix("catalog-").removesuffix(".json"))
+    document = load_json(catalog_path, "catalog")
+    if not isinstance(document, dict) or document.get("channel") != channel:
+        declared = document.get("channel") if isinstance(document, dict) else None
+        raise Refusal(f"{catalog_path.name} says it is for {declared!r}")
+    errors = supported_models.catalog_errors(document, channel)
+    if errors:
+        raise Refusal(f"{catalog_path.name} is not what {channel} offers: " + "; ".join(errors))
     signature = openssl_sign(openssl, seed, catalog_path)
     del seed
     if not openssl_verify(openssl, trust_root, catalog, signature):
         raise Refusal("the new signature does not verify against the trust root")
-    channel = catalog_path.name.removeprefix("catalog-").removesuffix(".json")
-    check_signed_channel(channel)
     arguments.out.mkdir(parents=True, exist_ok=True)
     signature_path = arguments.out / f"catalog-{channel}.json.sig"
     signature_path.write_bytes(signature)
@@ -1296,7 +1398,7 @@ def command_promote(arguments) -> None:
     source_sha256 = hashlib.sha256(source_bytes).hexdigest()
     if expected is not None and source_sha256 != expected:
         raise Refusal(f"the published {source_channel} catalog is sha256 {source_sha256}, not the pinned {expected}")
-    promoted = promote_catalog(source, now)
+    promoted = promote_catalog(source, now, channel, source_channel=source_channel)
     artifacts = promotion_artifacts(promoted)
     if arguments.verify_remote:
         # Read back what the catalog pins; nothing is built or uploaded.
@@ -1340,8 +1442,10 @@ def command_check_promotion(arguments) -> None:
         if source_sha256 != arguments.source_sha256:
             raise Refusal(f"the source catalog is sha256 {source_sha256}, not the pinned {arguments.source_sha256}")
     check_promotion_source(source)
+    if source.get("channel") not in (None, source_channel):
+        raise Refusal(f"the {source_channel} catalog is signed for {source['channel']!r}")
     promoted = load_json(arguments.catalog, "catalog")
-    check_same_pins(source, promoted)
+    check_same_pins(source, promoted, channel)
     promotion_artifacts(promoted)
     print(f"promotion=checked {source_channel} to {channel}, sequence {source['sequence']} to {promoted['sequence']}")
 
@@ -1380,6 +1484,11 @@ def command_publish(arguments) -> None:
     trust_root = read_trust_root(arguments.trust_root)
     data = arguments.envelope.read_bytes()
     document = verify_envelope(data, trust_root, openssl)
+    if document.get("channel") != channel:
+        raise Refusal(f"the catalog is signed for {document.get('channel')!r}, not the {channel} it would be published to")
+    errors = supported_models.destination_errors(document, channel)
+    if errors:
+        raise Refusal(f"{channel} may not serve this catalog: " + "; ".join(errors))
     # Every host is checked before any is written, so a refusal on the
     # second never leaves the first ahead.
     pending = []

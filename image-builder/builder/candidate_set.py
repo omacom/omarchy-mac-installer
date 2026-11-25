@@ -271,10 +271,30 @@ def from_channel(origin, filename):
             and origin.get('channel') == f'omacom {match[1]} aarch64' and 'commit' not in origin)
 
 
-def verify_payloads(payloads, policy, loader=DEFAULT_BOOT_LOADER):
+# The device-tree buckets follow the qualification ladder of
+# scripts/supported-models.json: device_trees holds the fully qualified Macs',
+# and each looser rung its own. A lane carries every rung it reaches, so edge
+# carries rc's too, and a candidate set (no lane) carries only the qualified.
+LANE_DEVICE_TREES = {
+    'stable': (),
+    'rc': ('rc_device_trees',),
+    'edge': ('rc_device_trees', 'edge_device_trees'),
+}
+
+
+def device_trees(policy, lane=None):
+    """The device trees LANE's kernel must carry."""
+    trees = list(policy['device_trees'])
+    for key in LANE_DEVICE_TREES.get(lane, ()):
+        trees += policy.get(key, [])
+    return trees
+
+
+def verify_payloads(payloads, policy, loader=DEFAULT_BOOT_LOADER, lane=None):
     """Every installed file has one owner, each boot payload the image needs its
     expected one (LOADER's for Stage 2 and the raw Stage 1), and the kernel
-    carries every supported Mac's device tree. A Stage 1 source the image never
+    carries every supported Mac's device tree, the edge-only Macs' too on the
+    edge lane. A Stage 1 source the image never
     installs owns no installed file: it only has to carry its raw Stage 1."""
     owners = {}
     source = stage1_only(loader)
@@ -294,7 +314,7 @@ def verify_payloads(payloads, policy, loader=DEFAULT_BOOT_LOADER):
     require(dtbs, 'linux-aurora carries no device trees')
     # Stage 2 hands U-Boot the kernel's tree; the Aurora U-Boot ships none of its own.
     names = {PurePosixPath(path).name for path in dtbs}
-    missing = [tree for tree in policy['device_trees'] if f'{tree}.dtb' not in names]
+    missing = [tree for tree in device_trees(policy, lane) if f'{tree}.dtb' not in names]
     require(not missing, 'linux-aurora lacks the device trees of ' + ', '.join(missing))
     require(not any('omarchy-arm-repository.key' in path for path in owners), 'a fork repository key is in the set')
     return owners

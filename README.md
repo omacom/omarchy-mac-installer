@@ -24,23 +24,26 @@ Installing Omarchy changes the partition layout of your Mac's internal disk and 
 
 ## Supported Macs
 
-Which Macs a release supports is decided by that release's signed catalog, not by the app alone. The source of truth in this repository is [`scripts/supported-models.json`](scripts/supported-models.json). Every catalog that offers a Mac release enables all of the 35 boards in that file from one image:
+Which Macs a release supports is decided by that release's signed catalog, not by the app alone. The source of truth in this repository is [`scripts/supported-models.json`](scripts/supported-models.json), which records for each board the highest channel it has qualified for. A channel's catalog enables every board qualified at or above that channel, so edge's set always contains rc's, which always contains stable's. rc and stable offer the same 35 boards today, and edge also offers the M4 boards below, all from one image:
 
 - M1: Mac mini, MacBook Air, MacBook Pro 13-inch, iMac 24-inch, MacBook Pro 14/16-inch (M1 Pro/Max), Mac Studio (M1 Max/Ultra)
 - M2: MacBook Air 13/15-inch, MacBook Pro 13-inch, Mac mini (M2, M2 Pro), MacBook Pro 14/16-inch (M2 Pro/Max), Mac Studio (M2 Max/Ultra), Mac Pro
 - M3: iMac 24-inch, MacBook Pro 14/16-inch (M3, M3 Pro, M3 Max), MacBook Air 13/15-inch
 - MacBook Neo (`apple,j700`)
 
+Edge only: every M4 Mac the engine knows (MacBook Pro 14/16-inch with M4, M4 Pro or M4 Max, MacBook Air 13/15-inch, iMac 24-inch, Mac mini with M4 or M4 Pro, Mac Studio with M4 Max). They install through aura's Mach-O Stage 1, need app 2.3.17 or newer, and most have never had a qualified install, so keep macOS and a backup. The floor is the catalog's, so an edge catalog that offers them asks every edge user for 2.3.17, not only M4 owners. It also carries a warning for each of them (`previewNote`), which no released app shows yet.
+
 The per-model names are in [`MacModelNames.swift`](Sources/OmarchyInstallerUXCore/MacModelNames.swift). A Mac whose identifier is not in the signed catalog gets the "This Mac isn't supported yet" screen and cannot be installed. A Mac can be inspected without changing anything: the app checks before it asks for a password.
 
 Not supported:
 
 - The M3 Ultra Mac Studio (`apple,j575d`): the pinned v0.9.2 engine cannot inspect or plan it.
-- M4 and later, for example the MacBook Pro 14-inch M4 Pro (`apple,j614s`). Public builds keep these blocked until official support and physical qualification both exist.
+- The 15-inch MacBook Air with M5 (`apple,j815`): developer catalogs only.
+- Every other M5 Mac and every M6 Mac: the pinned engine's device table does not name them yet.
 
-The 11 supported M3 boards and the MacBook Neo have been installed and run on real hardware. A newly supported board that has not been tested yet is listed under `untested` in `supported-models.json` until the testing team qualifies it on edge ([`docs/mac-release-pipeline.md`](docs/mac-release-pipeline.md#qualification-on-edge)). No board is listed there today.
+The 11 supported M3 boards and the MacBook Neo have been installed and run on real hardware. A board that has not been tested yet is qualified only for `edge` in `supported-models.json`, so rc and stable do not offer it until the testing team qualifies it on edge ([`docs/mac-release-pipeline.md`](docs/mac-release-pipeline.md#qualification-on-edge)). The M4 boards are there today. A board qualified only for `developer` reaches no channel at all: `apple,j815` is the M5 Air bring-up board.
 
-Why a catalog check exists: `make-unsigned-catalog.py` refuses inputs that miss, add or refuse a board, and `publish-channels envelope` refuses to wrap a catalog that lists a Mac but leaves any of them out or disabled. Only an empty "No Mac release yet" catalog lists none. `os-promote` does not re-check an envelope staged before this rule, so a rollback to an older catalog stays possible.
+Why a catalog check exists: `make-unsigned-catalog.py` refuses inputs that miss, add or refuse a board, and `publish-channels envelope` refuses to wrap a catalog that lists a Mac but leaves any of its channel's out or disabled. Only an empty "No Mac release yet" catalog lists none. `os-promote` and `catalog_release.py publish` check the destination as well: a catalog signed for another channel, a Mac the channel does not offer, a warning off edge or an app floor below what a listed Mac needs is refused. `os-promote` does not ask an older envelope for every Mac the channel offers, so a rollback to an older catalog stays possible.
 
 ## Before you install
 

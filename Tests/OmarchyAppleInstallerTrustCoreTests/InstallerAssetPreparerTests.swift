@@ -147,6 +147,7 @@
         host: request.host, catalogPayload: request.catalogPayload,
         catalogSignature: request.catalogSignature, trustRoot: request.trustRoot,
         validationTime: now.addingTimeInterval(365 * 86400),
+        expectedChannel: nil,
         stagingDirectory: directory
       )
       do {
@@ -747,6 +748,7 @@
         catalogSignature: catalogSignature,
         trustRoot: trustRoot,
         validationTime: validationTime,
+        expectedChannel: nil,
         stagingDirectory: stagingDirectory
       )
     }

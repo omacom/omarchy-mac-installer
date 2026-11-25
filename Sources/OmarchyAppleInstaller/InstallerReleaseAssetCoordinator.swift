@@ -32,6 +32,9 @@
   public struct PreparedInstallerRelease: Sendable {
     public let assets: PreparedInstallerAssets
     public let catalogDocuments: InstallerReleaseCatalogDocuments
+    /// The channel these documents were fetched from. Later phases verify the
+    /// same bytes again, and must check them against the same destination.
+    public let channel: ReleaseChannel
   }
 
   public struct InstallerReleaseAssetCoordinator: Sendable {
@@ -76,6 +79,7 @@
         signature: documents.signature,
         trustRoot: configuration.trustRoot,
         now: validationTime,
+        expectedChannel: channel.rawValue,
         previouslyAccepted: previouslyAcceptedCatalog
       ).deviceIdentifiers
     }
@@ -98,6 +102,7 @@
           catalogSignature: catalog.signature,
           trustRoot: request.configuration.trustRoot,
           validationTime: request.validationTime,
+          expectedChannel: request.channel.rawValue,
           previouslyAcceptedCatalog: request.previouslyAcceptedCatalog,
           installerVersion: request.installerVersion,
           stagingDirectory: request.stagingDirectory
@@ -108,7 +113,8 @@
       )
       return PreparedInstallerRelease(
         assets: assets,
-        catalogDocuments: catalog
+        catalogDocuments: catalog,
+        channel: request.channel
       )
     }
   }

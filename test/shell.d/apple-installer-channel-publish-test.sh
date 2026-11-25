@@ -226,7 +226,8 @@ catalog = {
                 "sizeBytes": int(payload_size),
             },
         }
-        for identifier in json.load(open(manifest))["supported"]
+        for identifier, record in json.load(open(manifest))["macs"].items()
+        if record.get("qualified") == "stable"
     ],
 }
 with open(output, "w", encoding="utf-8") as stream:
@@ -308,8 +309,69 @@ refused_envelope "a-disabled-m3-mac" "models[-2]['status'] = 'disabled'" "apple,
 refused_envelope "a-missing-neo" "catalog['models'] = [m for m in models if m['deviceIdentifier'] != 'apple,j700']" "missing apple,j700"
 refused_envelope "only-m1-and-m2" "catalog['models'] = models[:23]" "missing apple,j433"
 refused_envelope "an-m3-ultra" "models.append(dict(models[0], deviceIdentifier='apple,j575d'))" "apple,j575d is refused"
-refused_envelope "an-m4-mac" "models.append(dict(models[0], deviceIdentifier='apple,j614s'))" "has been tried on a J614s"
+refused_envelope "an-m6-mac" "models.append(dict(models[0], deviceIdentifier='apple,j804'))" "apple,j804 is not in scripts/supported-models.json"
 pass "envelope refuses a catalog missing, disabling or overreaching any supported Mac"
+
+# --- a catalog is refused a channel it was not made for ----------------------
+refused_promotion() {
+  local name=$1 to=$2 edit=$3 expected=$4 tag="os-v4.0.2-mac.1.20260902-$1"
+  stage_payload "$tag" 128
+  write_catalog "$WORK/$name.catalog" 900 "$BASE/releases/$tag/payload.zip" 128
+  python3 -c "
+import json, sys
+path, manifest = sys.argv[1:3]
+catalog = json.load(open(path))
+macs = json.load(open(manifest))['macs']
+models = catalog['models']
+$edit
+json.dump(catalog, open(path, 'w'))
+" "$WORK/$name.catalog" "$ROOT/scripts/supported-models.json" || fail "$name catalog is written"
+  sign_catalog "$WORK/$name.catalog" "$WORK/$name.sig"
+  # Staged by hand: the destination is checked even when no envelope step ran.
+  python3 - "$WORK/$name.catalog" "$WORK/$name.sig" "$STREAM_DIR/releases/$tag/catalog.signed.json" <<'PY'
+import base64, json, sys
+catalog, signature, output = sys.argv[1:4]
+json.dump({
+    "schema_version": 1,
+    "catalog": base64.b64encode(open(catalog, "rb").read()).decode(),
+    "signature": base64.b64encode(open(signature, "rb").read()).decode(),
+}, open(output, "w"))
+PY
+  : >"$CALLS"
+  if OMARCHY_PUBLISH_ASSUME_YES=$tag "$PUBLISHER" os-promote --tag "$tag" --to "$to" >"$WORK/$name.log" 2>&1; then
+    fail "os-promote refuses $name on $to"
+  fi
+  grep -q -- "$expected" "$WORK/$name.log" || fail "the $name refusal says $expected" "$(cat "$WORK/$name.log")"
+  grep -q "^aws s3 cp" "$CALLS" && fail "a refused promotion uploads nothing"
+  return 0
+}
+edge_catalog="
+catalog['channel'] = 'edge'
+catalog['installer'] = {'minimumVersion': '2.3.17'}
+for mac, record in macs.items():
+    if record.get('qualified') == 'edge':
+        models.append(dict(models[0], deviceIdentifier=mac, previewNote=record['note']))
+"
+refused_promotion edge rc "$edge_catalog" "signed for edge, not rc"
+refused_promotion unnamed stable "$edge_catalog
+del catalog['channel']" "stable does not offer apple,j616s"
+refused_promotion developer edge "
+catalog['installer'] = {'minimumVersion': '2.3.17'}
+models.append(dict(models[0], deviceIdentifier='apple,j815'))" "edge does not offer apple,j815"
+refused_promotion noted stable "models[0]['previewNote'] = 'careful'" "carries a preview note"
+stage_payload os-v4.0.2-mac.1.20260902-repeated 128
+python3 - "$STREAM_DIR/releases/os-v4.0.2-mac.1.20260902/catalog.signed.json" \
+  "$STREAM_DIR/releases/os-v4.0.2-mac.1.20260902-repeated/catalog.signed.json" <<'PY'
+import sys
+envelope = open(sys.argv[1]).read()
+open(sys.argv[2], "w").write('{"catalog": "", ' + envelope[1:])
+PY
+if OMARCHY_PUBLISH_ASSUME_YES=os-v4.0.2-mac.1.20260902-repeated "$PUBLISHER" os-promote \
+  --tag os-v4.0.2-mac.1.20260902-repeated --to stable >"$WORK/repeated.log" 2>&1; then
+  fail "os-promote refuses an envelope that repeats a key"
+fi
+grep -q "repeats a key" "$WORK/repeated.log" || fail "the refusal names the repeated key" "$(cat "$WORK/repeated.log")"
+pass "os-promote refuses another channel's catalog and a Mac its channel does not offer"
 
 # --- promotion writes both channel objects and verifies them back -----------
 OMARCHY_PUBLISH_ASSUME_YES=os-v4.0.2-mac.1.20260902 "$PUBLISHER" os-promote --tag os-v4.0.2-mac.1.20260902 --to stable \

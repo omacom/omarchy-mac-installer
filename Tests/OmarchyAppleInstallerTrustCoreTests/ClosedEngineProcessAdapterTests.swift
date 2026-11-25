@@ -139,8 +139,8 @@ final class ClosedEngineProcessAdapterTests: XCTestCase {
   }
 
   /// No board is refused by name: an M4 the engine supports and the signed
-  /// catalog enables runs like any other Mac. apple,j614s stays out through
-  /// scripts/supported-models.json's refused list, which no signed catalog may carry.
+  /// catalog enables runs like any other Mac. Only edge's catalog offers
+  /// apple,j614s (scripts/supported-models.json).
   func testAnM4TheEngineAndSignedCatalogAdmitIsNotRefusedByName() async throws {
     let fixture = try makeFixture(deviceIdentifier: "apple,j614s")
     let authorization = ControlledAuthorization(decision: .granted)
@@ -361,7 +361,8 @@ final class ClosedEngineProcessAdapterTests: XCTestCase {
       catalogPayload: deliveredCatalog,
       catalogSignature: signature,
       trustRoot: trustRoot,
-      validationTime: now
+      validationTime: now,
+      expectedChannel: nil
     )
   }
 

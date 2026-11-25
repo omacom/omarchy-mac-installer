@@ -9,9 +9,9 @@ repository.
 Every per-release value comes from an inputs file (`--inputs`), so cutting a
 release never edits this script. `scripts/release-inputs.template.json` holds
 the current values. The engine is always the one `Engine/source-lock.json`
-pins. The inputs must list exactly the Macs in
-`scripts/supported-models.json`: every M1, M2 and M3 Mac and the MacBook Neo,
-none refused.
+pins. The inputs must list every Mac `scripts/supported-models.json` qualifies
+for stable (every M1, M2 and M3 Mac and the MacBook Neo), and may add a Mac
+qualified for edge or rc. Each Mac qualified for edge alone carries its note.
 
 The catalog pins whole-file digests. When the payload was split for release
 delivery, the sibling `<payload>.partNN` files are emitted as an additional
@@ -23,10 +23,10 @@ higher-sequence one replaces it. The monotonic `sequence` is the only
 machine-enforced guard.
 
 `--developer` is for a developer build's sealed catalog only. Its inputs may
-add `developer_models`: groups of boards from the manifest's `developer`
-section, or supported Macs moved out of the main group, each group with its
-own metadata and its own or a shared payload. The main group and the moved
-Macs together still cover exactly every supported Mac. Channel publishing
+add `developer_models`: groups of boards qualified for `developer`, or
+supported Macs moved out of the main group, each group with its own metadata
+and its own or a shared payload. The main group and the moved Macs together
+still cover every Mac qualified for stable. Channel publishing
 rejects a catalog with a developer board.
 
 Usage:
@@ -179,14 +179,15 @@ def load_developer_models(document: dict) -> list[str]:
     """Validate a developer catalog's extra groups, failing closed.
 
     A group may take developer boards, or supported Macs it moves out of the
-    main group (to give them their own metadata). Returns the supported Macs
-    the groups took, which count towards the main group's coverage.
+    main group (to give them their own metadata). Returns every Mac the groups
+    took: the fully qualified ones count towards the main group's coverage, and
+    all of them owe their own app minimum, which is why a board short of stable
+    cannot be left out of the list the floor is checked against.
     """
     groups = document["developer_models"]
     if not isinstance(groups, list) or not groups:
         raise SystemExit("inputs developer_models must be a non-empty list")
-    supported, _ = supported_models.load()
-    allowed = set(supported_models.developer_boards()) | set(supported)
+    allowed = set(supported_models.load()) - set(supported_models.refused())
     taken = []
     # Groups may share a payload; each metadata file belongs to one group.
     payloads = {document["payload_name"]}
@@ -212,6 +213,8 @@ def load_developer_models(document: dict) -> list[str]:
         if not isinstance(identifiers, list) or not identifiers:
             raise SystemExit("inputs developer_models device_identifiers must be a non-empty list")
         for identifier in identifiers:
+            if not isinstance(identifier, str):
+                raise SystemExit(f"invalid device identifier: {identifier}")
             if identifier in boards:
                 raise SystemExit(f"inputs developer_models lists {identifier} twice")
             if identifier not in allowed:
@@ -219,8 +222,7 @@ def load_developer_models(document: dict) -> list[str]:
                     f"{identifier} is not a developer board or a supported Mac "
                     "in scripts/supported-models.json"
                 )
-            if identifier in supported:
-                taken.append(identifier)
+            taken.append(identifier)
             boards.add(identifier)
     return taken
 
@@ -288,17 +290,20 @@ def load_inputs(path: Path, developer: bool = False) -> dict:
     identifiers = document["device_identifiers"]
     if not isinstance(identifiers, list) or not identifiers:
         raise SystemExit("inputs device_identifiers must be a non-empty list")
-    if len(set(identifiers)) != len(identifiers):
-        raise SystemExit("inputs device_identifiers contains duplicates")
     for identifier in identifiers:
         if not isinstance(identifier, str) or not DEVICE_IDENTIFIER_PATTERN.match(
             identifier
         ):
             raise SystemExit(f"invalid device identifier: {identifier}")
+    if len(set(identifiers)) != len(identifiers):
+        raise SystemExit("inputs device_identifiers contains duplicates")
     # Every catalog enables every supported Mac (scripts/supported-models.json):
     # in the main group, or in a developer group that gives some of them their own metadata.
     taken = load_developer_models(document) if "developer_models" in document else []
-    coverage = supported_models.coverage_errors(identifiers + taken)
+    developer_boards = supported_models.developer_boards()
+    coverage = supported_models.private_coverage_errors(
+        identifiers + [identifier for identifier in taken if identifier not in developer_boards]
+    )
     if coverage:
         raise SystemExit("inputs device_identifiers: " + "; ".join(coverage))
 
@@ -327,6 +332,9 @@ def load_inputs(path: Path, developer: bool = False) -> dict:
         raise SystemExit("every catalog needs installer.minimum_version >= 2.1.0")
     if parse_version(installer["minimum_version"]) < parse_version(minimum_app):
         raise SystemExit(f"this engine requires installer.minimum_version >= {minimum_app}")
+    floor = supported_models.app_minimum_errors(installer["minimum_version"], identifiers + taken)
+    if floor:
+        raise SystemExit("inputs installer.minimum_version: " + "; ".join(floor))
     download_url = installer["download_url"]
     if not isinstance(download_url, str) or not download_url.startswith("https://"):
         raise SystemExit(f"inputs installer.download_url must be https: {download_url}")
@@ -422,8 +430,10 @@ def model_group(inputs: dict, group: dict, assets: Path, base_url: str) -> tuple
         "metadataArtifact": artifact(metadata, base_url),
         "payloadArtifact": payload_artifact,
     }
+    notes = supported_models.notes()
     models = [
         {"deviceIdentifier": device_identifier, **shared}
+        | ({"previewNote": notes[device_identifier]} if device_identifier in notes else {})
         for device_identifier in group["device_identifiers"]
     ]
     return models, len(parts)

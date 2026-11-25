@@ -7,3 +7,4 @@ build/
 __pycache__/
 Design/omarchy-installer-app.html
 Design/from-live-*/
+.DS_Store

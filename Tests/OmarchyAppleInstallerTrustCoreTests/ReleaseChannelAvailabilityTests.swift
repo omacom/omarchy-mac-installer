@@ -134,6 +134,7 @@
         catalogSignature: try key.signature(for: payload),
         trustRoot: try trustRoot(),
         validationTime: now,
+        expectedChannel: nil,
         stagingDirectory: FileManager.default.temporaryDirectory
           .appendingPathComponent("omarchy-no-release-\(UUID().uuidString.lowercased())")
       )
@@ -154,6 +155,7 @@
         catalogSignature: try key.signature(for: payload),
         trustRoot: try trustRoot(),
         validationTime: now,
+        expectedChannel: nil,
         stagingDirectory: FileManager.default.temporaryDirectory
           .appendingPathComponent("omarchy-not-listed-\(UUID().uuidString.lowercased())")
       )

@@ -94,7 +94,7 @@
       } else {
         XCTAssertTrue(result.identity.chip.hasPrefix("Apple M"))
       }
-      XCTAssertTrue(result.identity.deviceIdentifier.hasPrefix("apple,j"))
+      XCTAssertTrue(result.identity.deviceIdentifier.hasPrefix("apple,"))
       XCTAssertFalse(result.macOSVersion.isEmpty)
       XCTAssertTrue(result.storage.isInternal)
       XCTAssertGreaterThan(result.storage.containerSizeBytes, 0)

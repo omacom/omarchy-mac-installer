@@ -151,6 +151,7 @@
         catalogSignature: request.release.catalogDocuments.signature,
         trustRoot: request.configuration.trustRoot,
         validationTime: request.validationTime,
+        expectedChannel: request.release.channel.rawValue,
         previouslyAcceptedCatalog: request.previouslyAcceptedCatalog
       )
       return PreparedInstallerPlanExecution(

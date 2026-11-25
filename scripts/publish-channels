@@ -144,10 +144,11 @@ build_envelope() {
   local catalog=$1 signature=$2 output=$3
   require_file "$catalog"
   require_file "$signature"
-  # A catalog offering any Mac enables every supported Mac
-  # (scripts/supported-models.json); only an empty catalog lists none.
+  # A catalog offering any Mac enables exactly the Macs its own channel offers
+  # (scripts/supported-models.json); only an empty catalog lists none. The
+  # channel comes from the catalog itself, which says which one it is signed for.
   python3 "$script_directory/supported_models.py" check-catalog "$catalog" ||
-    die "$catalog does not enable every supported Mac"
+    die "$catalog does not enable exactly the Macs its channel offers"
   (( $(file_size "$signature") == 64 )) || die "a catalog signature must be 64 bytes"
   python3 - "$catalog" "$signature" "$output" <<'PY'
 import base64
@@ -168,13 +169,15 @@ PY
 decode_envelope() {
   local envelope=$1 catalog=$2 signature=$3
   require_file "$envelope"
-  python3 - "$envelope" "$catalog" "$signature" <<'PY'
+  python3 - "$envelope" "$catalog" "$signature" "$script_directory" <<'PY'
 import base64
-import json
 import sys
 
-envelope, catalog, signature = sys.argv[1:4]
-document = json.load(open(envelope, encoding="utf-8"))
+envelope, catalog, signature, scripts = sys.argv[1:5]
+sys.path.insert(0, scripts)
+import supported_models
+
+document = supported_models.read_json(open(envelope, encoding="utf-8").read())
 if set(document) != {"schema_version", "catalog", "signature"}:
     raise SystemExit("envelope has unexpected keys")
 if document["schema_version"] != 1:
@@ -328,6 +331,10 @@ os_promote() {
     die "releases/$tag/catalog.signed.json is not published"
   decode_envelope "$work/candidate.json" "$work/catalog" "$work/signature"
   verify_catalog "$work/catalog" "$work/signature"
+  # Which Macs the destination may offer, whatever channel the envelope was
+  # staged for. An older catalog offering fewer still promotes, for a rollback.
+  python3 "$script_directory/supported_models.py" check-destination "$work/catalog" "$channel" ||
+    die "$channel may not serve releases/$tag"
 
   local sequence
   sequence=$(catalog_field "$work/catalog" sequence)

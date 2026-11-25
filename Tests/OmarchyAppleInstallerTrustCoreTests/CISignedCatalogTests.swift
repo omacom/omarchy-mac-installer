@@ -22,7 +22,7 @@
 
       let catalog = try AppleInstallerTrustCore().validateSupportCatalog(
         payload: documents.payload, signature: documents.signature,
-        trustRoot: trustRoot, now: Date())
+        trustRoot: trustRoot, now: Date(), expectedChannel: nil)
 
       XCTAssertEqual(catalog.deviceIdentifiers.count, 35)
       // An M1, an M2, an M3 and the MacBook Neo (the last two marked untested,
@@ -42,7 +42,8 @@
       tampered[tampered.startIndex + 10] ^= 0x01
       XCTAssertThrowsError(
         try AppleInstallerTrustCore().validateSupportCatalog(
-          payload: tampered, signature: documents.signature, trustRoot: trustRoot, now: Date()))
+          payload: tampered, signature: documents.signature, trustRoot: trustRoot, now: Date(),
+          expectedChannel: nil))
     }
   }
 #endif

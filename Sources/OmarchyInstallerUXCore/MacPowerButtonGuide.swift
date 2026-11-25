@@ -3,13 +3,17 @@
     case notebook, desktopRear, desktopUnderside, generic
 
     public init(deviceIdentifier: String, modelIdentifier: String) {
+      // Apple's 2024 mini moved its power button to the underside, so this has
+      // to be settled before the Mac mini family reaches the rear button below.
+      // This is presentation metadata, not an installation support gate.
+      guard !["Mac16,10", "Mac16,11"].contains(modelIdentifier) else {
+        self = .desktopUnderside
+        return
+      }
       switch MacModelNames.entry(for: deviceIdentifier)?.family {
       case "MacBook Air", "MacBook Pro", "MacBook Neo": self = .notebook
       case "Mac mini", "Mac Studio": self = .desktopRear
-      default:
-        // Apple's 2024 mini moved its power button to the underside.
-        // This is presentation metadata, not an installation support gate.
-        self = ["Mac16,10", "Mac16,11"].contains(modelIdentifier) ? .desktopUnderside : .generic
+      default: self = .generic
       }
     }
 

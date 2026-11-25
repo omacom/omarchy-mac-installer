@@ -1,49 +1,178 @@
 {
-  "schema_version": 1,
-  "supported": [
-    "apple,j274",
-    "apple,j293",
-    "apple,j313",
-    "apple,j456",
-    "apple,j457",
-    "apple,j314s",
-    "apple,j314c",
-    "apple,j316s",
-    "apple,j316c",
-    "apple,j375c",
-    "apple,j375d",
-    "apple,j413",
-    "apple,j415",
-    "apple,j473",
-    "apple,j493",
-    "apple,j414s",
-    "apple,j414c",
-    "apple,j416s",
-    "apple,j416c",
-    "apple,j474s",
-    "apple,j475c",
-    "apple,j475d",
-    "apple,j180d",
-    "apple,j433",
-    "apple,j434",
-    "apple,j504",
-    "apple,j613",
-    "apple,j615",
-    "apple,j514s",
-    "apple,j514c",
-    "apple,j514m",
-    "apple,j516s",
-    "apple,j516c",
-    "apple,j516m",
-    "apple,j700"
-  ],
-  "refused": {
-    "apple,j575d": "Mac Studio (M3 Ultra, 2025): the pinned v0.9.2 engine has no j575dap device or T6032 chip entry, so it cannot inspect or plan this Mac",
-    "apple,j614s": "MacBook Pro 14-inch (M4 Pro, 2024): no install through aura's Mach-O Stage 1 has been tried on a J614s; the J616s is the M4 Pro offered to developer catalogs"
-  },
-  "developer": {
-    "apple,j616s": "MacBook Pro 16-inch (M4 Pro, 2024): developer catalog only, for hardware bring-up through aura's Mach-O Stage 1 on 26.6.2 firmware; not qualified. Moves to supported and untested (edge only) once edge images carry a monitor-free aura.",
-    "apple,j815": "MacBook Air 15-inch (M5, 2026): developer catalog only, for hardware bring-up through aura's Mach-O Stage 1 on 26.5.1 or 26.6.2 firmware; not qualified; display and Wi-Fi not expected to work. Moves to supported and untested (edge only) once edge images carry a monitor-free aura."
-  },
-  "untested": {}
+  "schema_version": 2,
+  "macs": {
+    "apple,j274": {
+      "qualified": "stable"
+    },
+    "apple,j293": {
+      "qualified": "stable"
+    },
+    "apple,j313": {
+      "qualified": "stable"
+    },
+    "apple,j456": {
+      "qualified": "stable"
+    },
+    "apple,j457": {
+      "qualified": "stable"
+    },
+    "apple,j314s": {
+      "qualified": "stable"
+    },
+    "apple,j314c": {
+      "qualified": "stable"
+    },
+    "apple,j316s": {
+      "qualified": "stable"
+    },
+    "apple,j316c": {
+      "qualified": "stable"
+    },
+    "apple,j375c": {
+      "qualified": "stable"
+    },
+    "apple,j375d": {
+      "qualified": "stable"
+    },
+    "apple,j413": {
+      "qualified": "stable"
+    },
+    "apple,j415": {
+      "qualified": "stable"
+    },
+    "apple,j473": {
+      "qualified": "stable"
+    },
+    "apple,j493": {
+      "qualified": "stable"
+    },
+    "apple,j414s": {
+      "qualified": "stable"
+    },
+    "apple,j414c": {
+      "qualified": "stable"
+    },
+    "apple,j416s": {
+      "qualified": "stable"
+    },
+    "apple,j416c": {
+      "qualified": "stable"
+    },
+    "apple,j474s": {
+      "qualified": "stable"
+    },
+    "apple,j475c": {
+      "qualified": "stable"
+    },
+    "apple,j475d": {
+      "qualified": "stable"
+    },
+    "apple,j180d": {
+      "qualified": "stable"
+    },
+    "apple,j433": {
+      "qualified": "stable"
+    },
+    "apple,j434": {
+      "qualified": "stable"
+    },
+    "apple,j504": {
+      "qualified": "stable"
+    },
+    "apple,j613": {
+      "qualified": "stable"
+    },
+    "apple,j615": {
+      "qualified": "stable"
+    },
+    "apple,j514s": {
+      "qualified": "stable"
+    },
+    "apple,j514c": {
+      "qualified": "stable"
+    },
+    "apple,j514m": {
+      "qualified": "stable"
+    },
+    "apple,j516s": {
+      "qualified": "stable"
+    },
+    "apple,j516c": {
+      "qualified": "stable"
+    },
+    "apple,j516m": {
+      "qualified": "stable"
+    },
+    "apple,j700": {
+      "qualified": "stable"
+    },
+    "apple,j604": {
+      "qualified": "edge",
+      "note": "MacBook Pro 14-inch (M4, 2024): untested. Edge only: installs through aura's Mach-O Stage 1 on 26.6.2 firmware, and no install has been qualified on this model. Expect missing hardware support; keep macOS and a backup.",
+      "app_minimum": "2.3.17"
+    },
+    "apple,j623": {
+      "qualified": "edge",
+      "note": "iMac 24-inch (M4, 2024, two ports): untested. Edge only: installs through aura's Mach-O Stage 1 on 26.6.2 firmware, and no install has been qualified on this model. Expect missing hardware support; keep macOS and a backup.",
+      "app_minimum": "2.3.17"
+    },
+    "apple,j624": {
+      "qualified": "edge",
+      "note": "iMac 24-inch (M4, 2024, four ports): untested. Edge only: installs through aura's Mach-O Stage 1 on 26.6.2 firmware, and no install has been qualified on this model. Expect missing hardware support; keep macOS and a backup.",
+      "app_minimum": "2.3.17"
+    },
+    "apple,j713": {
+      "qualified": "edge",
+      "note": "MacBook Air 13-inch (M4, 2025): untested. Edge only: installs through aura's Mach-O Stage 1 on 26.6.2 firmware, and no install has been qualified on this model. Expect missing hardware support; keep macOS and a backup.",
+      "app_minimum": "2.3.17"
+    },
+    "apple,j715": {
+      "qualified": "edge",
+      "note": "MacBook Air 15-inch (M4, 2025): untested. Edge only: installs through aura's Mach-O Stage 1 on 26.6.2 firmware, and no install has been qualified on this model. Expect missing hardware support; keep macOS and a backup.",
+      "app_minimum": "2.3.17"
+    },
+    "apple,j773g": {
+      "qualified": "edge",
+      "note": "Mac mini (M4, 2024): untested. Edge only: installs through aura's Mach-O Stage 1 on 26.6.2 firmware, and no install has been qualified on this model. Expect missing hardware support; keep macOS and a backup.",
+      "app_minimum": "2.3.17"
+    },
+    "apple,j614s": {
+      "qualified": "edge",
+      "note": "MacBook Pro 14-inch (M4 Pro, 2024): untested. Edge only: installs through aura's Mach-O Stage 1 on 26.6.2 firmware, and no install has been qualified on this model. Expect missing hardware support; keep macOS and a backup.",
+      "app_minimum": "2.3.17"
+    },
+    "apple,j616s": {
+      "qualified": "edge",
+      "note": "MacBook Pro 16-inch (M4 Pro, 2024): the first M4 Mac on edge, installed through aura's Mach-O Stage 1 on 26.6.2 firmware. Qualified on edge only; rc and stable do not offer it.",
+      "app_minimum": "2.3.17"
+    },
+    "apple,j773s": {
+      "qualified": "edge",
+      "note": "Mac mini (M4 Pro, 2024): untested. Edge only: installs through aura's Mach-O Stage 1 on 26.6.2 firmware, and no install has been qualified on this model. Expect missing hardware support; keep macOS and a backup.",
+      "app_minimum": "2.3.17"
+    },
+    "apple,j614c": {
+      "qualified": "edge",
+      "note": "MacBook Pro 14-inch (M4 Max, 2024): untested. Edge only: installs through aura's Mach-O Stage 1 on 26.6.2 firmware, and no install has been qualified on this model. Expect missing hardware support; keep macOS and a backup.",
+      "app_minimum": "2.3.17"
+    },
+    "apple,j616c": {
+      "qualified": "edge",
+      "note": "MacBook Pro 16-inch (M4 Max, 2024): untested. Edge only: installs through aura's Mach-O Stage 1 on 26.6.2 firmware, and no install has been qualified on this model. Expect missing hardware support; keep macOS and a backup.",
+      "app_minimum": "2.3.17"
+    },
+    "apple,j575c": {
+      "qualified": "edge",
+      "note": "Mac Studio (M4 Max, 2025): untested. Edge only: installs through aura's Mach-O Stage 1 on 26.6.2 firmware, and no install has been qualified on this model. Expect missing hardware support; keep macOS and a backup.",
+      "app_minimum": "2.3.17"
+    },
+    "apple,j815": {
+      "qualified": "developer",
+      "note": "MacBook Air 15-inch (M5, 2026): developer catalog only, for hardware bring-up through aura's Mach-O Stage 1 on 26.5.1 or 26.6.2 firmware; not qualified; display and Wi-Fi not expected to work. Qualifies for edge, and edge alone, once edge images carry a monitor-free aura.",
+      "app_minimum": "2.3.17"
+    },
+    "apple,j575d": {
+      "refused": "Mac Studio (M3 Ultra, 2025): the pinned v0.9.2 engine has no j575dap device or T6032 chip entry, so it cannot inspect or plan this Mac"
+    }
+  }
 }

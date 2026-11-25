@@ -442,5 +442,33 @@ class VercmpTest(unittest.TestCase):
                 self.assertEqual(c.vercmp(b, a), -expected)
 
 
+class DeviceTreeLadderTest(unittest.TestCase):
+    """A lane carries the trees of every Mac it offers, so the buckets nest the
+    way the qualification ladder does."""
+
+    POLICY = {
+        "device_trees": ["t8103-j274"],
+        "rc_device_trees": ["t6020-j414s"],
+        "edge_device_trees": ["t8132-j604"],
+    }
+
+    def test_each_lane_carries_its_own_rung_and_every_tighter_one(self):
+        for lane, expected in (
+            ("stable", ["t8103-j274"]),
+            ("rc", ["t8103-j274", "t6020-j414s"]),
+            ("edge", ["t8103-j274", "t6020-j414s", "t8132-j604"]),
+        ):
+            with self.subTest(lane=lane):
+                self.assertEqual(c.device_trees(self.POLICY, lane), expected)
+
+    def test_a_candidate_set_names_no_lane_and_carries_only_the_qualified(self):
+        self.assertEqual(c.device_trees(self.POLICY), ["t8103-j274"])
+
+    def test_a_rung_with_no_board_needs_no_bucket(self):
+        policy = {"device_trees": ["t8103-j274"], "edge_device_trees": ["t8132-j604"]}
+        self.assertEqual(c.device_trees(policy, "rc"), ["t8103-j274"])
+        self.assertEqual(c.device_trees(policy, "edge"), ["t8103-j274", "t8132-j604"])
+
+
 if __name__ == "__main__":
     unittest.main()

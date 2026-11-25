@@ -98,8 +98,9 @@ def engine_document() -> dict:
 
 
 def installer_document() -> dict:
-    return {"minimumVersion": "2.1.0", "latestVersion": "2.1.0",
-            "downloadURL": f"{release_base('app-v2.1.0')}/Omarchy-Installer.dmg"}
+    # At least 2.3.17: edge offers the M4 Macs, whose app_minimum is that.
+    return {"minimumVersion": "2.3.17", "latestVersion": "2.3.17",
+            "downloadURL": f"{release_base('app-v2.3.17')}/Omarchy-Installer.dmg"}
 
 
 def evidence_document(image_sha256: str = sha(PAYLOAD)) -> dict:
@@ -207,9 +208,10 @@ class CatalogReleaseTests(ReleaseTestCase):
     def test_round_trip_enables_every_mac_and_pins_the_digests(self) -> None:
         catalog_path = self.built_catalog()
         catalog = json.loads(catalog_path.read_text())
-        supported, _ = release.supported_models.load()
-        untested = release.supported_models.untested()
-        self.assertEqual([model["deviceIdentifier"] for model in catalog["models"]], supported)
+        offered = release.supported_models.boards_for("edge")
+        notes = release.supported_models.notes()
+        self.assertEqual([model["deviceIdentifier"] for model in catalog["models"]], offered)
+        self.assertEqual(catalog["channel"], "edge")
         self.assertEqual(catalog["schemaVersion"], 4)
         self.assertEqual(catalog["sequence"], SEQUENCE)
         self.assertNotIn("expiresAt", catalog)
@@ -223,7 +225,7 @@ class CatalogReleaseTests(ReleaseTestCase):
                 [part["sha256"] for part in model["payloadArtifact"]["parts"]],
                 [f"sha256:{sha(part)}" for part in PAYLOAD_PARTS],
             )
-            self.assertEqual(model.get("previewNote"), untested.get(model["deviceIdentifier"]))
+            self.assertEqual(model.get("previewNote"), notes.get(model["deviceIdentifier"]))
 
         signed = self.sign(catalog_path)
         self.assertEqual(signed.returncode, 0, signed.stderr)
@@ -389,8 +391,11 @@ class CatalogReleaseTests(ReleaseTestCase):
         with self.assertRaisesRegex(release.Refusal, "not built for the stable lane"):
             release.check_image_name(FINAL_ON_RC_IMAGE, "stable")
         with self.assertRaisesRegex(release.Refusal, "never promoted"):
-            release.check_promotion_source({"models": [{"evidenceRevision": FINAL_ON_RC_IMAGE}]})
-        release.check_promotion_source({"models": [{"evidenceRevision": RC_IMAGE}, {"evidenceRevision": STABLE_IMAGE}]})
+            release.check_promotion_source({"models": [
+                {"deviceIdentifier": "apple,j274", "status": "enabled", "evidenceRevision": FINAL_ON_RC_IMAGE}]})
+        release.check_promotion_source({"models": [
+            {"deviceIdentifier": "apple,j274", "status": "enabled", "evidenceRevision": RC_IMAGE},
+            {"deviceIdentifier": "apple,j293", "status": "enabled", "evidenceRevision": STABLE_IMAGE}]})
         payload, metadata, evidence = self.stable_inputs(recorded=FINAL_ON_RC_IMAGE, zip_name=RC_ZIP)
         with self.assertRaisesRegex(release.Refusal, "not built for the stable lane"):
             self.build_stable(payload, metadata, evidence, image=FINAL_ON_RC_IMAGE)
@@ -507,11 +512,11 @@ class CatalogReleaseTests(ReleaseTestCase):
         with self.assertRaisesRegex(release.Refusal, "names image id"):
             build(IMAGE, other)
 
-    def test_only_an_untested_mac_carries_a_preview_note(self) -> None:
+    def test_only_a_noted_mac_carries_a_preview_note(self) -> None:
         note = "Untested: qualified on edge next"
-        untested = release.supported_models.untested
-        release.supported_models.untested = lambda: {"apple,j700": note}
-        self.addCleanup(setattr, release.supported_models, "untested", untested)
+        notes = release.supported_models.notes
+        release.supported_models.notes = lambda *_: {"apple,j700": note}
+        self.addCleanup(setattr, release.supported_models, "notes", notes)
         catalog = release.build_catalog(
             "edge", IMAGE, payload_document(), engine_document(),
             artifact(IMAGE, "installer_data.json", METADATA), evidence_document(), installer_document(),
@@ -568,6 +573,59 @@ class CatalogReleaseTests(ReleaseTestCase):
         self.assertEqual(published.returncode, 0, published.stderr)
         self.assertEqual((scratch / "catalog-edge.signed.json").read_bytes(), envelope.read_bytes())
         self.assertEqual(self.calls.read_text(), "", "a dry run must not call any host tool")
+
+    def test_publish_refuses_a_catalog_signed_for_another_channel(self) -> None:
+        scratch = self.directory / "scratch-host"
+
+        def publish(channel: str, envelope: Path) -> subprocess.CompletedProcess:
+            return self.run_tool("publish", "--channel", channel, "--envelope", str(envelope),
+                                 "--host", f"scratch:{scratch}", "--trust-root", str(self.trust_root))
+
+        edge = self.signed_at(NOW, "edge")
+        for channel in ("rc", "stable"):
+            self.assert_refused(publish(channel, edge), f"signed for 'edge', not the {channel}")
+        document = json.loads((self.directory / "edge" / "catalog-edge.json").read_text())
+        # Renaming edge's catalog, dropping its channel or relabelling it does not get it signed for stable.
+        unnamed = {key: value for key, value in document.items() if key != "channel"}
+        for name, changed, expected in (
+            ("renamed", document, "says it is for 'edge'"),
+            ("unnamed", unnamed, "says it is for None"),
+            ("relabelled", dict(document, channel="stable"), "apple,j604 has only qualified for edge"),
+        ):
+            catalog = self.directory / name / "catalog-stable.json"
+            catalog.parent.mkdir()
+            catalog.write_text(json.dumps(changed))
+            self.assert_refused(self.sign(catalog, out=f"{name}-signed"), expected)
+            self.assertFalse((self.directory / f"{name}-signed").exists(), "no signature is left behind")
+        # An envelope signed elsewhere with an allowed label still names Macs stable does not offer.
+        relabelled = self.directory / "by-hand.json"
+        relabelled.write_text(json.dumps(dict(document, channel="stable")))
+        signature = release.openssl_sign(OPENSSL, release.decode_private_key(self.key.encode(), "key", raw_allowed=False), relabelled)
+        envelope = self.write("by-hand.signed.json", {
+            "schema_version": 1,
+            "catalog": base64.b64encode(relabelled.read_bytes()).decode(),
+            "signature": base64.b64encode(signature).decode(),
+        })
+        self.assert_refused(publish("stable", envelope), "stable does not offer apple,j604")
+        self.assertFalse(scratch.exists() and any(scratch.iterdir()))
+
+    def test_a_catalog_that_repeats_a_key_is_refused_before_it_is_signed(self) -> None:
+        text = self.built_catalog().read_text().rstrip()
+        catalog = self.directory / "repeated" / "catalog-edge.json"
+        catalog.parent.mkdir()
+        catalog.write_text(text[:-1] + ', "models": []}')
+        self.assert_refused(self.sign(catalog, out="repeated-signed"), "repeats a key")
+
+    def test_an_envelope_that_repeats_a_key_does_not_decode(self) -> None:
+        envelope = self.signed_at(NOW, "edge").read_text()
+        with self.assertRaises(release.Refusal):
+            release.decode_envelope(('{"catalog": "", ' + envelope[1:]).encode())
+
+    def test_a_promotion_source_that_lists_a_mac_twice_is_refused(self) -> None:
+        source = json.loads(self.built_catalog().read_text())
+        source["models"].append(source["models"][0])
+        with self.assertRaisesRegex(release.Refusal, "is listed twice"):
+            release.promote_catalog(source, datetime.datetime(2026, 10, 15, tzinfo=datetime.timezone.utc), "rc")
 
     def test_publish_refuses_a_sequence_that_does_not_move_forward(self) -> None:
         scratch = self.directory / "scratch-host"
@@ -1010,6 +1068,12 @@ class EngineGateTests(ReleaseTestCase):
         for model in document["models"]:
             model["engineDigest"] = digest
             model["evidenceRevision"] = image
+        offered = release.supported_models.boards_for(channel)
+        document["channel"] = channel
+        document["models"] = [
+            model if channel == "edge" else release.without_note(model)
+            for model in document["models"] if model["deviceIdentifier"] in offered
+        ]
         return self.write(f"catalog-{channel}.json", document)
 
     def check(self, catalog: Path, allowed: str | None = None) -> subprocess.CompletedProcess:
@@ -1136,6 +1200,111 @@ LATER = "2026-10-20T00:00:00Z"
 LATEST = "2026-10-21T00:00:00Z"
 
 
+class WithdrawalTests(unittest.TestCase):
+    """Raising a board's qualification floor withdraws it from a channel. The
+    next promotion drops it; nothing else about the catalog may move."""
+
+    WITHDRAWN = "apple,j700"
+
+    def setUp(self) -> None:
+        self.real = release.supported_models.boards_for
+        every = self.real("edge")
+        self.kept = [identifier for identifier in every if identifier != self.WITHDRAWN]
+
+        def floored(channel: str, *args, **kwargs) -> list[str]:
+            # edge still offers the Neo; rc and stable no longer do.
+            return list(every) if channel == "edge" else list(self.kept)
+
+        release.supported_models.boards_for = floored
+        self.addCleanup(setattr, release.supported_models, "boards_for", self.real)
+        self.source = release.build_catalog(
+            "edge", IMAGE, payload_document(), engine_document(),
+            artifact(IMAGE, "installer_data.json", METADATA), evidence_document(),
+            installer_document(),
+            datetime.datetime(2026, 10, 14, tzinfo=datetime.timezone.utc))
+
+    def promote(self, channel: str = "rc") -> dict:
+        return release.promote_catalog(
+            self.source,
+            datetime.datetime(2026, 10, 15, tzinfo=datetime.timezone.utc),
+            channel,
+        )
+
+    def identifiers(self, catalog: dict) -> list[str]:
+        return [model["deviceIdentifier"] for model in catalog["models"]]
+
+    def test_the_source_still_carries_the_withdrawn_mac(self) -> None:
+        self.assertIn(self.WITHDRAWN, self.identifiers(self.source))
+        self.assertEqual(self.source["channel"], "edge")
+
+    def test_promotion_drops_exactly_the_withdrawn_mac(self) -> None:
+        promoted = self.promote()
+        self.assertEqual(self.identifiers(promoted), self.kept)
+        self.assertNotIn(self.WITHDRAWN, self.identifiers(promoted))
+        self.assertEqual(promoted["channel"], "rc")
+
+    def test_every_surviving_mac_keeps_the_sources_pins_byte_for_byte(self) -> None:
+        promoted = self.promote()
+        before = {model["deviceIdentifier"]: model for model in self.source["models"]}
+        for model in promoted["models"]:
+            self.assertNotIn("previewNote", model)
+            pins = release.without_note(before[model["deviceIdentifier"]])
+            self.assertEqual(model, pins, model["deviceIdentifier"])
+        for key, value in self.source.items():
+            if key not in ("sequence", "issuedAt", "channel", "models"):
+                self.assertEqual(promoted[key], value, key)
+
+    def test_a_mac_that_moved_on_since_edge_was_signed_loses_its_note(self) -> None:
+        self.source["models"][0]["previewNote"] = "signed while it was edge only"
+        promoted = self.promote()
+        self.assertNotIn("previewNote", promoted["models"][0])
+        promoted["models"][0]["previewNote"] = "kept"
+        with self.assertRaisesRegex(release.Refusal, "rc never shows"):
+            release.check_same_pins(self.source, promoted, "rc")
+
+    def test_an_edge_catalog_signed_before_edge_gained_a_mac_still_promotes(self) -> None:
+        self.source["models"] = [
+            model for model in self.source["models"] if model["deviceIdentifier"] != self.WITHDRAWN
+        ]
+        self.assertEqual(self.identifiers(self.promote()), self.kept)
+
+    def test_a_source_signed_for_another_channel_is_refused(self) -> None:
+        self.source["channel"] = "rc"
+        with self.assertRaisesRegex(release.Refusal, "the edge catalog is signed for 'rc'"):
+            release.promote_catalog(
+                self.source, datetime.datetime(2026, 10, 15, tzinfo=datetime.timezone.utc), "stable",
+                source_channel="edge")
+
+    def test_promoting_on_to_stable_keeps_the_withdrawal(self) -> None:
+        self.assertEqual(self.identifiers(self.promote("stable")), self.kept)
+
+    def test_keeping_the_withdrawn_mac_is_refused(self) -> None:
+        promoted = self.promote()
+        promoted["models"] = list(self.source["models"])
+        with self.assertRaisesRegex(release.Refusal, "rc has not qualified: apple,j700"):
+            release.check_same_pins(self.source, promoted, "rc")
+
+    def test_a_promotion_cannot_add_a_mac_the_source_lacks(self) -> None:
+        promoted = self.promote()
+        extra = dict(promoted["models"][0], deviceIdentifier="apple,j815")
+        promoted["models"] = promoted["models"] + [extra]
+        with self.assertRaisesRegex(release.Refusal, "cannot add a Mac the source does not carry"):
+            release.check_same_pins(self.source, promoted, "rc")
+
+    def test_withdrawing_the_last_mac_is_refused_rather_than_published_empty(self) -> None:
+        release.supported_models.boards_for = lambda channel, *a, **k: (
+            list(self.real("edge")) if channel == "edge" else []
+        )
+        with self.assertRaisesRegex(release.Refusal, "would offer no Mac at all"):
+            self.promote()
+
+    def test_a_withdrawn_mac_is_reported_so_a_real_run_is_never_silent(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.promote()
+        self.assertIn(f"promotion_dropped={self.WITHDRAWN}", stderr.getvalue())
+
+
 @unittest.skipIf(OPENSSL is None, "OpenSSL 3 is required")
 class PromotionTests(ReleaseTestCase):
     """Promotion re-signs a published catalog's pins for rc or stable."""
@@ -1190,10 +1359,21 @@ class PromotionTests(ReleaseTestCase):
             _, catalog = self.signed_catalog(envelopes[channel])
             sequences.append(catalog["sequence"])
             self.assertEqual(catalog["issuedAt"], now)
-            # The same models, pins, digests and installer block as edge.
+            # The promoted catalog says which channel serves it.
+            self.assertEqual(catalog["channel"], channel)
+            self.assertEqual(edge_catalog["channel"], "edge")
+            # Everything but the models is edge's, unchanged.
             for key in set(edge_catalog) | set(catalog):
-                if key not in ("sequence", "issuedAt"):
+                if key not in ("sequence", "issuedAt", "channel", "models"):
                     self.assertEqual(catalog.get(key), edge_catalog.get(key), key)
+            # Edge offers the M4 Macs; rc and stable do not, so promotion drops
+            # them and keeps every other model byte for byte.
+            edge_models = {model["deviceIdentifier"]: model for model in edge_catalog["models"]}
+            promoted_models = {model["deviceIdentifier"]: model for model in catalog["models"]}
+            self.assertEqual(set(edge_models) - set(promoted_models),
+                             set(release.supported_models.boards_for("edge")) - set(release.supported_models.boards_for(channel)))
+            for identifier, model in promoted_models.items():
+                self.assertEqual(model, release.without_note(edge_models[identifier]), identifier)
             for model in catalog["models"]:
                 self.assertEqual(model["payloadDigest"], f"sha256:{sha(PAYLOAD)}")
                 self.assertEqual(model["engineDigest"], f"sha256:{sha(ENGINE)}")
@@ -1308,14 +1488,16 @@ class PromotionTests(ReleaseTestCase):
         self.assert_refused(mispinned, "not the pinned")
         changed = json.loads(json.dumps(original))
         changed["models"][0]["engineDigest"] = f"sha256:{'a' * 64}"
-        self.assert_refused(check(changed, name="catalog-rc.json"), "changes more than sequence and issuedAt: models")
+        self.assert_refused(check(changed, name="catalog-rc.json"),
+                            "changes what a Mac pins: apple,j180d")
         changed = json.loads(json.dumps(original))
         changed["models"][0]["payloadArtifact"]["parts"][0]["sourceURL"] = f"{release_base('other')}/{ZIP}.part00"
-        self.assert_refused(check(changed, name="catalog-rc.json"), "models")
+        self.assert_refused(check(changed, name="catalog-rc.json"), "changes what a Mac pins")
         changed = dict(original, installer=dict(original["installer"], minimumVersion="2.0.0"))
         self.assert_refused(check(changed, name="catalog-rc.json"), "installer")
+        # Dropping a Mac rc still offers is not a withdrawal: the floor decides.
         changed = dict(original, models=original["models"][1:])
-        self.assert_refused(check(changed, name="catalog-rc.json"), "models")
+        self.assert_refused(check(changed, name="catalog-rc.json"), "missing Macs it must offer")
         changed = dict(original, sequence=SEQUENCE)
         self.assert_refused(check(changed, name="catalog-rc.json"), "does not follow")
         self.assert_refused(check(original, name="catalog-stable.json"), "must be catalog-rc.json")
