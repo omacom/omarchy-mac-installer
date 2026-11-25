@@ -327,9 +327,16 @@ $edit
 json.dump(catalog, open(path, 'w'))
 " "$WORK/$name.catalog" "$ROOT/scripts/supported-models.json" || fail "$name catalog is written"
   sign_catalog "$WORK/$name.catalog" "$WORK/$name.sig"
-  "$PUBLISHER" envelope --catalog "$WORK/$name.catalog" --signature "$WORK/$name.sig" \
-    --output "$STREAM_DIR/releases/$tag/catalog.signed.json" >"$WORK/$name.log" 2>&1 ||
-    fail "the $name catalog wraps into an envelope" "$(cat "$WORK/$name.log")"
+  # Staged by hand: the destination is checked even when no envelope step ran.
+  python3 - "$WORK/$name.catalog" "$WORK/$name.sig" "$STREAM_DIR/releases/$tag/catalog.signed.json" <<'PY'
+import base64, json, sys
+catalog, signature, output = sys.argv[1:4]
+json.dump({
+    "schema_version": 1,
+    "catalog": base64.b64encode(open(catalog, "rb").read()).decode(),
+    "signature": base64.b64encode(open(signature, "rb").read()).decode(),
+}, open(output, "w"))
+PY
   : >"$CALLS"
   if OMARCHY_PUBLISH_ASSUME_YES=$tag "$PUBLISHER" os-promote --tag "$tag" --to "$to" >"$WORK/$name.log" 2>&1; then
     fail "os-promote refuses $name on $to"
@@ -352,6 +359,18 @@ refused_promotion developer edge "
 catalog['installer'] = {'minimumVersion': '2.3.17'}
 models.append(dict(models[0], deviceIdentifier='apple,j815'))" "edge does not offer apple,j815"
 refused_promotion noted stable "models[0]['previewNote'] = 'careful'" "carries a preview note"
+stage_payload os-v4.0.2-mac.1.20260902-repeated 128
+python3 - "$STREAM_DIR/releases/os-v4.0.2-mac.1.20260902/catalog.signed.json" \
+  "$STREAM_DIR/releases/os-v4.0.2-mac.1.20260902-repeated/catalog.signed.json" <<'PY'
+import sys
+envelope = open(sys.argv[1]).read()
+open(sys.argv[2], "w").write('{"catalog": "", ' + envelope[1:])
+PY
+if OMARCHY_PUBLISH_ASSUME_YES=os-v4.0.2-mac.1.20260902-repeated "$PUBLISHER" os-promote \
+  --tag os-v4.0.2-mac.1.20260902-repeated --to stable >"$WORK/repeated.log" 2>&1; then
+  fail "os-promote refuses an envelope that repeats a key"
+fi
+grep -q "repeats a key" "$WORK/repeated.log" || fail "the refusal names the repeated key" "$(cat "$WORK/repeated.log")"
 pass "os-promote refuses another channel's catalog and a Mac its channel does not offer"
 
 # --- promotion writes both channel objects and verifies them back -----------

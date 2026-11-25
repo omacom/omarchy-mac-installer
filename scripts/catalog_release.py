@@ -989,9 +989,9 @@ def make_envelope(catalog: Path, signature: Path, output: Path, trust_root: Path
 
 def decode_envelope(data: bytes) -> tuple[bytes, bytes]:
     try:
-        document = json.loads(data)
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        raise Refusal("the envelope is not JSON") from None
+        document = supported_models.read_json(data)
+    except ValueError as error:
+        raise Refusal(f"the envelope is not JSON: {error}") from None
     if not isinstance(document, dict) or set(document) != {"schema_version", "catalog", "signature"}:
         raise Refusal("the envelope must have exactly schema_version, catalog and signature")
     if document["schema_version"] != 1:

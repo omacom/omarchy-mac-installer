@@ -169,13 +169,15 @@ PY
 decode_envelope() {
   local envelope=$1 catalog=$2 signature=$3
   require_file "$envelope"
-  python3 - "$envelope" "$catalog" "$signature" <<'PY'
+  python3 - "$envelope" "$catalog" "$signature" "$script_directory" <<'PY'
 import base64
-import json
 import sys
 
-envelope, catalog, signature = sys.argv[1:4]
-document = json.load(open(envelope, encoding="utf-8"))
+envelope, catalog, signature, scripts = sys.argv[1:5]
+sys.path.insert(0, scripts)
+import supported_models
+
+document = supported_models.read_json(open(envelope, encoding="utf-8").read())
 if set(document) != {"schema_version", "catalog", "signature"}:
     raise SystemExit("envelope has unexpected keys")
 if document["schema_version"] != 1:

@@ -616,6 +616,11 @@ class CatalogReleaseTests(ReleaseTestCase):
         catalog.write_text(text[:-1] + ', "models": []}')
         self.assert_refused(self.sign(catalog, out="repeated-signed"), "repeats a key")
 
+    def test_an_envelope_that_repeats_a_key_does_not_decode(self) -> None:
+        envelope = self.signed_at(NOW, "edge").read_text()
+        with self.assertRaises(release.Refusal):
+            release.decode_envelope(('{"catalog": "", ' + envelope[1:]).encode())
+
     def test_a_promotion_source_that_lists_a_mac_twice_is_refused(self) -> None:
         source = json.loads(self.built_catalog().read_text())
         source["models"].append(source["models"][0])
