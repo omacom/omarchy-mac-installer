@@ -837,7 +837,6 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
     )
   }
 
-
   func testACatalogIsRefusedAtAnotherChannelsURL() throws {
     let fixture = try makeCatalog(sequence: 9, channel: "edge")
 
@@ -901,7 +900,6 @@ final class AppleInstallerTrustCoreTests: XCTestCase {
       }
     }
   }
-
 
   func testAMacCannotReturnToTheCatalogThatOfferedItAfterItsWithdrawal() throws {
     // Raising a board's floor withdraws it. The app must not then be talked

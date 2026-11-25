@@ -42,7 +42,8 @@
       tampered[tampered.startIndex + 10] ^= 0x01
       XCTAssertThrowsError(
         try AppleInstallerTrustCore().validateSupportCatalog(
-          payload: tampered, signature: documents.signature, trustRoot: trustRoot, now: Date(), expectedChannel: nil))
+          payload: tampered, signature: documents.signature, trustRoot: trustRoot, now: Date(),
+          expectedChannel: nil))
     }
   }
 #endif
