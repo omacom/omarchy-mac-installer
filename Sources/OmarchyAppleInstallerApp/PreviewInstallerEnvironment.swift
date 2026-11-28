@@ -16,10 +16,62 @@
     private let lock = NSLock()
     private var approved = false
     private var credentialAttempts = 0
+    private let downloadNetwork = InstallerDownloadNetworkState()
+    private var previewPrefetch: PayloadPrefetchController?
+    private var previewPrefetchState: PayloadPrefetchState = .idle
 
     init(scenario: InstallerPreviewScenario, journalURL: URL?) {
       self.scenario = scenario
       self.journalURL = journalURL
+      if scenario == .iPhoneUSB {
+        downloadNetwork.updatePath(
+          InstallerNetworkPathSnapshot(
+            isSatisfied: true, isExpensive: true, isConstrained: true, iPhoneUSBInterface: "en7"))
+      }
+    }
+
+    var payloadPrefetchRequired: Bool { scenario == .iPhoneUSB }
+    var payloadPrefetchState: PayloadPrefetchState {
+      scenario == .iPhoneUSB ? lock.withLock { previewPrefetchState } : .verified
+    }
+    var downloadNetworkState: InstallerNetworkPathSnapshot { downloadNetwork.current() }
+    func downloadNetworkUpdates() -> AsyncStream<InstallerNetworkPathSnapshot> {
+      downloadNetwork.updates()
+    }
+    func setIPhoneUSBDownloadAllowed(_ allowed: Bool, for connectionID: UUID?) {
+      downloadNetwork.setIPhoneUSBDownloadAllowed(allowed, for: connectionID)
+    }
+    func prefetchPayload(
+      progress: @escaping @Sendable (PayloadPrefetchState) -> Void
+    ) async throws {
+      guard scenario == .iPhoneUSB else {
+        progress(.verified)
+        return
+      }
+      let controller = PayloadPrefetchController(
+        network: downloadNetwork, freeSpace: PreviewFreeSpace(), keepAwake: PreviewKeepAwake(),
+        onState: { [weak self] state in
+          self?.lock.withLock { self?.previewPrefetchState = state }
+          progress(state)
+        })
+      lock.withLock { previewPrefetch = controller }
+      await controller.start(requiredBytes: 4_000_000_000) {
+        for step in 1...20 {
+          await controller.reportDownload(
+            completed: UInt64(step) * 200_000_000, total: 4_000_000_000)
+          try await Task.sleep(for: .milliseconds(600))
+        }
+      }
+      try await controller.waitUntilVerified()
+    }
+    func waitUntilPayloadVerified() async throws {
+      if let controller = lock.withLock({ previewPrefetch }) {
+        try await controller.waitUntilVerified()
+      }
+    }
+    func cancelPayloadPrefetch() {
+      let controller = lock.withLock { previewPrefetch }
+      Task { await controller?.cancel() }
     }
 
     var isSimulation: Bool { true }
@@ -243,5 +295,13 @@
           lines.reduce(into: Data()) { $0.append($1) }
         )
     }
+  }
+
+  private struct PreviewFreeSpace: InstallerFreeSpaceChecking {
+    func availableBytes() throws -> UInt64 { 16_000_000_000 }
+  }
+  private struct PreviewKeepAwake: InstallerKeepAwakeHolding {
+    func acquire() {}
+    func release() {}
   }
 #endif

@@ -569,6 +569,9 @@
     var helperStatus: HelperDisplay { get }
     var payloadPrefetchRequired: Bool { get }
     var payloadPrefetchState: PayloadPrefetchState { get }
+    var downloadNetworkState: InstallerNetworkPathSnapshot { get }
+    func downloadNetworkUpdates() -> AsyncStream<InstallerNetworkPathSnapshot>
+    func setIPhoneUSBDownloadAllowed(_ allowed: Bool, for connectionID: UUID?)
 
     /// Asks macOS for a graceful shutdown (the Apple menu's Shut Down).
     /// Returns true when the machine is actually going down; the preview
@@ -606,6 +609,13 @@
     public func requestShutdown() -> Bool { false }
     public var payloadPrefetchRequired: Bool { false }
     public var payloadPrefetchState: PayloadPrefetchState { .verified }
+    public var downloadNetworkState: InstallerNetworkPathSnapshot {
+      InstallerNetworkPathSnapshot(isSatisfied: false, isExpensive: true, isConstrained: true)
+    }
+    public func downloadNetworkUpdates() -> AsyncStream<InstallerNetworkPathSnapshot> {
+      AsyncStream { $0.finish() }
+    }
+    public func setIPhoneUSBDownloadAllowed(_ allowed: Bool, for connectionID: UUID?) {}
     public func prefetchPayload(
       progress: @escaping @Sendable (PayloadPrefetchState) -> Void
     ) async throws {

@@ -50,6 +50,7 @@ Why a catalog check exists: `make-unsigned-catalog.py` refuses inputs that miss,
 - **FileVault.** The app checks the FileVault state of macOS while inspecting the Mac.
 - **macOS and hardware.** The app requires macOS 15 or newer (`LSMinimumSystemVersion` 15.0). The MacBook Neo target is recorded as qualified only for firmware 26.6.2 (`Recovery/README.md`).
 - **Power and network.** Keep the Mac open and plugged in during installation (the app says so). The install downloads several gigabytes; the app resumes stalled downloads. It also needs HTTPS access to Apple's restore-image servers, see [Apple restore inputs](#apple-restore-inputs).
+- **iPhone USB internet.** When an iPhone connected by USB supplies the Mac's internet connection, the download screen offers **Allow download over iPhone USB**, off by default. Turn it on to use the phone's mobile data, including in Low Data Mode. Disconnecting the phone or switching to another network clears the choice. A phone connected only for charging, a Wi-Fi hotspot, or a VPN connection does not offer this USB option.
 - **Accounts.** You need a macOS administrator account and its password: the app sets up a privileged helper and authorizes the boot change with your password. Do not run an install while another installer or removal runs on the Mac.
 - **Shutdown and Recovery.** The last stage happens in macOS Recovery: you shut down, hold the power button until "Loading startup options" appears, choose Omarchy, click Continue and sign in with your macOS account. Plan for it before you start.
 

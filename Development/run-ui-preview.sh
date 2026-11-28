@@ -15,10 +15,10 @@ journal=${2:-$package_root/evidence/apple-silicon/2026-08-29-m1-fresh-install-v6
 # An unknown scenario string would make the factory fall back to the LIVE
 # environment, so refuse anything not in the preview list.
 case $scenario in
-  fresh-install | existing-install | unsupported | credential-reject | recovery-retry | degraded-journal) ;;
+  fresh-install | existing-install | unsupported | credential-reject | recovery-retry | degraded-journal | iphone-usb) ;;
   *)
     echo "unknown scenario: $scenario" >&2
-    echo "valid scenarios: fresh-install existing-install unsupported credential-reject recovery-retry degraded-journal" >&2
+    echo "valid scenarios: fresh-install existing-install unsupported credential-reject recovery-retry degraded-journal iphone-usb" >&2
     exit 1
     ;;
 esac

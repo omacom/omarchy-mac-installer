@@ -105,6 +105,10 @@
     public static let prefetchVerifying = "Verifying the download…"
     public static let prefetchFailed = "The download failed or didn’t pass verification."
     public static let prefetchRetry = "Try again"
+    public static let iPhoneUSBConnected = "iPhone USB connected"
+    public static let iPhoneUSBDownloadToggle = "Allow download over iPhone USB"
+    public static let iPhoneUSBDownloadDetail =
+      "The download uses your iPhone’s mobile data and may be several gigabytes. This permission lasts for the current USB connection, including when Low Data Mode is on."
 
     public static func prefetchTitle(for state: PayloadPrefetchState) -> String {
       switch state {

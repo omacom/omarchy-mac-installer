@@ -79,6 +79,10 @@ partition alignment. Selecting 180 GB must keep 180 GB displayed without a
 capacity-limit warning. The acknowledgement still resets. Actual whole-GB changes
 use “Space for Omarchy changed from … to …” without assuming why it changed.
 
+## iPhone USB download preview
+
+Run `Development/run-ui-preview.sh iphone-usb` to review the USB download option with a simulated iPhone connection and a fake payload. No phone, network download, helper or disk operation is needed. The option starts off; turning it on starts the mock download and turning it off pauses it. The preview uses the same download controller and consent policy as the live app. Quit the preview before launching another installer instance.
+
 ## Recovery account preview
 
 **Simulation → Preview Recovery Account…** opens the proposed final account step directly. The successful simulated installation also ends at this form. It asks for a new short username, password and confirmation; validation follows the documented native account creator's username format and requires a nonempty, matching password. The GUI imposes no additional minimum length; live creation must report native password-policy errors. Continuing clears both password fields and shows the Startup Disk authorization instructions. **Open Startup Disk** displays a simulation notice; it does not open Settings or reboot. **Reset Simulation** returns to the ordinary installer start.
