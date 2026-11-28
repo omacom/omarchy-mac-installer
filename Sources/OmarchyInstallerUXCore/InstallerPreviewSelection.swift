@@ -8,6 +8,7 @@
     case credentialReject = "credential-reject"
     case recoveryRetry = "recovery-retry"
     case degradedJournal = "degraded-journal"
+    case iPhoneUSB = "iphone-usb"
   }
 
   /// Chooses between the live installer environment and the debug-only preview

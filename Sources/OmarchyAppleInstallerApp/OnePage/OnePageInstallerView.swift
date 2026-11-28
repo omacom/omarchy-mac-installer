@@ -60,8 +60,18 @@ struct OnePageInstallerView: View {
           .padding(.top, 24)
           .padding(.bottom, 16)
         header.padding(.bottom, 20)
-        VStack(alignment: .leading, spacing: 14) { stage }
-          .frame(maxWidth: 560)
+        VStack(alignment: .leading, spacing: 14) {
+          if session.showsIPhoneUSBDownloadOption {
+            let connection = session.downloadNetwork
+            IPhoneUSBDownloadPanel(
+              isAllowed: connection.allowsIPhoneUSBDownload,
+              onChange: {
+                session.setIPhoneUSBDownloadAllowed($0, for: connection.iPhoneUSBConnectionID)
+              })
+          }
+          stage
+        }
+        .frame(maxWidth: 560)
         Spacer(minLength: 0)
         HStack(spacing: 16) { actions }
           .padding(.top, 24)
@@ -90,6 +100,7 @@ struct OnePageInstallerView: View {
       onSessionAvailable(session)
       await recheck()
     }
+    .task { await session.observeDownloadNetwork() }
     .onChange(of: channel) { _, _ in
       // Switching channel discards anything already planned: the new channel
       // may name a different release entirely.
@@ -665,6 +676,31 @@ struct OnePageInstallerView: View {
 }
 
 // MARK: - Prefetch strip
+
+private struct IPhoneUSBDownloadPanel: View {
+  let isAllowed: Bool
+  let onChange: @MainActor @Sendable (Bool) -> Void
+
+  var body: some View {
+    Panel {
+      VStack(alignment: .leading, spacing: 10) {
+        Label(PlainLanguage.iPhoneUSBConnected, systemImage: "iphone")
+          .font(OmarchyTheme.heading)
+        Text(PlainLanguage.iPhoneUSBDownloadDetail)
+          .omarchyHelpText()
+          .fixedSize(horizontal: false, vertical: true)
+        Toggle(
+          PlainLanguage.iPhoneUSBDownloadToggle,
+          isOn: Binding(get: { isAllowed }, set: { onChange($0) })
+        )
+        .toggleStyle(.switch)
+        .tint(OmarchyTheme.accent)
+        .accessibilityHint(PlainLanguage.iPhoneUSBDownloadDetail)
+      }
+      .padding(.vertical, 2)
+    }
+  }
+}
 
 private struct PrefetchStrip: View {
   let state: PayloadPrefetchState

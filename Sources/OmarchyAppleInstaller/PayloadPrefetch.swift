@@ -7,16 +7,30 @@
     public let isSatisfied: Bool
     public let isExpensive: Bool
     public let isConstrained: Bool
+    public let iPhoneUSBInterface: String?
+    public let iPhoneUSBConnectionID: UUID?
+    public let allowsIPhoneUSBDownload: Bool
 
-    public init(isSatisfied: Bool, isExpensive: Bool, isConstrained: Bool) {
+    public init(
+      isSatisfied: Bool, isExpensive: Bool, isConstrained: Bool,
+      iPhoneUSBInterface: String? = nil, iPhoneUSBConnectionID: UUID? = nil,
+      allowsIPhoneUSBDownload: Bool = false
+    ) {
       self.isSatisfied = isSatisfied
       self.isExpensive = isExpensive
       self.isConstrained = isConstrained
+      self.iPhoneUSBInterface = iPhoneUSBInterface
+      self.iPhoneUSBConnectionID = iPhoneUSBConnectionID
+      self.allowsIPhoneUSBDownload = allowsIPhoneUSBDownload
     }
 
-    /// Wi-Fi/Ethernet only: cellular and Low Data Mode pause the prefetch.
+    public var usesIPhoneUSB: Bool { isSatisfied && iPhoneUSBInterface != nil }
+
+    /// Metered paths and Low Data Mode pause unless the person has opted in
+    /// for the currently active iPhone USB connection.
     public var allowsPrefetch: Bool {
-      isSatisfied && !isExpensive && !isConstrained
+      isSatisfied
+        && ((!isExpensive && !isConstrained) || (usesIPhoneUSB && allowsIPhoneUSBDownload))
     }
   }
 
@@ -426,25 +440,28 @@
     InstallerNetworkPathObserving, @unchecked Sendable
   {
     private let monitor = NWPathMonitor()
-    private let lock = NSLock()
-    private var last = InstallerNetworkPathSnapshot(
-      isSatisfied: false,
-      isExpensive: true,
-      isConstrained: true
-    )
-    private var continuations: [UUID: AsyncStream<InstallerNetworkPathSnapshot>.Continuation] = [:]
+    private let state = InstallerDownloadNetworkState()
+    private let queue = DispatchQueue(label: "omarchy.installer.prefetch.network")
+    private var routeObserver: InstallerDefaultRouteObserver?
 
     public init() {
       monitor.pathUpdateHandler = { [weak self] path in
-        self?.publish(
-          InstallerNetworkPathSnapshot(
-            isSatisfied: path.status == .satisfied,
-            isExpensive: path.isExpensive,
-            isConstrained: path.isConstrained
-          )
-        )
+        self?.refresh(path)
       }
-      monitor.start(queue: DispatchQueue(label: "omarchy.installer.prefetch.network"))
+      routeObserver = InstallerDefaultRouteObserver(queue: queue) { [weak self] in
+        guard let self else { return }
+        self.refresh(self.monitor.currentPath)
+      }
+      monitor.start(queue: queue)
+    }
+
+    private func refresh(_ path: NWPath) {
+      state.updatePath(
+        InstallerNetworkPathSnapshot(
+          isSatisfied: path.status == .satisfied,
+          isExpensive: path.isExpensive,
+          isConstrained: path.isConstrained,
+          iPhoneUSBInterface: IPhoneUSBNetworkInterface.activeInterface(on: path)))
     }
 
     deinit {
@@ -452,33 +469,15 @@
     }
 
     public func current() -> InstallerNetworkPathSnapshot {
-      lock.withLock { last }
+      state.current()
     }
 
     public func updates() -> AsyncStream<InstallerNetworkPathSnapshot> {
-      AsyncStream { continuation in
-        let id = UUID()
-        lock.lock()
-        continuations[id] = continuation
-        let snapshot = last
-        lock.unlock()
-        continuation.yield(snapshot)
-        continuation.onTermination = { [weak self] _ in
-          self?.lock.lock()
-          self?.continuations[id] = nil
-          self?.lock.unlock()
-        }
-      }
+      state.updates()
     }
 
-    private func publish(_ snapshot: InstallerNetworkPathSnapshot) {
-      lock.lock()
-      last = snapshot
-      let pending = Array(continuations.values)
-      lock.unlock()
-      for continuation in pending {
-        continuation.yield(snapshot)
-      }
+    public func setIPhoneUSBDownloadAllowed(_ allowed: Bool, for connectionID: UUID?) {
+      state.setIPhoneUSBDownloadAllowed(allowed, for: connectionID)
     }
   }
 
@@ -562,9 +561,11 @@
     /// these are ever reclaimed.
     private var ownedWorkDirectories: [URL] = []
 
-    public convenience init() {
+    public convenience init(
+      network: any InstallerNetworkPathObserving = NWInstallerNetworkPathObserver()
+    ) {
       self.init(
-        makeNetwork: { NWInstallerNetworkPathObserver() },
+        makeNetwork: { network },
         makeKeepAwake: { IOPMInstallerKeepAwake() },
         makeFreeSpace: { StagingVolumeFreeSpace(directory: $0) },
         matchesPinned: { VerifiedArtifactStager().matches($0, at: $1) },

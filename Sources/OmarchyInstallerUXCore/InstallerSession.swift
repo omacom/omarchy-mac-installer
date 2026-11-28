@@ -61,6 +61,7 @@
     /// choice the person makes.
     public let allowsEncryption: Bool
     public private(set) var prefetchState: PayloadPrefetchState = .verified
+    public private(set) var downloadNetwork: InstallerNetworkPathSnapshot
 
     /// What each channel offers this Mac, for the channel menu. Empty until
     /// the first check finishes; a channel missing here was not checked.
@@ -166,7 +167,30 @@
     public init(environment: any InstallerEnvironment, allowsEncryption: Bool = true) {
       self.allowsEncryption = allowsEncryption
       self.environment = environment
+      downloadNetwork = environment.downloadNetworkState
       prefetchState = environment.payloadPrefetchRequired ? .idle : .verified
+    }
+
+    public func observeDownloadNetwork() async {
+      for await path in environment.downloadNetworkUpdates() {
+        guard !Task.isCancelled else { return }
+        downloadNetwork = path
+      }
+    }
+
+    public var showsIPhoneUSBDownloadOption: Bool {
+      guard downloadNetwork.usesIPhoneUSB, prefetchState != .verified, !hasExecutionStarted
+      else { return false }
+      switch phase {
+      case .preparingPlan, .planPrepared, .planReview, .awaitingInstall: return true
+      default: return false
+      }
+    }
+
+    public func setIPhoneUSBDownloadAllowed(_ allowed: Bool, for connectionID: UUID?) {
+      guard showsIPhoneUSBDownloadOption else { return }
+      environment.setIPhoneUSBDownloadAllowed(allowed, for: connectionID)
+      downloadNetwork = environment.downloadNetworkState
     }
 
     // MARK: Derived state

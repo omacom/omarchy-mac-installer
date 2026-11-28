@@ -1863,6 +1863,14 @@
     private(set) var cancelsBeforePrepare = 0
     var prefetchFailure = false
     var payloadPrefetchState: PayloadPrefetchState = .idle
+    let downloadNetwork = InstallerDownloadNetworkState()
+    var downloadNetworkState: InstallerNetworkPathSnapshot { downloadNetwork.current() }
+    func downloadNetworkUpdates() -> AsyncStream<InstallerNetworkPathSnapshot> {
+      downloadNetwork.updates()
+    }
+    func setIPhoneUSBDownloadAllowed(_ allowed: Bool, for connectionID: UUID?) {
+      downloadNetwork.setIPhoneUSBDownloadAllowed(allowed, for: connectionID)
+    }
 
     func preparePlan(
       omarchyBytes: UInt64?,

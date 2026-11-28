@@ -23,8 +23,25 @@ final class LiveInstallerEnvironment: InstallerEnvironment, @unchecked Sendable 
   private var releaseConfiguration: InstallerReleaseConfiguration?
   private let buildProfile = InstallerBuildProfile.current
   private var selectedLane = ReleaseChannel.stable.rawValue
-  private let prefetch = PayloadPrefetchOrchestrator()
+  private let downloadNetwork: NWInstallerNetworkPathObserver
+  private let prefetch: PayloadPrefetchOrchestrator
   private var plannedPayload: StagedInstallerArtifact?
+
+  init() {
+    let network = NWInstallerNetworkPathObserver()
+    downloadNetwork = network
+    prefetch = PayloadPrefetchOrchestrator(network: network)
+  }
+
+  var downloadNetworkState: InstallerNetworkPathSnapshot { downloadNetwork.current() }
+
+  func downloadNetworkUpdates() -> AsyncStream<InstallerNetworkPathSnapshot> {
+    downloadNetwork.updates()
+  }
+
+  func setIPhoneUSBDownloadAllowed(_ allowed: Bool, for connectionID: UUID?) {
+    downloadNetwork.setIPhoneUSBDownloadAllowed(allowed, for: connectionID)
+  }
 
   private func accountClient() throws -> AuthenticatedEngineXPCSubmitter {
     let configuration = try InstallerReleaseConfigurationLocator().loadFromMainBundle()
